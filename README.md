@@ -36,6 +36,13 @@ If your repo already has Wave config, docs, or waves you want to keep:
 pnpm exec wave init --adopt-existing
 ```
 
+## New In 0.3.0
+
+- Typed coordination is now first-class: the launcher materializes a canonical coordination log, renders the markdown board from that state, and compiles a shared summary plus per-agent inboxes for each wave.
+- Wave closure is now integration-aware: the integration steward must produce a ready summary before documentation and evaluator closure run.
+- Runtime planning is now lane-aware: executor profiles, per-role defaults, hard runtime-mix limits, and retry fallback recording are all part of the shipped package.
+- Clarifications now stay inside the harness first: the launcher tries policy resolution or targeted rerouting before creating human feedback tickets.
+
 ## Requirements
 
 - Node.js 22+
