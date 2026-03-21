@@ -238,14 +238,21 @@ export function clarificationIdFromClosureCondition(value) {
 }
 
 export function isClarificationLinkedRequest(record, clarificationIds = null) {
-  const closureClarificationId = clarificationIdFromClosureCondition(record?.closureCondition);
-  if (closureClarificationId) {
-    return true;
-  }
   const clarificationIdSet =
     clarificationIds instanceof Set
       ? clarificationIds
-      : new Set(Array.isArray(clarificationIds) ? clarificationIds : []);
+      : clarificationIds === null
+        ? null
+        : new Set(Array.isArray(clarificationIds) ? clarificationIds : []);
+  const closureClarificationId = clarificationIdFromClosureCondition(record?.closureCondition);
+  if (closureClarificationId) {
+    return clarificationIdSet === null
+      ? true
+      : clarificationIdSet.has(closureClarificationId);
+  }
+  if (clarificationIdSet === null) {
+    return false;
+  }
   return Array.isArray(record?.dependsOn)
     ? record.dependsOn.some((dependencyId) => clarificationIdSet.has(String(dependencyId || "").trim()))
     : false;
@@ -366,6 +373,41 @@ function isTargetedToAgent(record, agent) {
   return false;
 }
 
+function normalizeOwnedReference(value) {
+  return String(value || "").trim().replace(/\/+$/, "");
+}
+
+function matchesOwnedPathArtifact(artifactRef, ownedPath) {
+  const normalizedArtifact = normalizeOwnedReference(artifactRef);
+  const normalizedOwnedPath = normalizeOwnedReference(ownedPath);
+  if (!normalizedArtifact || !normalizedOwnedPath) {
+    return false;
+  }
+  return (
+    normalizedArtifact === normalizedOwnedPath ||
+    normalizedArtifact.startsWith(`${normalizedOwnedPath}/`)
+  );
+}
+
+function isArtifactRelevantToAgent(record, agent) {
+  const artifactRefs = Array.isArray(record?.artifactRefs) ? record.artifactRefs : [];
+  if (artifactRefs.length === 0) {
+    return false;
+  }
+  const ownedPaths = Array.isArray(agent?.ownedPaths) ? agent.ownedPaths : [];
+  const ownedComponents = Array.isArray(agent?.components) ? agent.components : [];
+  return artifactRefs.some((artifactRef) => {
+    const normalizedArtifact = normalizeOwnedReference(artifactRef);
+    if (!normalizedArtifact) {
+      return false;
+    }
+    if (ownedComponents.some((componentId) => normalizedArtifact === String(componentId || "").trim())) {
+      return true;
+    }
+    return ownedPaths.some((ownedPath) => matchesOwnedPathArtifact(normalizedArtifact, ownedPath));
+  });
+}
+
 export function compileSharedSummary({
   wave,
   state,
@@ -448,6 +490,17 @@ export function compileAgentInbox({
     OPEN_COORDINATION_STATUSES.has(record.status) &&
     (record.agentId === agent.agentId || isTargetedToAgent(record, agent)),
   );
+  const excludedRecordIds = new Set([
+    ...targetedRecords.map((record) => record.id),
+    ...ownedRecords.map((record) => record.id),
+    ...clarificationRecords.map((record) => record.id),
+  ]);
+  const relevantRecords = state.openRecords.filter(
+    (record) =>
+      !excludedRecordIds.has(record.id) &&
+      record.kind !== "clarification-request" &&
+      isArtifactRelevantToAgent(record, agent),
+  );
   const docsItems =
     Array.isArray(docsQueue?.items) && docsQueue.items.length > 0
       ? docsQueue.items.filter(
@@ -477,6 +530,11 @@ export function compileAgentInbox({
     "## Clarifications",
     ...(clarificationRecords.length > 0
       ? clarificationRecords.map((record) => renderOpenRecord(record))
+      : ["- None."]),
+    "",
+    "## Relevant open coordination",
+    ...(relevantRecords.length > 0
+      ? relevantRecords.map((record) => renderOpenRecord(record))
       : ["- None."]),
     "",
     "## Ledger tasks",

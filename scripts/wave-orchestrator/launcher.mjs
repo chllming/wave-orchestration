@@ -1776,12 +1776,29 @@ function buildFallbackExecutorState(executorState, executorId, attempt, reason) 
 function applyRetryFallbacks(agentRuns, failures, lanePaths, attemptNumber) {
   const failedAgentIds = new Set(failures.map((failure) => failure.agentId));
   let changed = false;
+  const outcomes = new Map();
   for (const run of agentRuns) {
     if (!failedAgentIds.has(run.agent.agentId)) {
       continue;
     }
     const executorState = run.agent.executorResolved;
     if (!executorState) {
+      outcomes.set(run.agent.agentId, {
+        applied: false,
+        blocking: false,
+        statusCode: "no-executor-state",
+        detail: `Agent ${run.agent.agentId} has no resolved executor state.`,
+      });
+      continue;
+    }
+    const fallbackChain = executorFallbackChain(executorState);
+    if (fallbackChain.length === 0) {
+      outcomes.set(run.agent.agentId, {
+        applied: false,
+        blocking: false,
+        statusCode: "no-fallback-configured",
+        detail: `Agent ${run.agent.agentId} has no configured fallback executors.`,
+      });
       continue;
     }
     const attemptedExecutors = new Set(
@@ -1790,12 +1807,17 @@ function applyRetryFallbacks(agentRuns, failures, lanePaths, attemptNumber) {
         : [executorState.id],
     );
     const fallbackReason = failures.find((failure) => failure.agentId === run.agent.agentId);
-    for (const candidate of executorFallbackChain(executorState)) {
+    const blockedCandidates = [];
+    for (const candidate of fallbackChain) {
       if (!candidate || candidate === executorState.id || attemptedExecutors.has(candidate)) {
+        if (candidate) {
+          blockedCandidates.push(`${candidate}: already tried`);
+        }
         continue;
       }
       const command = commandForExecutor(executorState, candidate);
       if (!isExecutorCommandAvailable(command)) {
+        blockedCandidates.push(`${candidate}: command unavailable`);
         continue;
       }
       const nextState = buildFallbackExecutorState(
@@ -1813,14 +1835,57 @@ function applyRetryFallbacks(agentRuns, failures, lanePaths, attemptNumber) {
         lanePaths,
       );
       if (!validation.ok) {
+        blockedCandidates.push(`${candidate}: ${validation.detail}`);
         continue;
       }
       run.agent.executorResolved = nextState;
       changed = true;
+      outcomes.set(run.agent.agentId, {
+        applied: true,
+        blocking: false,
+        statusCode: "fallback-applied",
+        detail: `Agent ${run.agent.agentId} will retry on ${candidate}.`,
+        executorId: candidate,
+      });
       break;
     }
+    if (!outcomes.has(run.agent.agentId)) {
+      outcomes.set(run.agent.agentId, {
+        applied: false,
+        blocking: true,
+        statusCode: "retry-fallback-blocked",
+        detail: `Agent ${run.agent.agentId} cannot retry safely on a configured fallback (${blockedCandidates.join("; ") || "no safe fallback remained"}).`,
+      });
+    }
   }
-  return changed;
+  return {
+    changed,
+    outcomes,
+  };
+}
+
+function retryBarrierFromOutcomes(outcomes, failures) {
+  const blockingFailures = [];
+  for (const failure of failures) {
+    const outcome = outcomes.get(failure.agentId);
+    if (!outcome?.blocking) {
+      continue;
+    }
+    blockingFailures.push({
+      agentId: failure.agentId,
+      statusCode: outcome.statusCode,
+      logPath: failure.logPath,
+      detail: outcome.detail,
+    });
+  }
+  if (blockingFailures.length === 0) {
+    return null;
+  }
+  return {
+    statusCode: "retry-fallback-blocked",
+    detail: blockingFailures.map((failure) => failure.detail).join(" "),
+    failures: blockingFailures,
+  };
 }
 
 function readClarificationBarrier(derivedState) {
@@ -1875,10 +1940,19 @@ export function resolveRelaunchRuns(agentRuns, failures, derivedState, lanePaths
     (record) => isOpenCoordinationStatus(record.status),
   );
   if (pendingFeedback.length > 0 || pendingHumanEscalations.length > 0) {
-    return [];
+    return { runs: [], barrier: null };
   }
   const nextAttemptNumber = Number(derivedState?.ledger?.attempt || 0) + 1;
-  applyRetryFallbacks(agentRuns, failures, lanePaths, nextAttemptNumber);
+  const fallbackResolution = applyRetryFallbacks(
+    agentRuns,
+    failures,
+    lanePaths,
+    nextAttemptNumber,
+  );
+  const retryBarrier = retryBarrierFromOutcomes(fallbackResolution.outcomes, failures);
+  if (retryBarrier) {
+    return { runs: [], barrier: retryBarrier };
+  }
   const clarificationTargets = new Set();
   for (const record of openClarificationLinkedRequests(derivedState?.coordinationState)) {
     for (const target of record.targets || []) {
@@ -1890,9 +1964,12 @@ export function resolveRelaunchRuns(agentRuns, failures, derivedState, lanePaths
     }
   }
   if (clarificationTargets.size > 0) {
-    return Array.from(clarificationTargets)
-      .map((agentId) => runsByAgentId.get(agentId))
-      .filter(Boolean);
+    return {
+      runs: Array.from(clarificationTargets)
+        .map((agentId) => runsByAgentId.get(agentId))
+        .filter(Boolean),
+      barrier: null,
+    };
   }
   const targetedAgentIds = new Set();
   const capabilityTargets = new Set();
@@ -1911,9 +1988,12 @@ export function resolveRelaunchRuns(agentRuns, failures, derivedState, lanePaths
     }
   }
   if (targetedAgentIds.size > 0) {
-    return Array.from(targetedAgentIds)
-      .map((agentId) => runsByAgentId.get(agentId))
-      .filter(Boolean);
+    return {
+      runs: Array.from(targetedAgentIds)
+        .map((agentId) => runsByAgentId.get(agentId))
+        .filter(Boolean),
+      barrier: null,
+    };
   }
   if (capabilityTargets.size > 0) {
     const selectedRuns = [];
@@ -1943,7 +2023,10 @@ export function resolveRelaunchRuns(agentRuns, failures, derivedState, lanePaths
       }
     }
     if (selectedRuns.length > 0) {
-      return Array.from(new Map(selectedRuns.map((run) => [run.agent.agentId, run])).values());
+      return {
+        runs: Array.from(new Map(selectedRuns.map((run) => [run.agent.agentId, run])).values()),
+        barrier: null,
+      };
     }
   }
   const blockerAgentIds = new Set();
@@ -1959,21 +2042,36 @@ export function resolveRelaunchRuns(agentRuns, failures, derivedState, lanePaths
     }
   }
   if (blockerAgentIds.size > 0) {
-    return Array.from(blockerAgentIds)
-      .map((agentId) => runsByAgentId.get(agentId))
-      .filter(Boolean);
+    return {
+      runs: Array.from(blockerAgentIds)
+        .map((agentId) => runsByAgentId.get(agentId))
+        .filter(Boolean),
+      barrier: null,
+    };
   }
   if (derivedState?.ledger?.phase === "docs-closure") {
-    return [runsByAgentId.get(lanePaths.documentationAgentId)].filter(Boolean);
+    return {
+      runs: [runsByAgentId.get(lanePaths.documentationAgentId)].filter(Boolean),
+      barrier: null,
+    };
   }
   if (derivedState?.ledger?.phase === "evaluator-closure") {
-    return [runsByAgentId.get(lanePaths.evaluatorAgentId)].filter(Boolean);
+    return {
+      runs: [runsByAgentId.get(lanePaths.evaluatorAgentId)].filter(Boolean),
+      barrier: null,
+    };
   }
   if (derivedState?.ledger?.phase === "integrating") {
-    return [runsByAgentId.get(lanePaths.integrationAgentId)].filter(Boolean);
+    return {
+      runs: [runsByAgentId.get(lanePaths.integrationAgentId)].filter(Boolean),
+      barrier: null,
+    };
   }
   const failedAgentIds = new Set(failures.map((failure) => failure.agentId));
-  return agentRuns.filter((run) => failedAgentIds.has(run.agent.agentId));
+  return {
+    runs: agentRuns.filter((run) => failedAgentIds.has(run.agent.agentId)),
+    barrier: null,
+  };
 }
 
 function preflightWavesForExecutorAvailability(waves, lanePaths) {
@@ -2933,7 +3031,7 @@ export async function runLauncherCli(argv) {
           const failedAgentIds = new Set(failures.map((failure) => failure.agentId));
           const failedList = Array.from(failedAgentIds).join(", ");
           console.warn(
-            `[retry] Wave ${wave.wave} had failures for agents: ${failedList}. Relaunching failed or missing agents.`,
+            `[retry] Wave ${wave.wave} had failures for agents: ${failedList}. Evaluating safe relaunch targets.`,
           );
           appendCoordination({
             event: "wave_retry",
@@ -2942,7 +3040,39 @@ export async function runLauncherCli(argv) {
             details: `attempt=${attempt + 1}/${options.maxRetriesPerWave + 1}; failed_agents=${failedList}; timed_out=${timedOut ? "yes" : "no"}`,
             actionRequested: `Lane ${lanePaths.lane} owners should inspect failed agent logs before retry completion.`,
           });
-          runsToLaunch = resolveRelaunchRuns(agentRuns, failures, derivedState, lanePaths);
+          const relaunchResolution = resolveRelaunchRuns(
+            agentRuns,
+            failures,
+            derivedState,
+            lanePaths,
+          );
+          if (relaunchResolution.barrier) {
+            for (const failure of relaunchResolution.barrier.failures) {
+              recordCombinedEvent({
+                level: "error",
+                agentId: failure.agentId,
+                message: failure.detail,
+              });
+              setWaveDashboardAgent(dashboardState, failure.agentId, {
+                state: "failed",
+                detail: failure.detail,
+              });
+            }
+            flushDashboards();
+            appendCoordination({
+              event: "wave_retry_blocked",
+              waves: [wave.wave],
+              status: "blocked",
+              details: relaunchResolution.barrier.detail,
+              actionRequested: `Lane ${lanePaths.lane} owners should resolve runtime policy or executor availability before retrying.`,
+            });
+            const error = new Error(
+              `Wave ${wave.wave} retry blocked: ${relaunchResolution.barrier.detail}`,
+            );
+            error.exitCode = 43;
+            throw error;
+          }
+          runsToLaunch = relaunchResolution.runs;
           if (runsToLaunch.length === 0) {
             const error = new Error(
               `Wave ${wave.wave} is waiting on human feedback or unresolved coordination state; no safe relaunch target is available.`,

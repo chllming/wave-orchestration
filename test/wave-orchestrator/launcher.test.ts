@@ -229,7 +229,8 @@ describe("resolveRelaunchRuns", () => {
       },
     );
 
-    expect(selected.map((run) => run.agent.agentId)).toEqual(["A2"]);
+    expect(selected.barrier).toBe(null);
+    expect(selected.runs.map((run) => run.agent.agentId)).toEqual(["A2"]);
   });
 
   it("routes capability-targeted retries to the least-busy matching agent", () => {
@@ -272,7 +273,8 @@ describe("resolveRelaunchRuns", () => {
       },
     );
 
-    expect(selected.map((run) => run.agent.agentId)).toEqual(["A2"]);
+    expect(selected.barrier).toBe(null);
+    expect(selected.runs.map((run) => run.agent.agentId)).toEqual(["A2"]);
   });
 
   it("halts retries while human escalation remains unresolved", () => {
@@ -305,7 +307,7 @@ describe("resolveRelaunchRuns", () => {
       },
     );
 
-    expect(selected).toEqual([]);
+    expect(selected).toEqual({ runs: [], barrier: null });
   });
 
   it("prioritizes launcher-routed clarification follow-up requests", () => {
@@ -352,7 +354,8 @@ describe("resolveRelaunchRuns", () => {
       },
     );
 
-    expect(selected.map((run) => run.agent.agentId)).toEqual(["A9"]);
+    expect(selected.barrier).toBe(null);
+    expect(selected.runs.map((run) => run.agent.agentId)).toEqual(["A9"]);
   });
 
   it("switches failed agents to an allowed fallback executor on retry", () => {
@@ -432,12 +435,106 @@ describe("resolveRelaunchRuns", () => {
       },
     );
 
-    expect(selected.map((run) => run.agent.agentId)).toEqual(["A1"]);
+    expect(selected.barrier).toBe(null);
+    expect(selected.runs.map((run) => run.agent.agentId)).toEqual(["A1"]);
     expect(agentRuns[0].agent.executorResolved).toMatchObject({
       id: "claude",
       fallbackUsed: true,
       fallbackReason: "retry:127",
       initialExecutorId: "codex",
+    });
+  });
+
+  it("blocks retry when a configured fallback would violate runtime mix targets", () => {
+    const agentRuns = [
+      {
+        agent: {
+          agentId: "A1",
+          capabilities: ["runtime"],
+          executorResolved: {
+            id: "codex",
+            initialExecutorId: "codex",
+            model: null,
+            role: "implementation",
+            profile: null,
+            selectedBy: "lane-role-default",
+            fallbacks: ["claude"],
+            tags: [],
+            budget: null,
+            fallbackUsed: false,
+            fallbackReason: null,
+            executorHistory: [{ attempt: 0, executorId: "codex", reason: "initial" }],
+            codex: { command: "missing-codex", sandbox: "danger-full-access" },
+            claude: {
+              command: "bash",
+              model: "claude-sonnet-4-6",
+              appendSystemPromptMode: "append",
+              permissionMode: null,
+              permissionPromptTool: null,
+              maxTurns: null,
+              mcpConfig: [],
+              strictMcpConfig: false,
+              settings: null,
+              outputFormat: "text",
+              allowedTools: [],
+              disallowedTools: [],
+            },
+            opencode: {
+              command: "missing-opencode",
+              model: null,
+              agent: null,
+              attach: null,
+              format: "default",
+              steps: null,
+              instructions: [],
+              permission: null,
+            },
+          },
+        },
+      },
+    ];
+
+    const selected = resolveRelaunchRuns(
+      agentRuns,
+      [{ agentId: "A1", statusCode: "127", logPath: "logs/a1.log" }],
+      {
+        coordinationState: {
+          humanFeedback: [],
+          humanEscalations: [],
+          clarifications: [],
+          requests: [],
+          blockers: [],
+        },
+        ledger: { phase: "running", attempt: 1, tasks: [] },
+      },
+      {
+        documentationAgentId: "A9",
+        evaluatorAgentId: "A0",
+        integrationAgentId: "A8",
+        laneProfile: {
+          runtimePolicy: {
+            runtimeMixTargets: {
+              claude: 0,
+            },
+          },
+        },
+        capabilityRouting: { preferredAgents: {} },
+      },
+    );
+
+    expect(selected.runs).toEqual([]);
+    expect(selected.barrier).toMatchObject({
+      statusCode: "retry-fallback-blocked",
+    });
+    expect(selected.barrier.failures).toMatchObject([
+      {
+        agentId: "A1",
+        statusCode: "retry-fallback-blocked",
+      },
+    ]);
+    expect(agentRuns[0].agent.executorResolved).toMatchObject({
+      id: "codex",
+      fallbackUsed: false,
     });
   });
 });
