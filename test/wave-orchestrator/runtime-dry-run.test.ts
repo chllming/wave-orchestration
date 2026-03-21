@@ -1,0 +1,276 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
+import { afterEach, describe, expect, it } from "vitest";
+import { PACKAGE_ROOT } from "../../scripts/wave-orchestrator/shared.mjs";
+
+const tempDirs = [];
+
+function makeTempDir() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wave-runtime-dry-run-"));
+  tempDirs.push(dir);
+  return dir;
+}
+
+function writeJson(filePath, payload) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+}
+
+function runWaveCli(args, cwd) {
+  return spawnSync("node", [path.join(PACKAGE_ROOT, "scripts", "wave.mjs"), ...args], {
+    cwd,
+    encoding: "utf8",
+    env: process.env,
+  });
+}
+
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+describe("runtime dry-run harness", () => {
+  it("materializes prompts and executor overlays for codex, claude, and opencode", () => {
+    const repoDir = makeTempDir();
+    writeJson(path.join(repoDir, "package.json"), { name: "fixture-repo", private: true });
+
+    const initResult = runWaveCli(["init"], repoDir);
+    expect(initResult.status).toBe(0);
+
+    const wavePath = path.join(repoDir, "docs", "plans", "waves", "wave-0.md");
+    fs.writeFileSync(
+      wavePath,
+      `# Wave 0 - Runtime Dry Run
+
+**Commit message**: \`Chore: validate runtime dry-run overlays\`
+
+## Component promotions
+
+- wave-parser-and-launcher: repo-landed
+- starter-docs-and-adoption-guidance: repo-landed
+
+## Context7 defaults
+
+- bundle: node-typescript
+- query: "Node.js and TypeScript basics for orchestrator maintenance"
+
+## Agent A0: Running Evaluator
+
+### Role prompts
+
+- docs/agents/wave-evaluator-role.md
+
+### Executor
+
+- id: codex
+- model: gpt-5-codex
+- codex.profile_name: review
+- codex.config: model_reasoning_effort=high
+- codex.search: true
+- codex.json: true
+
+### Context7
+
+- bundle: none
+
+### Prompt
+
+\`\`\`text
+Primary goal:
+- Keep the starter scaffold coherent while the rest of the wave runs.
+
+Required context before coding:
+- Read docs/reference/repository-guidance.md.
+- Read docs/research/agent-context-sources.md.
+- Read docs/plans/master-plan.md, docs/plans/current-state.md, and docs/plans/migration.md.
+
+File ownership (only touch these paths):
+- docs/plans/waves/reviews/wave-0-evaluator.md
+\`\`\`
+
+## Agent A8: Integration Steward
+
+### Role prompts
+
+- docs/agents/wave-integration-role.md
+
+### Executor
+
+- id: claude
+- claude.settings_json: {"permissions":{"allow":["Read"]}}
+- claude.hooks_json: {"Stop":[{"command":"echo stop"}]}
+- claude.allowed_http_hook_urls: https://example.com/hooks
+
+### Context7
+
+- bundle: none
+
+### Capabilities
+
+- integration
+- docs-shared-plan
+
+### Prompt
+
+\`\`\`text
+Synthesize the wave before documentation and evaluator closure.
+
+Required context before coding:
+- Read docs/reference/repository-guidance.md.
+- Read docs/research/agent-context-sources.md.
+- Read docs/plans/master-plan.md, docs/plans/current-state.md, and docs/plans/migration.md.
+
+File ownership (only touch these paths):
+- .tmp/main-wave-launcher/integration/wave-0.md
+- .tmp/main-wave-launcher/integration/wave-0.json
+\`\`\`
+
+## Agent A9: Documentation Steward
+
+### Role prompts
+
+- docs/agents/wave-documentation-role.md
+
+### Executor
+
+- id: opencode
+- opencode.files: docs/runtime.md,README.md
+- opencode.config_json: {"plugins":["./plugins/runtime.mjs"]}
+
+### Context7
+
+- bundle: none
+
+### Prompt
+
+\`\`\`text
+Keep the starter shared plan docs aligned with the landed Wave 0 outcomes.
+
+Required context before coding:
+- Read docs/reference/repository-guidance.md.
+- Read docs/research/agent-context-sources.md.
+
+File ownership (only touch these paths):
+- docs/plans/current-state.md
+- docs/plans/master-plan.md
+- docs/plans/migration.md
+- docs/plans/component-cutover-matrix.md
+- docs/plans/component-cutover-matrix.json
+\`\`\`
+
+## Agent A1: Starter Runtime and Docs Review
+
+### Executor
+
+- profile: implement-fast
+- fallbacks: claude, opencode
+
+### Context7
+
+- bundle: node-typescript
+- query: "Node.js module layout, process spawning, and vitest test execution"
+
+### Components
+
+- wave-parser-and-launcher
+- starter-docs-and-adoption-guidance
+
+### Capabilities
+
+- schema-migration
+- frontend-validation
+
+### Exit contract
+
+- completion: contract
+- durability: none
+- proof: unit
+- doc-impact: owned
+
+### Prompt
+
+\`\`\`text
+Review and tighten the starter runtime and test harness.
+
+Required context before coding:
+- Read docs/reference/repository-guidance.md.
+- Read docs/research/agent-context-sources.md.
+- Read docs/plans/wave-orchestrator.md and docs/plans/context7-wave-orchestrator.md.
+
+File ownership (only touch these paths):
+- README.md
+- docs/plans/wave-orchestrator.md
+- scripts/wave-orchestrator/wave-files.mjs
+- test/wave-orchestrator/wave-files.test.ts
+\`\`\`
+`,
+      "utf8",
+    );
+
+    const dryRunResult = runWaveCli(
+      ["launch", "--lane", "main", "--dry-run", "--no-dashboard", "--no-context7"],
+      repoDir,
+    );
+    expect(dryRunResult.status).toBe(0);
+
+    const dryRunRoot = path.join(repoDir, ".tmp", "main-wave-launcher", "dry-run");
+    expect(fs.existsSync(path.join(dryRunRoot, "prompts", "wave-0-0-a0.prompt.md"))).toBe(true);
+    expect(fs.existsSync(path.join(dryRunRoot, "prompts", "wave-0-0-a8.prompt.md"))).toBe(true);
+    expect(fs.existsSync(path.join(dryRunRoot, "prompts", "wave-0-0-a9.prompt.md"))).toBe(true);
+
+    const codexPreview = JSON.parse(
+      fs.readFileSync(
+        path.join(dryRunRoot, "executors", "wave-0", "0-a0", "launch-preview.json"),
+        "utf8",
+      ),
+    );
+    expect(codexPreview.executorId).toBe("codex");
+    expect(codexPreview.invocationLines.join("\n")).toContain("--profile 'review'");
+    expect(codexPreview.invocationLines.join("\n")).toContain("--json");
+
+    const claudePreview = JSON.parse(
+      fs.readFileSync(
+        path.join(dryRunRoot, "executors", "wave-0", "0-a8", "launch-preview.json"),
+        "utf8",
+      ),
+    );
+    expect(claudePreview.executorId).toBe("claude");
+    expect(
+      fs.existsSync(path.join(dryRunRoot, "executors", "wave-0", "0-a8", "claude-settings.json")),
+    ).toBe(true);
+    const claudeSettings = JSON.parse(
+      fs.readFileSync(
+        path.join(dryRunRoot, "executors", "wave-0", "0-a8", "claude-settings.json"),
+        "utf8",
+      ),
+    );
+    expect(claudeSettings).toMatchObject({
+      permissions: {
+        allow: ["Read"],
+      },
+      hooks: {
+        Stop: [{ command: "echo stop" }],
+      },
+      allowedHttpHookUrls: ["https://example.com/hooks"],
+    });
+
+    const opencodePreview = JSON.parse(
+      fs.readFileSync(
+        path.join(dryRunRoot, "executors", "wave-0", "0-a9", "launch-preview.json"),
+        "utf8",
+      ),
+    );
+    expect(opencodePreview.executorId).toBe("opencode");
+    expect(opencodePreview.invocationLines.join("\n")).toContain("--file 'docs/runtime.md'");
+    const opencodeConfig = JSON.parse(
+      fs.readFileSync(
+        path.join(dryRunRoot, "executors", "wave-0", "0-a9", "opencode.json"),
+        "utf8",
+      ),
+    );
+    expect(opencodeConfig.plugins).toEqual(["./plugins/runtime.mjs"]);
+  });
+});

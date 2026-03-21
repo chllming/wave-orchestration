@@ -20,7 +20,11 @@
 
 ### Executor
 
-- profile: deep-review
+- id: codex
+- model: gpt-5-codex
+- codex.profile_name: review
+- codex.search: true
+- codex.json: true
 
 ### Context7
 
@@ -49,7 +53,10 @@ File ownership (only touch these paths):
 
 ### Executor
 
-- profile: deep-review
+- id: claude
+- model: claude-sonnet-4-6
+- claude.settings_json: {"permissions":{"allow":["Read"]}}
+- claude.hooks_json: {"Stop":[{"command":"echo integration-stop"}]}
 
 ### Context7
 
@@ -83,7 +90,9 @@ File ownership (only touch these paths):
 
 ### Executor
 
-- profile: docs-pass
+- id: opencode
+- opencode.files: README.md,docs/plans/current-state.md
+- opencode.config_json: {"instructions":["Keep shared plan docs concise and factual."]}
 
 ### Context7
 
@@ -111,6 +120,9 @@ File ownership (only touch these paths):
 ### Executor
 
 - profile: implement-fast
+- model: gpt-5-codex
+- codex.config: model_reasoning_effort=medium
+- codex.add_dirs: docs,scripts
 - fallbacks: claude, opencode
 
 ### Context7

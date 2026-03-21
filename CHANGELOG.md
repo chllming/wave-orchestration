@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.0 - 2026-03-21
+
+- Expanded Codex runtime support with documented `exec` flags for model, profile, inline config, search, images, extra dirs, JSON mode, and ephemeral sessions.
+- Added Claude settings overlay merging for inline settings JSON, hooks JSON, and allowed HTTP hook URLs, while keeping the harness system-prompt overlay flow.
+- Added richer OpenCode runtime overlays with merged config JSON, multi-file attachments, and dry-run launch previews for all supported executors.
+
 ## 0.3.0 - 2026-03-21
 
 - Added the Phase 1 and 2 harness runtime: canonical coordination store, compiled inboxes, wave ledger, integration summaries, and clarification triage.

@@ -159,6 +159,39 @@ pnpm exec wave changelog --since-installed
 - Generic `budget.minutes` caps per-agent attempt timeouts. Generic `budget.turns` seeds `claude.maxTurns` and `opencode.steps` when executor-specific values are not set.
 - The launcher writes runtime overlay files under `.tmp/<lane>-wave-launcher/executors/`; these should stay ignored and local.
 
+Runtime authoring examples:
+
+````md
+### Executor
+
+- id: codex
+- model: gpt-5-codex
+- codex.profile_name: review
+- codex.config: model_reasoning_effort=high
+- codex.search: true
+- codex.json: true
+````
+
+````md
+### Executor
+
+- id: claude
+- model: claude-sonnet-4-6
+- claude.settings_json: {"permissions":{"allow":["Read"]}}
+- claude.hooks_json: {"Stop":[{"command":"echo stop"}]}
+- claude.allowed_http_hook_urls: https://example.com/hooks
+````
+
+````md
+### Executor
+
+- id: opencode
+- opencode.files: README.md,docs/plans/current-state.md
+- opencode.config_json: {"instructions":["Keep shared-plan edits concise."]}
+````
+
+Dry-run is the intended validation path for these runtime surfaces. `wave launch --dry-run --no-dashboard` now writes compiled prompts, merged runtime overlays, and `launch-preview.json` files under `.tmp/<lane>-wave-launcher/dry-run/` so the harness can verify invocation shape without requiring the executor binaries to run.
+
 ## Human Feedback Queue
 
 The file-backed feedback queue is now the final escalation layer, not the first-line clarification path. Operators can inspect and answer unresolved tickets with:

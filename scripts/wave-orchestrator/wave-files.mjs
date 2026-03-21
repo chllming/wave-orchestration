@@ -241,6 +241,19 @@ function parsePositiveExecutorInt(value, label, filePath) {
   return parsed;
 }
 
+function parseExecutorBoolean(value, label, filePath) {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
+  if (["true", "1", "yes", "on"].includes(normalized)) {
+    return true;
+  }
+  if (["false", "0", "no", "off"].includes(normalized)) {
+    return false;
+  }
+  throw new Error(`Invalid ${label} "${value}" in ${filePath}`);
+}
+
 function parseExecutorStringList(value) {
   if (Array.isArray(value)) {
     return value.map((entry) => cleanExecutorValue(entry)).filter(Boolean);
@@ -257,6 +270,14 @@ function parseExecutorJson(value, label, filePath) {
   } catch (error) {
     throw new Error(`Invalid JSON for ${label} in ${filePath}: ${error.message}`);
   }
+}
+
+function parseExecutorJsonObject(value, label, filePath) {
+  const parsed = parseExecutorJson(value, label, filePath);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`Invalid JSON object for ${label} in ${filePath}`);
+  }
+  return parsed;
 }
 
 function cleanExecutorValue(value) {
@@ -309,6 +330,13 @@ export function normalizeAgentExecutorConfig(rawSettings, filePath, label) {
     "budget.minutes",
     "codex.command",
     "codex.sandbox",
+    "codex.profile_name",
+    "codex.config",
+    "codex.search",
+    "codex.images",
+    "codex.add_dirs",
+    "codex.json",
+    "codex.ephemeral",
     "claude.command",
     "claude.agent",
     "claude.permission_mode",
@@ -316,16 +344,21 @@ export function normalizeAgentExecutorConfig(rawSettings, filePath, label) {
     "claude.max_turns",
     "claude.mcp_config",
     "claude.settings",
+    "claude.settings_json",
+    "claude.hooks_json",
+    "claude.allowed_http_hook_urls",
     "claude.output_format",
     "claude.allowed_tools",
     "claude.disallowed_tools",
     "opencode.command",
     "opencode.agent",
     "opencode.attach",
+    "opencode.files",
     "opencode.format",
     "opencode.steps",
     "opencode.instructions",
     "opencode.permission",
+    "opencode.config_json",
   ]);
   for (const [key, rawValue] of Object.entries(rawSettings)) {
     if (!allowedKeys.has(key)) {
@@ -366,6 +399,41 @@ export function normalizeAgentExecutorConfig(rawSettings, filePath, label) {
         ...(executorConfig.codex || {}),
         sandbox: normalizeCodexSandboxMode(value, `${label}.codex.sandbox`),
       };
+    } else if (key === "codex.profile_name") {
+      executorConfig.codex = {
+        ...(executorConfig.codex || {}),
+        profileName: value,
+      };
+    } else if (key === "codex.config") {
+      executorConfig.codex = {
+        ...(executorConfig.codex || {}),
+        config: parseExecutorStringList(value),
+      };
+    } else if (key === "codex.search") {
+      executorConfig.codex = {
+        ...(executorConfig.codex || {}),
+        search: parseExecutorBoolean(value, `${label}.codex.search`, filePath),
+      };
+    } else if (key === "codex.images") {
+      executorConfig.codex = {
+        ...(executorConfig.codex || {}),
+        images: parseExecutorStringList(value),
+      };
+    } else if (key === "codex.add_dirs") {
+      executorConfig.codex = {
+        ...(executorConfig.codex || {}),
+        addDirs: parseExecutorStringList(value),
+      };
+    } else if (key === "codex.json") {
+      executorConfig.codex = {
+        ...(executorConfig.codex || {}),
+        json: parseExecutorBoolean(value, `${label}.codex.json`, filePath),
+      };
+    } else if (key === "codex.ephemeral") {
+      executorConfig.codex = {
+        ...(executorConfig.codex || {}),
+        ephemeral: parseExecutorBoolean(value, `${label}.codex.ephemeral`, filePath),
+      };
     } else if (key === "claude.command") {
       executorConfig.claude = {
         ...(executorConfig.claude || {}),
@@ -400,6 +468,21 @@ export function normalizeAgentExecutorConfig(rawSettings, filePath, label) {
       executorConfig.claude = {
         ...(executorConfig.claude || {}),
         settings: value,
+      };
+    } else if (key === "claude.settings_json") {
+      executorConfig.claude = {
+        ...(executorConfig.claude || {}),
+        settingsJson: parseExecutorJsonObject(value, `${label}.claude.settings_json`, filePath),
+      };
+    } else if (key === "claude.hooks_json") {
+      executorConfig.claude = {
+        ...(executorConfig.claude || {}),
+        hooksJson: parseExecutorJsonObject(value, `${label}.claude.hooks_json`, filePath),
+      };
+    } else if (key === "claude.allowed_http_hook_urls") {
+      executorConfig.claude = {
+        ...(executorConfig.claude || {}),
+        allowedHttpHookUrls: parseExecutorStringList(value),
       };
     } else if (key === "claude.output_format") {
       const normalizedOutputFormat = value.toLowerCase();
@@ -437,6 +520,11 @@ export function normalizeAgentExecutorConfig(rawSettings, filePath, label) {
         ...(executorConfig.opencode || {}),
         attach: value,
       };
+    } else if (key === "opencode.files") {
+      executorConfig.opencode = {
+        ...(executorConfig.opencode || {}),
+        files: parseExecutorStringList(value),
+      };
     } else if (key === "opencode.format") {
       const normalizedFormat = value.toLowerCase();
       if (!["default", "json"].includes(normalizedFormat)) {
@@ -462,6 +550,11 @@ export function normalizeAgentExecutorConfig(rawSettings, filePath, label) {
       executorConfig.opencode = {
         ...(executorConfig.opencode || {}),
         permission: parseExecutorJson(value, `${label}.opencode.permission`, filePath),
+      };
+    } else if (key === "opencode.config_json") {
+      executorConfig.opencode = {
+        ...(executorConfig.opencode || {}),
+        configJson: parseExecutorJsonObject(value, `${label}.opencode.config_json`, filePath),
       };
     }
   }
@@ -1327,6 +1420,12 @@ export function resolveAgentExecutor(agent, options = {}) {
     fallbackReason: null,
     executorHistory: [{ attempt: 0, executorId, reason: "initial" }],
     codex: {
+      ...mergeExecutorSections(
+        laneProfile.executors.codex,
+        profile?.codex,
+        executorConfig?.codex,
+        ["config", "images", "addDirs"],
+      ),
       command:
         executorConfig?.codex?.command ||
         profile?.codex?.command ||
@@ -1340,13 +1439,44 @@ export function resolveAgentExecutor(agent, options = {}) {
               "executor.codex.sandbox",
             )
           : laneProfile.executors.codex.sandbox || DEFAULT_CODEX_SANDBOX_MODE),
+      profileName:
+        executorConfig?.codex?.profileName ||
+        profile?.codex?.profileName ||
+        laneProfile.executors.codex.profileName,
+      config: mergeUniqueStringArrays(
+        laneProfile.executors.codex.config,
+        profile?.codex?.config,
+        executorConfig?.codex?.config,
+      ),
+      search:
+        executorConfig?.codex?.search ??
+        profile?.codex?.search ??
+        laneProfile.executors.codex.search,
+      images: mergeUniqueStringArrays(
+        laneProfile.executors.codex.images,
+        profile?.codex?.images,
+        executorConfig?.codex?.images,
+      ),
+      addDirs: mergeUniqueStringArrays(
+        laneProfile.executors.codex.addDirs,
+        profile?.codex?.addDirs,
+        executorConfig?.codex?.addDirs,
+      ),
+      json:
+        executorConfig?.codex?.json ??
+        profile?.codex?.json ??
+        laneProfile.executors.codex.json,
+      ephemeral:
+        executorConfig?.codex?.ephemeral ??
+        profile?.codex?.ephemeral ??
+        laneProfile.executors.codex.ephemeral,
     },
     claude: {
       ...mergeExecutorSections(
         laneProfile.executors.claude,
         profile?.claude,
         executorConfig?.claude,
-        ["mcpConfig", "allowedTools", "disallowedTools"],
+        ["mcpConfig", "allowedTools", "disallowedTools", "allowedHttpHookUrls"],
       ),
       model:
         executorId === "claude"
@@ -1363,7 +1493,7 @@ export function resolveAgentExecutor(agent, options = {}) {
         laneProfile.executors.opencode,
         profile?.opencode,
         executorConfig?.opencode,
-        ["instructions"],
+        ["instructions", "files"],
       ),
       model:
         executorId === "opencode"

@@ -13,6 +13,11 @@
   - explicit integration summaries
   - per-attempt trace bundles
   - orchestrator-first clarification triage plus human escalation artifacts
+- Runtime executor support now includes:
+  - Codex `exec` profile, inline config, search, image, add-dir, JSON, and ephemeral flags
+  - Claude settings overlay merging for inline settings and hooks
+  - OpenCode merged config overlays plus multi-file attachments
+  - dry-run prompt and executor-preview materialization under `.tmp/<lane>-wave-launcher/dry-run/`
 - Lane runtime policy is active through `wave.config.json`:
   - role-based default executors
   - executor profiles

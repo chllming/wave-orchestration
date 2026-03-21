@@ -3,6 +3,21 @@
   "packageName": "@chllming/wave-orchestration",
   "releases": [
     {
+      "version": "0.4.0",
+      "date": "2026-03-21",
+      "summary": "Runtime surface upgrade for Codex, Claude Code, and OpenCode plus dry-run launch previews.",
+      "features": [
+        "Expanded Codex `exec` support for model, profile, inline config, search, images, extra directories, JSON mode, and ephemeral sessions.",
+        "Claude settings overlay merging for inline settings JSON, hooks JSON, and allowed HTTP hook URLs.",
+        "OpenCode merged config overlays, multi-file attachments, and dry-run materialization of prompts plus executor launch previews."
+      ],
+      "manualSteps": [
+        "Review any per-agent `### Executor` blocks that want the new runtime fields before cutting real waves on the upgraded package.",
+        "Run `pnpm exec wave launch --lane main --dry-run --no-dashboard` after upgrading to confirm prompts and executor overlays materialize as expected."
+      ],
+      "breaking": false
+    },
+    {
       "version": "0.1.0",
       "date": "2026-03-21",
       "summary": "Generic wave orchestrator runtime with Context7 and multi-executor support.",

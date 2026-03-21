@@ -71,16 +71,17 @@ import {
   readFileTail,
   readJsonOrNull,
   REPORT_VERDICT_REGEX,
-  sanitizeOrchestratorId,
-  shellQuote,
-  sleep,
-  PACKAGE_ROOT,
-  TMUX_COMMAND_TIMEOUT_MS,
-  WAVE_VERDICT_REGEX,
-  WAVE_TERMINAL_STATES,
-  toIsoTimestamp,
-  writeTextAtomic,
-} from "./shared.mjs";
+    sanitizeOrchestratorId,
+    shellQuote,
+    sleep,
+    PACKAGE_ROOT,
+    TMUX_COMMAND_TIMEOUT_MS,
+    WAVE_VERDICT_REGEX,
+    WAVE_TERMINAL_STATES,
+    toIsoTimestamp,
+    writeJsonAtomic,
+    writeTextAtomic,
+  } from "./shared.mjs";
 import {
   appendTerminalEntries,
   createGlobalDashboardTerminalEntry,
@@ -1346,6 +1347,7 @@ async function launchAgentSession(lanePaths, params) {
     agentRateLimitBaseDelaySeconds,
     agentRateLimitMaxDelaySeconds,
     context7Enabled,
+    dryRun = false,
   } = params;
   ensureDirectory(path.dirname(promptPath));
   ensureDirectory(path.dirname(logPath));
@@ -1376,7 +1378,6 @@ async function launchAgentSession(lanePaths, params) {
   });
   const promptHash = hashAgentPromptFingerprint(agent);
   fs.writeFileSync(promptPath, `${prompt}\n`, "utf8");
-  killTmuxSessionIfExists(lanePaths.tmuxSocketName, sessionName);
   const overlayDir = path.join(lanePaths.executorOverlaysDir, `wave-${wave}`, agent.slug);
   const launchSpec = buildExecutorLaunchSpec({
     agent,
@@ -1385,6 +1386,17 @@ async function launchAgentSession(lanePaths, params) {
     overlayDir,
   });
   const resolvedExecutorMode = launchSpec.executorId || agent.executorResolved?.id || "codex";
+  if (dryRun) {
+    writeJsonAtomic(path.join(overlayDir, "launch-preview.json"), {
+      executorId: resolvedExecutorMode,
+      command: launchSpec.command,
+      env: launchSpec.env || {},
+      useRateLimitRetries: launchSpec.useRateLimitRetries === true,
+      invocationLines: launchSpec.invocationLines,
+    });
+    return { promptHash, context7, executorId: resolvedExecutorMode, launchSpec, dryRun: true };
+  }
+  killTmuxSessionIfExists(lanePaths.tmuxSocketName, sessionName);
 
   const executionLines = [];
   if (launchSpec.env) {
@@ -2203,7 +2215,7 @@ export async function runLauncherCli(argv) {
 
     if (options.dryRun) {
       for (const wave of filteredWaves) {
-        writeWaveDerivedState({
+        const derivedState = writeWaveDerivedState({
           lanePaths,
           wave,
           summariesByAgentId: {},
@@ -2211,8 +2223,49 @@ export async function runLauncherCli(argv) {
           attempt: 0,
           orchestratorId: options.orchestratorId,
         });
+        const agentRuns = wave.agents.map((agent) => {
+          const safeName = `wave-${wave.wave}-${agent.slug}`;
+          return {
+            agent,
+            sessionName: `dry-run-wave-${wave.wave}-${agent.slug}`,
+            promptPath: path.join(lanePaths.promptsDir, `${safeName}.prompt.md`),
+            logPath: path.join(lanePaths.logsDir, `${safeName}.log`),
+            statusPath: path.join(lanePaths.statusDir, `${safeName}.status`),
+            messageBoardPath: derivedState.messageBoardPath,
+            messageBoardSnapshot: derivedState.messageBoardText,
+            sharedSummaryPath: derivedState.sharedSummaryPath,
+            sharedSummaryText: derivedState.sharedSummaryText,
+            inboxPath: derivedState.inboxesByAgentId[agent.agentId]?.path || null,
+            inboxText: derivedState.inboxesByAgentId[agent.agentId]?.text || "",
+          };
+        });
+        for (const runInfo of agentRuns) {
+          await launchAgentSession(lanePaths, {
+            wave: wave.wave,
+            agent: runInfo.agent,
+            sessionName: runInfo.sessionName,
+            promptPath: runInfo.promptPath,
+            logPath: runInfo.logPath,
+            statusPath: runInfo.statusPath,
+            messageBoardPath: runInfo.messageBoardPath,
+            messageBoardSnapshot: runInfo.messageBoardSnapshot || "",
+            sharedSummaryPath: runInfo.sharedSummaryPath,
+            sharedSummaryText: runInfo.sharedSummaryText,
+            inboxPath: runInfo.inboxPath,
+            inboxText: runInfo.inboxText,
+            orchestratorId: options.orchestratorId,
+            agentRateLimitRetries: options.agentRateLimitRetries,
+            agentRateLimitBaseDelaySeconds: options.agentRateLimitBaseDelaySeconds,
+            agentRateLimitMaxDelaySeconds: options.agentRateLimitMaxDelaySeconds,
+            context7Enabled: false,
+            dryRun: true,
+          });
+        }
       }
       console.log(`[dry-run] state root: ${path.relative(REPO_ROOT, lanePaths.stateDir)}`);
+      console.log(
+        `[dry-run] prompts and executor overlays written: ${path.relative(REPO_ROOT, lanePaths.executorOverlaysDir)}`,
+      );
       console.log("Dry run enabled, skipping tmux and executor launch.");
       return;
     }

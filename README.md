@@ -16,9 +16,9 @@ It includes:
 ## Quick Start
 
 Published package:
-- `@chllming/wave-orchestration@0.3.0`
+- `@chllming/wave-orchestration@0.4.0`
 - Registry: `https://npm.pkg.github.com`
-- Release: [v0.3.0](https://github.com/chllming/wave-orchestration/releases/tag/v0.3.0)
+- Release: [v0.4.0](https://github.com/chllming/wave-orchestration/releases/tag/v0.4.0)
 
 Install:
 
@@ -36,12 +36,12 @@ If your repo already has Wave config, docs, or waves you want to keep:
 pnpm exec wave init --adopt-existing
 ```
 
-## New In 0.3.0
+## New In 0.4.0
 
-- Typed coordination is now first-class: the launcher materializes a canonical coordination log, renders the markdown board from that state, and compiles a shared summary plus per-agent inboxes for each wave.
-- Wave closure is now integration-aware: the integration steward must produce a ready summary before documentation and evaluator closure run.
-- Runtime planning is now lane-aware: executor profiles, per-role defaults, hard runtime-mix limits, and retry fallback recording are all part of the shipped package.
-- Clarifications now stay inside the harness first: the launcher tries policy resolution or targeted rerouting before creating human feedback tickets.
+- Codex now supports richer non-interactive runtime control: model, CLI profile, inline config overrides, search, images, extra directories, JSON mode, and ephemeral sessions.
+- Claude Code can now merge per-run settings overlays from a base settings file plus inline settings JSON, hooks JSON, and allowed HTTP hook URLs.
+- OpenCode can now merge arbitrary config JSON into the generated `opencode.json` overlay and attach multiple files per run.
+- `wave launch --dry-run` now materializes prompts plus executor launch previews under `.tmp/.../dry-run/`, so runtime harness behavior is testable without launching the binaries.
 
 ## Requirements
 
@@ -158,6 +158,8 @@ node scripts/wave.mjs launch --lane main --start-wave 0 --end-wave 0 --executor 
 pnpm exec wave doctor
 pnpm exec wave launch --lane main --dry-run --no-dashboard
 ```
+
+Dry-run now writes compiled prompts and executor previews under `.tmp/<lane>-wave-launcher/dry-run/`, including `executors/wave-<n>/<agent-slug>/launch-preview.json`.
 
 7. Inspect the seeded coordination state and generated inboxes:
 
@@ -322,16 +324,65 @@ The component matrix is also expected to reflect the landed state. Before a prom
 Supported keys:
 
 - `id`
+- `profile`
 - `model`
+- `fallbacks`
+- `tags`
+- `budget.turns`
+- `budget.minutes`
 - `codex.sandbox`
+- `codex.profile_name`
+- `codex.config`
+- `codex.search`
+- `codex.images`
+- `codex.add_dirs`
+- `codex.json`
+- `codex.ephemeral`
 - `claude.agent`
 - `claude.permission_mode`
 - `claude.max_turns`
 - `claude.mcp_config`
+- `claude.settings`
+- `claude.settings_json`
+- `claude.hooks_json`
+- `claude.allowed_http_hook_urls`
 - `opencode.agent`
 - `opencode.attach`
+- `opencode.files`
 - `opencode.format`
 - `opencode.steps`
+- `opencode.config_json`
+
+Example runtime blocks:
+
+````md
+### Executor
+
+- id: codex
+- model: gpt-5-codex
+- codex.profile_name: review
+- codex.config: model_reasoning_effort=high
+- codex.search: true
+- codex.json: true
+````
+
+````md
+### Executor
+
+- id: claude
+- model: claude-sonnet-4-6
+- claude.settings_json: {"permissions":{"allow":["Read"]}}
+- claude.hooks_json: {"Stop":[{"command":"echo stop"}]}
+- claude.allowed_http_hook_urls: https://example.com/hooks
+````
+
+````md
+### Executor
+
+- id: opencode
+- opencode.files: README.md,docs/plans/current-state.md
+- opencode.config_json: {"instructions":["Keep shared-plan edits concise."]}
+````
 
 When an implementation agent owns components, it must emit:
 
@@ -344,11 +395,11 @@ The launcher will not accept final completion until every promoted component has
 ## Executor Behavior
 
 - `codex`
-  The harness sends the generated task prompt through `codex exec` stdin. `--codex-sandbox` and `wave.config.json` `executors.codex.sandbox` control the default sandbox.
+  The harness sends the generated task prompt through `codex exec` stdin. `--codex-sandbox` and `wave.config.json` `executors.codex.sandbox` control the default sandbox. `0.4.0` adds support for Codex CLI profile selection, inline `-c` overrides, search, images, extra directories, JSON mode, and ephemeral sessions.
 - `claude`
-  The harness launches `claude -p` headlessly. The generated task prompt becomes the run message, and a runtime overlay file is injected with `--append-system-prompt-file` by default. Switch to full replacement in `wave.config.json` with `executors.claude.appendSystemPromptMode: "replace"`.
+  The harness launches `claude -p` headlessly. The generated task prompt becomes the run message, and a runtime overlay file is injected with `--append-system-prompt-file` by default. `0.4.0` adds merged per-run settings overlays from a base `claude.settings` file plus inline settings JSON, hooks JSON, and allowed HTTP hook URLs. Switch to full replacement in `wave.config.json` with `executors.claude.appendSystemPromptMode: "replace"`.
 - `opencode`
-  The harness launches `opencode run` headlessly. The generated task prompt becomes the run message, and the harness writes an ignored runtime `opencode.json` plus a generated agent prompt under `.tmp/.../executors/`, then points `OPENCODE_CONFIG` at that overlay for the run.
+  The harness launches `opencode run` headlessly. The generated task prompt becomes the run message, and the harness writes an ignored runtime `opencode.json` plus a generated agent prompt under `.tmp/.../executors/`, then points `OPENCODE_CONFIG` at that overlay for the run. `0.4.0` adds merged config JSON support and repeated file attachments.
 - `local`
   Smoke-test only. It creates placeholder deliverables and emits the expected Wave markers, but it is not a real agent runtime.
 
@@ -374,6 +425,8 @@ The run-level default executor comes from `wave.config.json`:
   }
 }
 ```
+
+Dry-run executor previews are written under the same `executors/` tree as live overlays. For each agent, `launch-preview.json` records the resolved executor id, exported env vars, rate-limit retry mode, and the exact invocation lines that would be used in a real run.
 
 ## Context7 Setup
 

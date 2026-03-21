@@ -56,6 +56,13 @@ function makeLaneProfile() {
       },
       codex: {
         command: "codex",
+        profileName: null,
+        config: [],
+        search: false,
+        images: [],
+        addDirs: [],
+        json: false,
+        ephemeral: false,
         sandbox: "danger-full-access",
       },
       claude: {
@@ -68,6 +75,9 @@ function makeLaneProfile() {
         mcpConfig: [],
         strictMcpConfig: false,
         settings: null,
+        settingsJson: null,
+        hooksJson: null,
+        allowedHttpHookUrls: [],
         outputFormat: "text",
         allowedTools: [],
         disallowedTools: [],
@@ -77,10 +87,12 @@ function makeLaneProfile() {
         model: "anthropic/claude-sonnet-4-20250514",
         agent: null,
         attach: null,
+        files: [],
         format: "default",
         steps: null,
         instructions: [],
         permission: null,
+        configJson: null,
       },
     },
     capabilityRouting: {
@@ -230,15 +242,177 @@ File ownership (only touch these paths):
       },
     });
   });
+
+  it("parses advanced Codex, Claude, and OpenCode executor settings", () => {
+    const wave = applyExecutorSelectionsToWave(
+      parseWaveContent(
+        `# Wave 5 - Runtime Surface
+
+## Agent A1: Codex Reviewer
+
+### Executor
+
+- id: codex
+- model: gpt-5-codex
+- codex.profile_name: review
+- codex.config: model_reasoning_effort=high,model_verbosity=low
+- codex.search: true
+- codex.images: docs/mock-ui.png
+- codex.add_dirs: ../shared,../infra
+- codex.json: true
+- codex.ephemeral: true
+
+### Prompt
+\`\`\`text
+File ownership (only touch these paths):
+- src/runtime.ts
+\`\`\`
+
+## Agent A2: Claude Worker
+
+### Executor
+
+- id: claude
+- claude.settings_json: {"permissions":{"allow":["Read"]}}
+- claude.hooks_json: {"Stop":[{"command":"echo stop"}]}
+- claude.allowed_http_hook_urls: https://example.com/hook
+
+### Prompt
+\`\`\`text
+File ownership (only touch these paths):
+- docs/runtime.md
+\`\`\`
+
+## Agent A3: OpenCode Worker
+
+### Executor
+
+- id: opencode
+- opencode.files: docs/runtime.md,README.md
+- opencode.config_json: {"plugins":["./plugins/runtime.mjs"]}
+
+### Prompt
+\`\`\`text
+File ownership (only touch these paths):
+- scripts/runtime.ts
+\`\`\`
+`,
+        "/tmp/wave-5.md",
+      ),
+      { lane: "main" },
+    );
+
+    expect(wave.agents[0]?.executorResolved).toMatchObject({
+      id: "codex",
+      model: "gpt-5-codex",
+      codex: {
+        profileName: "review",
+        config: ["model_reasoning_effort=high", "model_verbosity=low"],
+        search: true,
+        images: ["docs/mock-ui.png"],
+        addDirs: ["../shared", "../infra"],
+        json: true,
+        ephemeral: true,
+      },
+    });
+    expect(wave.agents[1]?.executorResolved).toMatchObject({
+      id: "claude",
+      claude: {
+        settingsJson: {
+          permissions: {
+            allow: ["Read"],
+          },
+        },
+        hooksJson: {
+          Stop: [{ command: "echo stop" }],
+        },
+        allowedHttpHookUrls: ["https://example.com/hook"],
+      },
+    });
+    expect(wave.agents[2]?.executorResolved).toMatchObject({
+      id: "opencode",
+      opencode: {
+        files: ["docs/runtime.md", "README.md"],
+        configJson: {
+          plugins: ["./plugins/runtime.mjs"],
+        },
+      },
+    });
+  });
 });
 
 describe("buildExecutorLaunchSpec", () => {
+  it("builds a Codex invocation with advanced runtime flags", () => {
+    const dir = registerTempPath(fs.mkdtempSync(path.join(os.tmpdir(), "wave-executor-codex-")));
+    const promptPath = path.join(dir, "prompt.md");
+    const logPath = path.join(dir, "agent.log");
+    const overlayDir = path.join(dir, "codex");
+    fs.writeFileSync(promptPath, "Prompt body\n", "utf8");
+
+    const spec = buildExecutorLaunchSpec({
+      agent: {
+        agentId: "A0",
+        title: "Codex Reviewer",
+        executorResolved: {
+          id: "codex",
+          model: "gpt-5-codex",
+          codex: {
+            command: "codex",
+            sandbox: "workspace-write",
+            profileName: "review",
+            config: ["model_reasoning_effort=high", "model_verbosity=low"],
+            search: true,
+            images: ["docs/mock-ui.png"],
+            addDirs: ["../shared"],
+            json: true,
+            ephemeral: true,
+          },
+          claude: null,
+          opencode: null,
+        },
+      },
+      promptPath,
+      logPath,
+      overlayDir,
+    });
+
+    expect(spec.executorId).toBe("codex");
+    const invocation = spec.invocationLines.join("\n");
+    expect(invocation).toContain("codex --ask-for-approval never exec");
+    expect(invocation).toContain("--model 'gpt-5-codex'");
+    expect(invocation).toContain("--profile 'review'");
+    expect(invocation).toContain("-c 'model_reasoning_effort=high'");
+    expect(invocation).toContain("-c 'model_verbosity=low'");
+    expect(invocation).toContain("--search");
+    expect(invocation).toContain("--image 'docs/mock-ui.png'");
+    expect(invocation).toContain("--add-dir '../shared'");
+    expect(invocation).toContain("--json");
+    expect(invocation).toContain("--ephemeral");
+  });
+
   it("writes a Claude overlay file and builds a headless invocation", () => {
     const dir = registerTempPath(fs.mkdtempSync(path.join(os.tmpdir(), "wave-executor-claude-")));
     const promptPath = path.join(dir, "prompt.md");
     const logPath = path.join(dir, "agent.log");
     const overlayDir = path.join(dir, "claude");
+    const baseSettingsPath = path.join(dir, "claude-base-settings.json");
     fs.writeFileSync(promptPath, "Prompt body\n", "utf8");
+    fs.writeFileSync(
+      baseSettingsPath,
+      JSON.stringify(
+        {
+          permissions: {
+            deny: ["Bash(rm -rf *)"],
+          },
+          hooks: {
+            SessionStart: [{ command: "echo start" }],
+          },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
 
     const spec = buildExecutorLaunchSpec({
       agent: {
@@ -258,7 +432,16 @@ describe("buildExecutorLaunchSpec", () => {
             maxTurns: 3,
             mcpConfig: [".tmp/mcp.json"],
             strictMcpConfig: true,
-            settings: ".tmp/claude-settings.json",
+            settings: baseSettingsPath,
+            settingsJson: {
+              permissions: {
+                allow: ["Read"],
+              },
+            },
+            hooksJson: {
+              Stop: [{ command: "echo stop" }],
+            },
+            allowedHttpHookUrls: ["https://example.com/hooks"],
             outputFormat: "text",
             allowedTools: ["Read"],
             disallowedTools: ["Edit"],
@@ -284,9 +467,24 @@ describe("buildExecutorLaunchSpec", () => {
     expect(fs.readFileSync(path.join(overlayDir, "claude-system-prompt.txt"), "utf8")).toContain(
       "Wave orchestration harness",
     );
+    const settings = JSON.parse(
+      fs.readFileSync(path.join(overlayDir, "claude-settings.json"), "utf8"),
+    );
+    expect(settings).toMatchObject({
+      permissions: {
+        deny: ["Bash(rm -rf *)"],
+        allow: ["Read"],
+      },
+      hooks: {
+        SessionStart: [{ command: "echo start" }],
+        Stop: [{ command: "echo stop" }],
+      },
+      allowedHttpHookUrls: ["https://example.com/hooks"],
+    });
     const invocation = spec.invocationLines.join("\n");
     expect(invocation).toContain("claude -p --no-session-persistence");
     expect(invocation).toContain("--append-system-prompt-file");
+    expect(invocation).toContain(`--settings '${path.join(overlayDir, "claude-settings.json")}'`);
     expect(invocation).toContain("--max-turns '3'");
     expect(invocation).toContain("--strict-mcp-config");
   });
@@ -326,11 +524,22 @@ describe("buildExecutorLaunchSpec", () => {
             model: "anthropic/claude-sonnet-4-20250514",
             agent: "wave-open",
             attach: "http://localhost:4096",
+            files: ["docs/runtime.md", "README.md"],
             format: "json",
             steps: 5,
             instructions: ["docs/reference/repository-guidance.md"],
             permission: {
               edit: "ask",
+            },
+            configJson: {
+              plugins: ["./plugins/runtime.mjs"],
+              provider: {
+                anthropic: {
+                  options: {
+                    temperature: 0.1,
+                  },
+                },
+              },
             },
           },
         },
@@ -344,6 +553,14 @@ describe("buildExecutorLaunchSpec", () => {
     expect(spec.env?.OPENCODE_CONFIG).toBe(path.join(overlayDir, "opencode.json"));
     const config = JSON.parse(fs.readFileSync(path.join(overlayDir, "opencode.json"), "utf8"));
     expect(config.instructions).toEqual(["docs/reference/repository-guidance.md"]);
+    expect(config.plugins).toEqual(["./plugins/runtime.mjs"]);
+    expect(config.provider).toMatchObject({
+      anthropic: {
+        options: {
+          temperature: 0.1,
+        },
+      },
+    });
     expect(config.agent["wave-open"]).toMatchObject({
       mode: "primary",
       steps: 5,
@@ -354,6 +571,8 @@ describe("buildExecutorLaunchSpec", () => {
     const invocation = spec.invocationLines.join("\n");
     expect(invocation).toContain("opencode run --agent 'wave-open'");
     expect(invocation).toContain("--attach 'http://localhost:4096'");
+    expect(invocation).toContain("--file 'docs/runtime.md'");
+    expect(invocation).toContain("--file 'README.md'");
     expect(invocation).toContain("--format 'json'");
   });
 });

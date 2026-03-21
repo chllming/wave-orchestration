@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
 import {
   DEFAULT_CODEX_COMMAND,
@@ -27,7 +28,136 @@ function appendRepeatedFlag(tokens, flag, values) {
   if (list.length === 0) {
     return;
   }
-  tokens.push(flag, ...list.map((value) => shellQuote(value)));
+  for (const value of list) {
+    tokens.push(flag, shellQuote(value));
+  }
+}
+
+function appendBooleanFlag(tokens, flag, enabled) {
+  if (!enabled) {
+    return;
+  }
+  tokens.push(flag);
+}
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function cloneJson(value) {
+  return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
+}
+
+function mergeJsonObjects(...sources) {
+  const merged = {};
+  for (const source of sources) {
+    if (!isPlainObject(source)) {
+      continue;
+    }
+    for (const [key, value] of Object.entries(source)) {
+      if (isPlainObject(value) && isPlainObject(merged[key])) {
+        merged[key] = mergeJsonObjects(merged[key], value);
+      } else {
+        merged[key] = cloneJson(value);
+      }
+    }
+  }
+  return merged;
+}
+
+function mergeUniqueStringArrays(...lists) {
+  const merged = [];
+  const seen = new Set();
+  for (const list of lists) {
+    for (const value of Array.isArray(list) ? list : []) {
+      const normalized = String(value || "").trim();
+      if (!normalized || seen.has(normalized)) {
+        continue;
+      }
+      seen.add(normalized);
+      merged.push(normalized);
+    }
+  }
+  return merged;
+}
+
+function resolveRepoFilePath(filePath) {
+  if (!filePath) {
+    return null;
+  }
+  return path.isAbsolute(filePath) ? filePath : path.join(REPO_ROOT, filePath);
+}
+
+function readJsonObjectFile(filePath, label) {
+  const absolutePath = resolveRepoFilePath(filePath);
+  if (!absolutePath || !fs.existsSync(absolutePath)) {
+    throw new Error(`${label} file not found: ${filePath}`);
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(fs.readFileSync(absolutePath, "utf8"));
+  } catch (error) {
+    throw new Error(`Invalid ${label} JSON at ${filePath}: ${error.message}`);
+  }
+  if (!isPlainObject(parsed)) {
+    throw new Error(`${label} must be a JSON object: ${filePath}`);
+  }
+  return parsed;
+}
+
+function buildClaudeSettingsPath(executor, overlayDir) {
+  const inlineSettings = executor.claude.settingsJson || null;
+  const inlineHooks = executor.claude.hooksJson || null;
+  const inlineAllowedHttpHookUrls = Array.isArray(executor.claude.allowedHttpHookUrls)
+    ? executor.claude.allowedHttpHookUrls.filter(Boolean)
+    : [];
+  const hasInlineOverlay =
+    Boolean(inlineSettings) ||
+    Boolean(inlineHooks) ||
+    inlineAllowedHttpHookUrls.length > 0;
+  if (!hasInlineOverlay) {
+    return executor.claude.settings || null;
+  }
+  const baseSettings = executor.claude.settings
+    ? readJsonObjectFile(executor.claude.settings, "Claude settings")
+    : {};
+  const merged = mergeJsonObjects(
+    baseSettings,
+    inlineSettings,
+    inlineHooks ? { hooks: inlineHooks } : null,
+    inlineAllowedHttpHookUrls.length > 0
+      ? { allowedHttpHookUrls: inlineAllowedHttpHookUrls }
+      : null,
+  );
+  const settingsPath = path.join(overlayDir, "claude-settings.json");
+  writeJsonAtomic(settingsPath, merged);
+  return settingsPath;
+}
+
+function buildOpenCodeConfig({ agent, executor, agentName, promptFileName, overlayDir }) {
+  const promptAgent = {
+    description: `Wave agent ${agent.agentId}: ${agent.title}`,
+    mode: "primary",
+    prompt: `{file:./${promptFileName}}`,
+    ...(executor.opencode.model || executor.model
+      ? { model: executor.opencode.model || executor.model }
+      : {}),
+    ...(executor.opencode.steps ? { steps: executor.opencode.steps } : {}),
+    ...(executor.opencode.permission ? { permission: executor.opencode.permission } : {}),
+  };
+  const baseConfig = isPlainObject(executor.opencode.configJson) ? executor.opencode.configJson : {};
+  const baseAgentConfig = isPlainObject(baseConfig.agent) ? baseConfig.agent : {};
+  const config = mergeJsonObjects(baseConfig, {
+    $schema: baseConfig.$schema || "https://opencode.ai/config.json",
+    instructions: mergeUniqueStringArrays(baseConfig.instructions, executor.opencode.instructions),
+    agent: {
+      ...baseAgentConfig,
+      [agentName]: mergeJsonObjects(baseAgentConfig[agentName], promptAgent),
+    },
+  });
+  const configPath = path.join(overlayDir, "opencode.json");
+  writeJsonAtomic(configPath, config);
+  return configPath;
 }
 
 function renderHarnessSystemPrompt(agent, executorId) {
@@ -47,17 +177,25 @@ export function buildCodexExecInvocation(
   logPath,
   codexSandboxMode,
   command = DEFAULT_CODEX_COMMAND,
+  options = {},
 ) {
-  return [
+  const tokens = [
     command,
     "--ask-for-approval never",
     "exec",
     "--skip-git-repo-check",
     `--sandbox ${shellQuote(codexSandboxMode || DEFAULT_CODEX_SANDBOX_MODE)}`,
-    "-",
-    `< ${shellQuote(promptPath)}`,
-    `2>&1 | tee -a ${shellQuote(logPath)}`,
-  ].join(" ");
+  ];
+  appendSingleValueFlag(tokens, "--model", options.model);
+  appendSingleValueFlag(tokens, "--profile", options.profileName);
+  appendRepeatedFlag(tokens, "-c", options.config);
+  appendBooleanFlag(tokens, "--search", options.search);
+  appendRepeatedFlag(tokens, "--image", options.images);
+  appendRepeatedFlag(tokens, "--add-dir", options.addDirs);
+  appendBooleanFlag(tokens, "--json", options.json);
+  appendBooleanFlag(tokens, "--ephemeral", options.ephemeral);
+  tokens.push("-", `< ${shellQuote(promptPath)}`, `2>&1 | tee -a ${shellQuote(logPath)}`);
+  return tokens.join(" ");
 }
 
 function buildClaudeLaunchSpec({ agent, promptPath, logPath, overlayDir }) {
@@ -65,6 +203,7 @@ function buildClaudeLaunchSpec({ agent, promptPath, logPath, overlayDir }) {
   const systemPromptPath = path.join(overlayDir, "claude-system-prompt.txt");
   writeTextAtomic(systemPromptPath, `${renderHarnessSystemPrompt(agent, "claude")}\n`);
   const tokens = [executor.claude.command, "-p", "--no-session-persistence"];
+  const settingsPath = buildClaudeSettingsPath(executor, overlayDir);
   appendSingleValueFlag(tokens, "--output-format", executor.claude.outputFormat || "text");
   appendSingleValueFlag(tokens, "--model", executor.claude.model || executor.model);
   appendSingleValueFlag(tokens, "--agent", executor.claude.agent);
@@ -72,7 +211,7 @@ function buildClaudeLaunchSpec({ agent, promptPath, logPath, overlayDir }) {
   appendSingleValueFlag(tokens, "--permission-prompt-tool", executor.claude.permissionPromptTool);
   appendSingleValueFlag(tokens, "--max-turns", executor.claude.maxTurns);
   appendRepeatedFlag(tokens, "--mcp-config", executor.claude.mcpConfig);
-  appendSingleValueFlag(tokens, "--settings", executor.claude.settings);
+  appendSingleValueFlag(tokens, "--settings", settingsPath);
   appendRepeatedFlag(tokens, "--allowedTools", executor.claude.allowedTools);
   appendRepeatedFlag(tokens, "--disallowedTools", executor.claude.disallowedTools);
   if (executor.claude.strictMcpConfig) {
@@ -106,26 +245,19 @@ function buildOpenCodeLaunchSpec({ agent, promptPath, logPath, overlayDir }) {
   const agentName = requestedAgentName || `wave-${agent.agentId.toLowerCase()}`;
   const promptFileName = "opencode-agent-prompt.txt";
   const promptFilePath = path.join(overlayDir, promptFileName);
-  const configPath = path.join(overlayDir, "opencode.json");
   writeTextAtomic(promptFilePath, `${renderHarnessSystemPrompt(agent, "opencode")}\n`);
-  writeJsonAtomic(configPath, {
-    $schema: "https://opencode.ai/config.json",
-    instructions: executor.opencode.instructions || [],
-    agent: {
-      [agentName]: {
-        description: `Wave agent ${agent.agentId}: ${agent.title}`,
-        mode: "primary",
-        prompt: `{file:./${promptFileName}}`,
-        ...(executor.opencode.model || executor.model ? { model: executor.opencode.model || executor.model } : {}),
-        ...(executor.opencode.steps ? { steps: executor.opencode.steps } : {}),
-        ...(executor.opencode.permission ? { permission: executor.opencode.permission } : {}),
-      },
-    },
+  const configPath = buildOpenCodeConfig({
+    agent,
+    executor,
+    agentName,
+    promptFileName,
+    overlayDir,
   });
   const tokens = [executor.opencode.command, "run", "--agent", shellQuote(agentName)];
   appendSingleValueFlag(tokens, "--model", executor.opencode.model || executor.model);
   appendSingleValueFlag(tokens, "--format", executor.opencode.format || "default");
   appendSingleValueFlag(tokens, "--attach", executor.opencode.attach);
+  appendRepeatedFlag(tokens, "--file", executor.opencode.files);
   appendSingleValueFlag(tokens, "--title", `wave-${agent.agentId}`);
   return {
     executorId: "opencode",
@@ -166,6 +298,16 @@ function buildCodexLaunchSpec({ agent, promptPath, logPath }) {
         logPath,
         executor.codex.sandbox,
         executor.codex.command,
+        {
+          model: executor.model,
+          profileName: executor.codex.profileName,
+          config: executor.codex.config,
+          search: executor.codex.search,
+          images: executor.codex.images,
+          addDirs: executor.codex.addDirs,
+          json: executor.codex.json,
+          ephemeral: executor.codex.ephemeral,
+        },
       ),
     ],
   };

@@ -434,6 +434,31 @@ function normalizeExecutorProfile(rawProfile = {}, label = "executors.profiles.<
     codex: rawProfile.codex
       ? {
           command: normalizeOptionalString(rawProfile.codex.command, null),
+          profileName: normalizeOptionalString(rawProfile.codex.profileName, null),
+          config: normalizeOptionalStringOrStringArray(
+            rawProfile.codex.config,
+            `${label}.codex.config`,
+          ),
+          search:
+            rawProfile.codex.search === undefined
+              ? null
+              : normalizeOptionalBoolean(rawProfile.codex.search, false),
+          images: normalizeOptionalStringOrStringArray(
+            rawProfile.codex.images,
+            `${label}.codex.images`,
+          ),
+          addDirs: normalizeOptionalStringOrStringArray(
+            rawProfile.codex.addDirs,
+            `${label}.codex.addDirs`,
+          ),
+          json:
+            rawProfile.codex.json === undefined
+              ? null
+              : normalizeOptionalBoolean(rawProfile.codex.json, false),
+          ephemeral:
+            rawProfile.codex.ephemeral === undefined
+              ? null
+              : normalizeOptionalBoolean(rawProfile.codex.ephemeral, false),
           sandbox:
             rawProfile.codex.sandbox === undefined ||
             rawProfile.codex.sandbox === null ||
@@ -474,6 +499,18 @@ function normalizeExecutorProfile(rawProfile = {}, label = "executors.profiles.<
                   false,
                 ),
           settings: normalizeOptionalString(rawProfile.claude.settings, null),
+          settingsJson: normalizeOptionalJsonObject(
+            rawProfile.claude.settingsJson,
+            `${label}.claude.settingsJson`,
+          ),
+          hooksJson: normalizeOptionalJsonObject(
+            rawProfile.claude.hooksJson,
+            `${label}.claude.hooksJson`,
+          ),
+          allowedHttpHookUrls: normalizeOptionalStringOrStringArray(
+            rawProfile.claude.allowedHttpHookUrls,
+            `${label}.claude.allowedHttpHookUrls`,
+          ),
           outputFormat:
             rawProfile.claude.outputFormat === undefined ||
             rawProfile.claude.outputFormat === null ||
@@ -495,6 +532,10 @@ function normalizeExecutorProfile(rawProfile = {}, label = "executors.profiles.<
           command: normalizeOptionalString(rawProfile.opencode.command, null),
           agent: normalizeOptionalString(rawProfile.opencode.agent, null),
           attach: normalizeOptionalString(rawProfile.opencode.attach, null),
+          files: normalizeOptionalStringOrStringArray(
+            rawProfile.opencode.files,
+            `${label}.opencode.files`,
+          ),
           format:
             rawProfile.opencode.format === undefined ||
             rawProfile.opencode.format === null ||
@@ -513,6 +554,10 @@ function normalizeExecutorProfile(rawProfile = {}, label = "executors.profiles.<
           permission: normalizeOptionalJsonObject(
             rawProfile.opencode.permission,
             `${label}.opencode.permission`,
+          ),
+          configJson: normalizeOptionalJsonObject(
+            rawProfile.opencode.configJson,
+            `${label}.opencode.configJson`,
           ),
         }
       : null,
@@ -567,6 +612,22 @@ function normalizeExecutors(rawExecutors = {}) {
         executors.codex?.command,
         DEFAULT_CODEX_COMMAND,
       ),
+      profileName: normalizeOptionalString(executors.codex?.profileName, null),
+      config: normalizeOptionalStringOrStringArray(
+        executors.codex?.config,
+        "executors.codex.config",
+      ),
+      search: normalizeOptionalBoolean(executors.codex?.search, false),
+      images: normalizeOptionalStringOrStringArray(
+        executors.codex?.images,
+        "executors.codex.images",
+      ),
+      addDirs: normalizeOptionalStringOrStringArray(
+        executors.codex?.addDirs,
+        "executors.codex.addDirs",
+      ),
+      json: normalizeOptionalBoolean(executors.codex?.json, false),
+      ephemeral: normalizeOptionalBoolean(executors.codex?.ephemeral, false),
       sandbox: normalizeCodexSandboxMode(
         executors.codex?.sandbox || DEFAULT_CODEX_SANDBOX_MODE,
         "executors.codex.sandbox",
@@ -594,6 +655,18 @@ function normalizeExecutors(rawExecutors = {}) {
       ),
       strictMcpConfig: normalizeOptionalBoolean(executors.claude?.strictMcpConfig, false),
       settings: normalizeOptionalString(executors.claude?.settings, null),
+      settingsJson: normalizeOptionalJsonObject(
+        executors.claude?.settingsJson,
+        "executors.claude.settingsJson",
+      ),
+      hooksJson: normalizeOptionalJsonObject(
+        executors.claude?.hooksJson,
+        "executors.claude.hooksJson",
+      ),
+      allowedHttpHookUrls: normalizeOptionalStringOrStringArray(
+        executors.claude?.allowedHttpHookUrls,
+        "executors.claude.allowedHttpHookUrls",
+      ),
       outputFormat: normalizeClaudeOutputFormat(executors.claude?.outputFormat),
       allowedTools: normalizeOptionalStringArray(executors.claude?.allowedTools, []),
       disallowedTools: normalizeOptionalStringArray(executors.claude?.disallowedTools, []),
@@ -606,10 +679,18 @@ function normalizeExecutors(rawExecutors = {}) {
       model: normalizeOptionalString(executors.opencode?.model, null),
       agent: normalizeOptionalString(executors.opencode?.agent, null),
       attach: normalizeOptionalString(executors.opencode?.attach, null),
+      files: normalizeOptionalStringOrStringArray(
+        executors.opencode?.files,
+        "executors.opencode.files",
+      ),
       format: normalizeOpenCodeFormat(executors.opencode?.format),
       steps: normalizeOptionalPositiveInt(executors.opencode?.steps, "executors.opencode.steps"),
       instructions: normalizeOptionalStringArray(executors.opencode?.instructions, []),
       permission: normalizeOptionalJsonObject(executors.opencode?.permission, "executors.opencode.permission"),
+      configJson: normalizeOptionalJsonObject(
+        executors.opencode?.configJson,
+        "executors.opencode.configJson",
+      ),
     },
   };
 }

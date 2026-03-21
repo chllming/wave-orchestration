@@ -49,7 +49,7 @@ describe("wave init", () => {
     );
     expect(installState).toMatchObject({
       packageName: "@chllming/wave-orchestration",
-      installedVersion: "0.2.0",
+      installedVersion: "0.4.0",
       initMode: "fresh",
     });
     expect(installState.seededFiles).toContain("wave.config.json");
@@ -144,14 +144,14 @@ describe("wave upgrade", () => {
 
     expect(upgradeResult.status).toBe(0);
     const updatedState = JSON.parse(fs.readFileSync(installStatePath, "utf8"));
-    expect(updatedState.installedVersion).toBe("0.2.0");
+    expect(updatedState.installedVersion).toBe("0.4.0");
     expect(fs.readFileSync(customWavePath, "utf8")).toBe(
       fs.readFileSync(path.join(PACKAGE_ROOT, "docs", "plans", "waves", "wave-0.md"), "utf8"),
     );
     const historyDir = path.join(repoDir, ".wave", "upgrade-history");
     const reports = fs.readdirSync(historyDir).filter((fileName) => fileName.endsWith(".md"));
     expect(reports.length).toBe(1);
-    expect(fs.readFileSync(path.join(historyDir, reports[0]), "utf8")).toContain("0.2.0");
+    expect(fs.readFileSync(path.join(historyDir, reports[0]), "utf8")).toContain("0.4.0");
     expect(fs.readFileSync(path.join(historyDir, reports[0]), "utf8")).toContain(
       "No repo-owned plans, waves, role prompts, or config files were overwritten.",
     );
