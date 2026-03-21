@@ -26,7 +26,7 @@ source scripts/context7-export-env.sh
 pnpm context7:api-check
 ```
 
-4. Review [docs/context7/bundles.json](/home/coder/wave-orchestration/docs/context7/bundles.json) and trim it to the external libraries your repository actually uses.
+4. Review [docs/context7/bundles.json](../context7/bundles.json) and trim it to the external libraries your repository actually uses.
 
 ## Resolution Order
 

@@ -44,6 +44,9 @@ describe("wave init", () => {
     expect(result.status).toBe(0);
     expect(fs.existsSync(path.join(repoDir, "wave.config.json"))).toBe(true);
     expect(fs.existsSync(path.join(repoDir, "docs", "plans", "waves", "wave-0.md"))).toBe(true);
+    expect(
+      fs.existsSync(path.join(repoDir, "docs", "reference", "runtime-config", "README.md")),
+    ).toBe(true);
     const installState = JSON.parse(
       fs.readFileSync(path.join(repoDir, ".wave", "install-state.json"), "utf8"),
     );

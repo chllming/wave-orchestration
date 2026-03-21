@@ -1,0 +1,223 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { loadWaveConfig, resolveLaneProfile } from "../../scripts/wave-orchestrator/config.mjs";
+
+const tempDirs = [];
+
+function makeTempDir() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wave-config-test-"));
+  tempDirs.push(dir);
+  return dir;
+}
+
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+describe("runtime configuration normalization", () => {
+  it("loads and resolves advanced runtime settings from wave.config.json", () => {
+    const repoDir = makeTempDir();
+    const configPath = path.join(repoDir, "wave.config.json");
+    fs.writeFileSync(
+      configPath,
+      `${JSON.stringify(
+        {
+          version: 1,
+          defaultLane: "main",
+          executors: {
+            default: "codex",
+            profiles: {
+              "deep-review": {
+                id: "claude",
+                model: "claude-sonnet-4-6",
+                fallbacks: ["opencode"],
+                tags: ["review"],
+                budget: {
+                  turns: 9,
+                  minutes: 20,
+                },
+                claude: {
+                  agent: "reviewer",
+                  permissionMode: "plan",
+                  permissionPromptTool: "wave-feedback",
+                  maxTurns: 7,
+                  mcpConfig: [".tmp/review-mcp.json"],
+                  strictMcpConfig: true,
+                  settingsJson: {
+                    permissions: {
+                      allow: ["Read"],
+                    },
+                  },
+                  hooksJson: {
+                    Stop: [{ command: "echo stop" }],
+                  },
+                  allowedHttpHookUrls: ["https://example.com/hooks"],
+                  outputFormat: "json",
+                  allowedTools: ["Read"],
+                  disallowedTools: ["Edit"],
+                },
+              },
+            },
+            codex: {
+              command: "codex-beta",
+              profileName: "implement",
+              config: ["model_reasoning_effort=medium"],
+              search: true,
+              images: ["docs/mock-ui.png"],
+              addDirs: ["../shared"],
+              json: true,
+              ephemeral: true,
+              sandbox: "workspace-write",
+            },
+            claude: {
+              command: "claude-beta",
+              model: "claude-sonnet-4-6",
+              agent: "default-reviewer",
+              appendSystemPromptMode: "replace",
+              permissionMode: "plan",
+              permissionPromptTool: "wave-feedback",
+              maxTurns: 5,
+              mcpConfig: [".tmp/default-mcp.json"],
+              strictMcpConfig: true,
+              settings: "config/claude-settings.json",
+              settingsJson: {
+                permissions: {
+                  allow: ["Read"],
+                },
+              },
+              hooksJson: {
+                Stop: [{ command: "echo done" }],
+              },
+              allowedHttpHookUrls: ["https://example.com/default-hook"],
+              outputFormat: "stream-json",
+              allowedTools: ["Read"],
+              disallowedTools: ["Edit"],
+            },
+            opencode: {
+              command: "opencode-beta",
+              model: "anthropic/claude-sonnet-4-20250514",
+              agent: "ops-runner",
+              attach: "docs/runtime.md",
+              files: ["README.md"],
+              format: "json",
+              steps: 6,
+              instructions: ["Keep findings concise."],
+              permission: {
+                task: "ask",
+              },
+              configJson: {
+                plugins: ["./plugins/runtime.mjs"],
+              },
+            },
+          },
+          lanes: {
+            main: {
+              executors: {
+                codex: {
+                  config: ["model_reasoning_effort=high"],
+                },
+                claude: {
+                  allowedTools: ["Read", "Glob"],
+                },
+                opencode: {
+                  files: ["docs/runtime.md"],
+                },
+              },
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    const config = loadWaveConfig(configPath);
+    const lane = resolveLaneProfile(config, "main");
+
+    expect(lane.executors.codex).toMatchObject({
+      command: "codex-beta",
+      profileName: "implement",
+      config: ["model_reasoning_effort=high"],
+      search: true,
+      images: ["docs/mock-ui.png"],
+      addDirs: ["../shared"],
+      json: true,
+      ephemeral: true,
+      sandbox: "workspace-write",
+    });
+    expect(lane.executors.claude).toMatchObject({
+      command: "claude-beta",
+      model: "claude-sonnet-4-6",
+      appendSystemPromptMode: "replace",
+      permissionMode: "plan",
+      permissionPromptTool: "wave-feedback",
+      maxTurns: 5,
+      mcpConfig: [".tmp/default-mcp.json"],
+      strictMcpConfig: true,
+      settings: "config/claude-settings.json",
+      settingsJson: {
+        permissions: {
+          allow: ["Read"],
+        },
+      },
+      hooksJson: {
+        Stop: [{ command: "echo done" }],
+      },
+      allowedHttpHookUrls: ["https://example.com/default-hook"],
+      outputFormat: "stream-json",
+      allowedTools: ["Read", "Glob"],
+      disallowedTools: ["Edit"],
+    });
+    expect(lane.executors.opencode).toMatchObject({
+      command: "opencode-beta",
+      model: "anthropic/claude-sonnet-4-20250514",
+      agent: "ops-runner",
+      attach: "docs/runtime.md",
+      files: ["docs/runtime.md"],
+      format: "json",
+      steps: 6,
+      instructions: ["Keep findings concise."],
+      permission: {
+        task: "ask",
+      },
+      configJson: {
+        plugins: ["./plugins/runtime.mjs"],
+      },
+    });
+    expect(lane.executors.profiles["deep-review"]).toMatchObject({
+      id: "claude",
+      model: "claude-sonnet-4-6",
+      fallbacks: ["opencode"],
+      tags: ["review"],
+      budget: {
+        turns: 9,
+        minutes: 20,
+      },
+      claude: {
+        agent: "reviewer",
+        permissionMode: "plan",
+        permissionPromptTool: "wave-feedback",
+        maxTurns: 7,
+        mcpConfig: [".tmp/review-mcp.json"],
+        strictMcpConfig: true,
+        settingsJson: {
+          permissions: {
+            allow: ["Read"],
+          },
+        },
+        hooksJson: {
+          Stop: [{ command: "echo stop" }],
+        },
+        allowedHttpHookUrls: ["https://example.com/hooks"],
+        outputFormat: "json",
+        allowedTools: ["Read"],
+        disallowedTools: ["Edit"],
+      },
+    });
+  });
+});

@@ -29,6 +29,10 @@ export const STARTER_TEMPLATE_PATHS = [
   "docs/plans/wave-orchestrator.md",
   "docs/plans/waves/wave-0.md",
   "docs/reference/repository-guidance.md",
+  "docs/reference/runtime-config/README.md",
+  "docs/reference/runtime-config/codex.md",
+  "docs/reference/runtime-config/claude.md",
+  "docs/reference/runtime-config/opencode.md",
   "docs/research/agent-context-sources.md",
 ];
 const REQUIRED_GITIGNORE_ENTRIES = [

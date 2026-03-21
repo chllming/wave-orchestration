@@ -2,7 +2,7 @@
 
 ## Default Adoption Path
 
-1. Configure GitHub Packages auth as described in [github-packages-setup.md](/home/coder/wave-orchestration/docs/reference/github-packages-setup.md).
+1. Configure GitHub Packages auth as described in [github-packages-setup.md](../reference/github-packages-setup.md).
 2. Install the package with `pnpm add -D @chllming/wave-orchestration`.
 3. For a fresh repo, run `pnpm exec wave init`.
 4. For a repo that already has Wave config, docs, or waves you want to preserve, run `pnpm exec wave init --adopt-existing`.

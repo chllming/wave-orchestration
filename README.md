@@ -53,7 +53,7 @@ pnpm exec wave init --adopt-existing
 
 ## Install Into Another Repo
 
-1. Configure GitHub Packages auth as shown in [github-packages-setup.md](/home/coder/wave-orchestration/docs/reference/github-packages-setup.md).
+1. Configure GitHub Packages auth as shown in [github-packages-setup.md](./docs/reference/github-packages-setup.md).
 
 2. Add the package:
 
@@ -100,9 +100,9 @@ pnpm exec wave changelog --since-installed
 pnpm install
 ```
 
-2. Review the package-level config and starter assets in [wave.config.json](/home/coder/wave-orchestration/wave.config.json) and [docs](/home/coder/wave-orchestration/docs).
+2. Review the package-level config and starter assets in [wave.config.json](./wave.config.json) and [docs](./docs).
 
-3. Review the starter runbook in [docs/plans/wave-orchestrator.md](/home/coder/wave-orchestration/docs/plans/wave-orchestrator.md), [docs/plans/context7-wave-orchestrator.md](/home/coder/wave-orchestration/docs/plans/context7-wave-orchestrator.md), and [docs/plans/component-cutover-matrix.md](/home/coder/wave-orchestration/docs/plans/component-cutover-matrix.md).
+3. Review the starter runbook in [docs/plans/wave-orchestrator.md](./docs/plans/wave-orchestrator.md), [docs/plans/context7-wave-orchestrator.md](./docs/plans/context7-wave-orchestrator.md), and [docs/plans/component-cutover-matrix.md](./docs/plans/component-cutover-matrix.md).
 
 4. Dry-parse the starter wave:
 
@@ -125,15 +125,19 @@ node scripts/wave.mjs launch --lane main --start-wave 0 --end-wave 0 --executor 
 
 ## Documentation Map
 
-- [README.md](/home/coder/wave-orchestration/README.md): package entry point, install flow, executor behavior, Context7 behavior, and command quick reference
-- [docs/plans/wave-orchestrator.md](/home/coder/wave-orchestration/docs/plans/wave-orchestrator.md): operator runbook for launch, coordination, closure, and upgrade flow
-- [docs/plans/context7-wave-orchestrator.md](/home/coder/wave-orchestration/docs/plans/context7-wave-orchestrator.md): Context7 setup, bundle authoring, injection order, and executor layering
-- [docs/plans/current-state.md](/home/coder/wave-orchestration/docs/plans/current-state.md): shipped runtime and package capabilities
-- [docs/plans/master-plan.md](/home/coder/wave-orchestration/docs/plans/master-plan.md): next priorities after the current shipped runtime
-- [docs/plans/migration.md](/home/coder/wave-orchestration/docs/plans/migration.md): adopt this package into another repository
-- [docs/reference/github-packages-setup.md](/home/coder/wave-orchestration/docs/reference/github-packages-setup.md): `.npmrc` and GitHub Packages auth details
-- [docs/reference/migration-0.2-to-0.5.md](/home/coder/wave-orchestration/docs/reference/migration-0.2-to-0.5.md): migration guide for older Wave repos
-- [docs/roadmap.md](/home/coder/wave-orchestration/docs/roadmap.md): rationale, delivered phases, and remaining roadmap items
+- [README.md](./README.md): package entry point, install flow, executor behavior, Context7 behavior, and command quick reference
+- [docs/plans/wave-orchestrator.md](./docs/plans/wave-orchestrator.md): operator runbook for launch, coordination, closure, and upgrade flow
+- [docs/plans/context7-wave-orchestrator.md](./docs/plans/context7-wave-orchestrator.md): Context7 setup, bundle authoring, injection order, and executor layering
+- [docs/plans/current-state.md](./docs/plans/current-state.md): shipped runtime and package capabilities
+- [docs/plans/master-plan.md](./docs/plans/master-plan.md): next priorities after the current shipped runtime
+- [docs/plans/migration.md](./docs/plans/migration.md): adopt this package into another repository
+- [docs/reference/github-packages-setup.md](./docs/reference/github-packages-setup.md): `.npmrc` and GitHub Packages auth details
+- [docs/reference/runtime-config/README.md](./docs/reference/runtime-config/README.md): runtime precedence, merge rules, and generated artifact paths
+- [docs/reference/runtime-config/codex.md](./docs/reference/runtime-config/codex.md): full Codex configuration reference
+- [docs/reference/runtime-config/claude.md](./docs/reference/runtime-config/claude.md): full Claude configuration reference
+- [docs/reference/runtime-config/opencode.md](./docs/reference/runtime-config/opencode.md): full OpenCode configuration reference
+- [docs/reference/migration-0.2-to-0.5.md](./docs/reference/migration-0.2-to-0.5.md): migration guide for older Wave repos
+- [docs/roadmap.md](./docs/roadmap.md): rationale, delivered phases, and remaining roadmap items
 
 ## Typical Harness Workflow
 
@@ -141,16 +145,16 @@ node scripts/wave.mjs launch --lane main --start-wave 0 --end-wave 0 --executor 
    Use `pnpm exec wave init` for a fresh repo or `pnpm exec wave init --adopt-existing` for an existing repo you do not want seeded with starter content.
 
 2. Configure the repo:
-   Edit [wave.config.json](/home/coder/wave-orchestration/wave.config.json) for your docs layout, shared plan docs, role prompt paths, validator thresholds, component-cutover matrix paths, Context7 bundle index path, executor profiles, and per-lane runtime policy.
+   Edit [wave.config.json](./wave.config.json) for your docs layout, shared plan docs, role prompt paths, validator thresholds, component-cutover matrix paths, Context7 bundle index path, executor profiles, and per-lane runtime policy.
 
 3. Write or revise the shared docs:
    Keep the shared plan docs aligned with the work you want the harness to execute.
 
 4. Replace or revise the component cutover matrix:
-   Keep [docs/plans/component-cutover-matrix.md](/home/coder/wave-orchestration/docs/plans/component-cutover-matrix.md) and [docs/plans/component-cutover-matrix.json](/home/coder/wave-orchestration/docs/plans/component-cutover-matrix.json) aligned with the components and maturity levels your repo actually uses.
+   Keep [docs/plans/component-cutover-matrix.md](./docs/plans/component-cutover-matrix.md) and [docs/plans/component-cutover-matrix.json](./docs/plans/component-cutover-matrix.json) aligned with the components and maturity levels your repo actually uses.
 
 5. Create a wave file:
-   Put wave markdown under [docs/plans/waves](/home/coder/wave-orchestration/docs/plans/waves) using the same sections as the sample [wave-0.md](/home/coder/wave-orchestration/docs/plans/waves/wave-0.md).
+   Put wave markdown under [docs/plans/waves](./docs/plans/waves) using the same sections as the sample [wave-0.md](./docs/plans/waves/wave-0.md).
 
 6. Dry-run first:
 
@@ -236,7 +240,7 @@ Optional standing roles are also available for infra- or rollout-heavy waves:
 - `docs/agents/wave-infra-role.md`
 - `docs/agents/wave-deploy-verifier-role.md`
 
-The sample [wave-0.md](/home/coder/wave-orchestration/docs/plans/waves/wave-0.md) is a complete valid example. The excerpt below shows the implementation-agent portion of a full wave:
+The sample [wave-0.md](./docs/plans/waves/wave-0.md) is a complete valid example. The excerpt below shows the implementation-agent portion of a full wave:
 
 ````md
 # Wave 1 - Example
@@ -318,10 +322,12 @@ The component matrix is also expected to reflect the landed state. Before a prom
 `### Executor` is optional. Resolution order is:
 
 - per-agent `### Executor`
+- selected executor profile id
+- lane role default
 - launcher `--executor`
 - `wave.config.json` `executors.default`
 
-Supported keys:
+Common keys:
 
 - `id`
 - `profile`
@@ -330,28 +336,13 @@ Supported keys:
 - `tags`
 - `budget.turns`
 - `budget.minutes`
-- `codex.sandbox`
-- `codex.profile_name`
-- `codex.config`
-- `codex.search`
-- `codex.images`
-- `codex.add_dirs`
-- `codex.json`
-- `codex.ephemeral`
-- `claude.agent`
-- `claude.permission_mode`
-- `claude.max_turns`
-- `claude.mcp_config`
-- `claude.settings`
-- `claude.settings_json`
-- `claude.hooks_json`
-- `claude.allowed_http_hook_urls`
-- `opencode.agent`
-- `opencode.attach`
-- `opencode.files`
-- `opencode.format`
-- `opencode.steps`
-- `opencode.config_json`
+
+The full supported runtime surface lives in:
+
+- [docs/reference/runtime-config/README.md](./docs/reference/runtime-config/README.md)
+- [docs/reference/runtime-config/codex.md](./docs/reference/runtime-config/codex.md)
+- [docs/reference/runtime-config/claude.md](./docs/reference/runtime-config/claude.md)
+- [docs/reference/runtime-config/opencode.md](./docs/reference/runtime-config/opencode.md)
 
 Example runtime blocks:
 
@@ -450,7 +441,7 @@ bash scripts/context7-export-env.sh run pnpm context7:api-check
 pnpm context7:api-check
 ```
 
-4. Define or trim bundles in [docs/context7/bundles.json](/home/coder/wave-orchestration/docs/context7/bundles.json).
+4. Define or trim bundles in [docs/context7/bundles.json](./docs/context7/bundles.json).
 
 5. Declare scope in the wave file:
    Use wave-level defaults for the general lane of work, then override per agent only when the agent truly needs a narrower or different external-doc slice.

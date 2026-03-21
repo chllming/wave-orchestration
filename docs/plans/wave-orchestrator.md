@@ -45,7 +45,7 @@ The Wave Orchestrator coordinates repository work as bounded execution waves.
 1. Install the package with `pnpm add -D @chllming/wave-orchestration`.
 2. Confirm `tmux` and at least one real executor (`codex`, `claude`, or `opencode`) are available if you want real wave execution.
 3. Run `pnpm exec wave init` for a fresh repo, or `pnpm exec wave init --adopt-existing` for a repo with existing Wave files you want preserved.
-4. Review [wave.config.json](/home/coder/wave-orchestration/wave.config.json).
+4. Review [wave.config.json](../../wave.config.json).
 5. Review the role prompts and docs you want the repo to own.
 
 ## Recommended Launch Flow
@@ -145,6 +145,11 @@ pnpm exec wave changelog --since-installed
 - From the configured thresholds onward, declare `## Context7 defaults`, per-agent `### Context7`, and per-agent `### Exit contract`.
 - Agents should use `wave coord post` for durable blockers, handoffs, evidence, and requests instead of relying on ad hoc board edits.
 - Keep shared plan docs and the component cutover matrix owned by the configured documentation steward once that rule becomes active.
+- Use the runtime reference pages for the full executor surface instead of relying on this runbook to enumerate every key:
+  [docs/reference/runtime-config/README.md](../reference/runtime-config/README.md),
+  [codex.md](../reference/runtime-config/codex.md),
+  [claude.md](../reference/runtime-config/claude.md),
+  [opencode.md](../reference/runtime-config/opencode.md).
 
 ## Executor Modes
 
