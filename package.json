@@ -14,6 +14,9 @@
   },
   "scripts": {
     "context7:api-check": "bash scripts/context7-export-env.sh run bash scripts/context7-api-check.sh",
+    "research:import-agent-context": "node scripts/research/import-agent-context-archive.mjs scripts/research/manifests/harness-and-blackboard-2026-03-21.mjs",
+    "research:index-agent-context": "node scripts/research/generate-agent-context-indexes.mjs",
+    "research:refresh-agent-context": "pnpm research:import-agent-context && pnpm research:index-agent-context",
     "test": "vitest run --config vitest.config.ts",
     "wave:autonomous": "node scripts/wave-autonomous.mjs",
     "wave:dashboard": "node scripts/wave-dashboard.mjs",
