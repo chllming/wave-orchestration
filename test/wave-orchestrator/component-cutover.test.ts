@@ -38,6 +38,14 @@ function parseWavePromotions(markdown) {
   return promotions;
 }
 
+function parseMarkdownCurrentLevels(markdown) {
+  return Object.fromEntries(
+    Array.from(
+      markdown.matchAll(/^\| `([a-z0-9._-]+)` \| `([a-z0-9._-]+)` \|/gm),
+    ).map((match) => [match[1], match[2]]),
+  );
+}
+
 describe("component cutover matrix", () => {
   it("keeps markdown and JSON component ids aligned", () => {
     const markdown = fs.readFileSync(matrixMarkdownPath, "utf8");
@@ -60,5 +68,19 @@ describe("component cutover matrix", () => {
         ),
       ).toBe(true);
     }
+  });
+
+  it("keeps markdown current levels aligned with the matrix JSON", () => {
+    const markdown = fs.readFileSync(matrixMarkdownPath, "utf8");
+    const json = JSON.parse(fs.readFileSync(matrixJsonPath, "utf8"));
+
+    expect(parseMarkdownCurrentLevels(markdown)).toEqual(
+      Object.fromEntries(
+        Object.entries(json.components).map(([componentId, component]) => [
+          componentId,
+          component.currentLevel,
+        ]),
+      ),
+    );
   });
 });

@@ -88,6 +88,7 @@ import {
   parseWaveFiles,
   reconcileRunStateFromStatusFiles,
   resolveAutoNextWaveStart,
+  validateWaveComponentMatrixCurrentLevels,
   validateWaveComponentPromotions,
   validateWaveDefinition,
   writeManifest,
@@ -435,6 +436,32 @@ export function readWaveComponentGate(wave, agentRuns, options = {}) {
     statusCode: validation.statusCode,
     detail: validation.detail,
     logPath: ownerRun ? path.relative(REPO_ROOT, ownerRun.logPath) : null,
+  };
+}
+
+export function readWaveComponentMatrixGate(wave, agentRuns, options = {}) {
+  const validation = validateWaveComponentMatrixCurrentLevels(wave, options);
+  if (validation.ok) {
+    return {
+      ok: true,
+      agentId: null,
+      componentId: null,
+      statusCode: validation.statusCode,
+      detail: validation.detail,
+      logPath: null,
+    };
+  }
+  const documentationAgentId =
+    options.documentationAgentId || wave.documentationAgentId || "A9";
+  const docRun =
+    agentRuns.find((runInfo) => runInfo.agent.agentId === documentationAgentId) ?? null;
+  return {
+    ok: false,
+    agentId: docRun?.agent?.agentId || null,
+    componentId: validation.componentId || null,
+    statusCode: validation.statusCode,
+    detail: validation.detail,
+    logPath: docRun ? path.relative(REPO_ROOT, docRun.logPath) : null,
   };
 }
 
@@ -1750,6 +1777,35 @@ export async function runLauncherCli(argv) {
                 status: "blocked",
                 details: `agent=${documentationGate.agentId}; reason=${documentationGate.statusCode}; ${documentationGate.detail}`,
                 actionRequested: `Lane ${lanePaths.lane} owners should resolve the shared-plan closure state before wave progression.`,
+              });
+            }
+          }
+
+          if (failures.length === 0) {
+            const componentMatrixGate = readWaveComponentMatrixGate(wave, agentRuns, {
+              laneProfile: lanePaths.laneProfile,
+              documentationAgentId: lanePaths.documentationAgentId,
+            });
+            if (!componentMatrixGate.ok) {
+              failures = [
+                {
+                  agentId: componentMatrixGate.agentId,
+                  statusCode: componentMatrixGate.statusCode,
+                  logPath:
+                    componentMatrixGate.logPath || path.relative(REPO_ROOT, messageBoardPath),
+                },
+              ];
+              recordCombinedEvent({
+                level: "error",
+                agentId: componentMatrixGate.agentId,
+                message: `Component matrix update blocked wave ${wave.wave}: ${componentMatrixGate.detail}`,
+              });
+              appendCoordination({
+                event: "wave_gate_blocked",
+                waves: [wave.wave],
+                status: "blocked",
+                details: `component=${componentMatrixGate.componentId || "unknown"}; reason=${componentMatrixGate.statusCode}; ${componentMatrixGate.detail}`,
+                actionRequested: `Lane ${lanePaths.lane} owners should update the component cutover matrix current levels before wave progression.`,
               });
             }
           }

@@ -45,4 +45,5 @@ The starter entries reflect the snapshot shipped in this repository. Replace the
 
 - Keep architecture and repository guidance docs descriptive.
 - Keep wave-by-wave component maturity and promotion targets here.
+- `currentLevel` is the canonical post-wave state of the repo, not a future plan. When a wave promotes a component, update `currentLevel` to the promoted target before closure.
 - When component promotion gating is active, wave files must match this matrix exactly.

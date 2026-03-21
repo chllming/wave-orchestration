@@ -563,6 +563,7 @@ export function loadComponentCutoverMatrix(options = {}) {
     );
   }
   const levelSet = new Set(levels);
+  const levelOrder = Object.fromEntries(levels.map((level, index) => [level, index]));
   const rawComponents =
     payload.components && typeof payload.components === "object" && !Array.isArray(payload.components)
       ? payload.components
@@ -636,6 +637,7 @@ export function loadComponentCutoverMatrix(options = {}) {
     version: Number.parseInt(String(payload.version ?? "1"), 10) || 1,
     levels,
     levelSet,
+    levelOrder,
     components,
     docPath: laneProfile.paths.componentCutoverMatrixDocPath,
     jsonPath: laneProfile.paths.componentCutoverMatrixJsonPath,
@@ -729,6 +731,10 @@ export function validateWaveDefinition(wave, options = {}) {
       } else if (matrixPromotion.target !== targetLevel) {
         errors.push(
           `Wave ${wave.wave} promotes ${componentId} to ${targetLevel}, but ${componentMatrix.jsonPath} declares ${matrixPromotion.target}`,
+        );
+      } else if (componentMatrix.levelOrder[targetLevel] < componentMatrix.levelOrder[component.currentLevel]) {
+        errors.push(
+          `Wave ${wave.wave} promotes ${componentId} to ${targetLevel}, but ${componentMatrix.jsonPath} already records currentLevel ${component.currentLevel}`,
         );
       }
     }
@@ -1163,6 +1169,51 @@ export function validateWaveComponentPromotions(wave, summariesByAgentId = {}, o
   };
 }
 
+export function validateWaveComponentMatrixCurrentLevels(wave, options = {}) {
+  const laneProfile = resolveLaneProfileForOptions(options);
+  const componentThreshold = laneProfile.validation.requireComponentPromotionsFromWave;
+  const promotions = Array.isArray(wave.componentPromotions) ? wave.componentPromotions : [];
+  if (
+    promotions.length === 0 &&
+    (componentThreshold === null || wave.wave < componentThreshold)
+  ) {
+    return {
+      ok: true,
+      statusCode: "pass",
+      detail: "Component current-level gate is not active for this wave.",
+      componentId: null,
+    };
+  }
+
+  const componentMatrix = loadComponentCutoverMatrix({ laneProfile });
+  for (const promotion of promotions) {
+    const component = componentMatrix.components[promotion.componentId];
+    if (!component) {
+      return {
+        ok: false,
+        statusCode: "unknown-component",
+        detail: `Wave ${wave.wave} references unknown component ${promotion.componentId}.`,
+        componentId: promotion.componentId,
+      };
+    }
+    if (component.currentLevel !== promotion.targetLevel) {
+      return {
+        ok: false,
+        statusCode: "component-current-level-stale",
+        detail: `Component ${promotion.componentId} is still recorded at ${component.currentLevel} in ${componentMatrix.jsonPath}; expected ${promotion.targetLevel}.`,
+        componentId: promotion.componentId,
+      };
+    }
+  }
+
+  return {
+    ok: true,
+    statusCode: "pass",
+    detail: "Component matrix current levels match the promoted targets.",
+    componentId: null,
+  };
+}
+
 export function writeManifest(manifestPath, manifest) {
   writeJsonAtomic(manifestPath, manifest);
 }
@@ -1281,8 +1332,10 @@ export function completedWavesFromStatusFiles(allWaves, statusDir, options = {})
   const evaluatorAgentId = options.evaluatorAgentId || DEFAULT_EVALUATOR_AGENT_ID;
   const documentationAgentId =
     options.documentationAgentId || DEFAULT_DOCUMENTATION_AGENT_ID;
-  const exitContractThreshold = options.requireExitContractsFromWave ?? 6;
-  const componentThreshold = options.requireComponentPromotionsFromWave ?? 0;
+  const laneProfile = resolveLaneProfileForOptions(options);
+  const componentThreshold =
+    options.requireComponentPromotionsFromWave ??
+    laneProfile.validation.requireComponentPromotionsFromWave;
   const completed = [];
   for (const wave of allWaves) {
     let waveIsComplete = wave.agents.length > 0;
@@ -1301,33 +1354,21 @@ export function completedWavesFromStatusFiles(allWaves, statusDir, options = {})
       }
       const summary = readAgentExecutionSummary(statusPath);
       summariesByAgentId[agent.agentId] = summary;
-      if (
-        exitContractThreshold !== null &&
-        agent.agentId === evaluatorAgentId &&
-        wave.wave >= exitContractThreshold
-      ) {
+      if (agent.agentId === evaluatorAgentId && summary) {
         if (!validateEvaluatorSummary(agent, summary).ok) {
           waveIsComplete = false;
           break;
         }
         continue;
       }
-      if (
-        exitContractThreshold !== null &&
-        agent.agentId === documentationAgentId &&
-        wave.wave >= exitContractThreshold
-      ) {
+      if (agent.agentId === documentationAgentId) {
         if (!validateDocumentationClosureSummary(agent, summary).ok) {
           waveIsComplete = false;
           break;
         }
         continue;
       }
-      if (
-        exitContractThreshold !== null &&
-        wave.wave >= exitContractThreshold &&
-        !validateImplementationSummary(agent, summary).ok
-      ) {
+      if (!validateImplementationSummary(agent, summary).ok) {
         waveIsComplete = false;
         break;
       }
@@ -1337,6 +1378,14 @@ export function completedWavesFromStatusFiles(allWaves, statusDir, options = {})
       componentThreshold !== null &&
       wave.wave >= componentThreshold &&
       !validateWaveComponentPromotions(wave, summariesByAgentId, options).ok
+    ) {
+      waveIsComplete = false;
+    }
+    if (
+      waveIsComplete &&
+      componentThreshold !== null &&
+      wave.wave >= componentThreshold &&
+      !validateWaveComponentMatrixCurrentLevels(wave, { ...options, laneProfile }).ok
     ) {
       waveIsComplete = false;
     }

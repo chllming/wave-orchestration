@@ -178,6 +178,8 @@ File ownership (only touch these paths):
 
 `## Component promotions` declares the component levels this wave is responsible for proving. `### Components` assigns each promoted component to one or more implementation agents.
 
+The component matrix is also expected to reflect the landed state. Before a promoted wave closes, `docs/plans/component-cutover-matrix.json` should advance each promoted component's `currentLevel` to the proved target.
+
 `### Executor` is optional. Resolution order is:
 
 - per-agent `### Executor`

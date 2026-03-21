@@ -12,6 +12,7 @@ import {
   reconcileRunStateFromStatusFiles,
   requiredDocumentationStewardPathsForWave,
   SHARED_PLAN_DOC_PATHS,
+  validateWaveComponentMatrixCurrentLevels,
   validateWaveDefinition,
   WAVE_DOCUMENTATION_ROLE_PROMPT_PATH,
   WAVE_EVALUATOR_ROLE_PROMPT_PATH,
@@ -777,6 +778,182 @@ describe("completedWavesFromStatusFiles", () => {
         requireComponentPromotionsFromWave: 0,
       }),
     ).toEqual([0]);
+  });
+
+  it("requires documentation closure before marking a component-promotion wave complete", () => {
+    const tempRoot = registerTempPath(
+      path.join(REPO_ROOT, ".tmp", `wave-files-test-${Date.now()}-doc-closure`),
+    );
+    const statusDir = path.join(tempRoot, "status");
+    const logsDir = path.join(tempRoot, "logs");
+    fs.mkdirSync(statusDir, { recursive: true });
+    fs.mkdirSync(logsDir, { recursive: true });
+
+    const reportRelPath = `.tmp/${path.basename(tempRoot)}/wave-0-evaluator.md`;
+    const wave = {
+      wave: 0,
+      file: "docs/plans/waves/wave-0.md",
+      componentPromotions: [
+        { componentId: "wave-parser-and-launcher", targetLevel: "repo-landed" },
+      ],
+      agents: [
+        {
+          agentId: "A0",
+          slug: "0-a0",
+          prompt: `File ownership (only touch these paths):\n- ${reportRelPath}`,
+          rolePromptPaths: [WAVE_EVALUATOR_ROLE_PROMPT_PATH],
+        },
+        {
+          agentId: "A9",
+          slug: "0-a9",
+          prompt: [
+            "File ownership (only touch these paths):",
+            ...starterDocumentationPaths.map((docPath) => `- ${docPath}`),
+          ].join("\n"),
+          rolePromptPaths: [WAVE_DOCUMENTATION_ROLE_PROMPT_PATH],
+        },
+        {
+          agentId: "A1",
+          slug: "0-a1",
+          prompt: "File ownership (only touch these paths):\n- go/example/file.go",
+          components: ["wave-parser-and-launcher"],
+          componentTargets: {
+            "wave-parser-and-launcher": "repo-landed",
+          },
+          exitContract: {
+            completion: "contract",
+            durability: "none",
+            proof: "unit",
+            docImpact: "owned",
+          },
+        },
+      ],
+      evaluatorReportPath: reportRelPath,
+    };
+
+    fs.writeFileSync(path.join(REPO_ROOT, reportRelPath), "# Evaluator\n\nVerdict: PASS\n", "utf8");
+    for (const agent of wave.agents) {
+      fs.writeFileSync(
+        path.join(statusDir, `wave-0-${agent.slug}.status`),
+        JSON.stringify(
+          {
+            code: 0,
+            promptHash: hashAgentPromptFingerprint(agent),
+          },
+          null,
+          2,
+        ),
+        "utf8",
+      );
+    }
+    fs.writeFileSync(
+      path.join(statusDir, "wave-0-0-a0.summary.json"),
+      JSON.stringify(
+        {
+          gate: {
+            architecture: "pass",
+            integration: "pass",
+            durability: "pass",
+            live: "pass",
+            docs: "pass",
+          },
+          verdict: { verdict: "pass" },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(statusDir, "wave-0-0-a1.summary.json"),
+      JSON.stringify(
+        {
+          agentId: "A1",
+          proof: {
+            completion: "contract",
+            durability: "none",
+            proof: "unit",
+            state: "met",
+          },
+          docDelta: {
+            state: "owned",
+            paths: ["go/example/file.go"],
+          },
+          components: [
+            {
+              componentId: "wave-parser-and-launcher",
+              level: "repo-landed",
+              state: "met",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    expect(
+      completedWavesFromStatusFiles([wave], statusDir, {
+        logsDir,
+        requireComponentPromotionsFromWave: 0,
+      }),
+    ).toEqual([]);
+  });
+});
+
+describe("validateWaveComponentMatrixCurrentLevels", () => {
+  it("requires the matrix currentLevel to advance to the promoted target", () => {
+    const tempRoot = registerTempPath(
+      path.join(REPO_ROOT, ".tmp", `wave-files-test-${Date.now()}-matrix-state`),
+    );
+    const matrixJsonPath = path.join(tempRoot, "component-cutover-matrix.json");
+    fs.mkdirSync(tempRoot, { recursive: true });
+    fs.writeFileSync(
+      matrixJsonPath,
+      JSON.stringify(
+        {
+          version: 1,
+          levels: ["repo-landed", "baseline-proved"],
+          components: {
+            "wave-parser-and-launcher": {
+              title: "Wave parser and launcher",
+              currentLevel: "repo-landed",
+              promotions: [{ wave: 2, target: "baseline-proved" }],
+              canonicalDocs: ["README.md"],
+              proofSurfaces: ["launcher dry-run"],
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    expect(
+      validateWaveComponentMatrixCurrentLevels(
+        {
+          wave: 2,
+          componentPromotions: [
+            { componentId: "wave-parser-and-launcher", targetLevel: "baseline-proved" },
+          ],
+        },
+        {
+          laneProfile: {
+            validation: { requireComponentPromotionsFromWave: 0 },
+            paths: {
+              componentCutoverMatrixJsonPath: path.relative(REPO_ROOT, matrixJsonPath),
+              componentCutoverMatrixDocPath: "docs/plans/component-cutover-matrix.md",
+            },
+          },
+        },
+      ),
+    ).toMatchObject({
+      ok: false,
+      statusCode: "component-current-level-stale",
+      componentId: "wave-parser-and-launcher",
+    });
   });
 });
 
