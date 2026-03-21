@@ -51,7 +51,7 @@ describe("buildExecutionPrompt", () => {
     });
 
     expect(prompt).toContain("You are the Wave executor running Wave 2 / Agent A3: Provider Contracts.");
-    expect(prompt).toContain("node scripts/wave-human-feedback.mjs ask");
+    expect(prompt).toContain("pnpm exec wave-feedback ask");
     expect(prompt).toContain("--lane main");
     expect(prompt).toContain("/repo/.tmp/main-wave-launcher/messageboards/wave-2.md");
     expect(prompt).toContain("You are the standing implementation role for this wave.");

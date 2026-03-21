@@ -1,9 +1,12 @@
 #!/usr/bin/env node
 
-import { runAutonomousCli } from "./wave-orchestrator/autonomous.mjs";
+import { bootstrapWaveArgs } from "./wave-cli-bootstrap.mjs";
+
+const argv = bootstrapWaveArgs(process.argv.slice(2));
+const { runAutonomousCli } = await import("./wave-orchestrator/autonomous.mjs");
 
 try {
-  runAutonomousCli(process.argv.slice(2));
+  runAutonomousCli(argv);
 } catch (error) {
   console.error(`[wave-autonomous] ${error instanceof Error ? error.message : String(error)}`);
   process.exit(1);

@@ -209,7 +209,7 @@ export function renderDashboard({ state, dashboardPath, messageBoardPath, lane }
 export async function runDashboardCli(argv) {
   const { help, options } = parseDashboardArgs(argv);
   if (help) {
-    console.log(`Usage: node scripts/wave-dashboard.mjs --dashboard-file <path> [options]
+    console.log(`Usage: pnpm exec wave dashboard --dashboard-file <path> [options]
 
 Options:
   --lane <name>            Wave lane name (default: ${DEFAULT_WAVE_LANE})

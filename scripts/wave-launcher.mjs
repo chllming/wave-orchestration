@@ -1,8 +1,11 @@
 #!/usr/bin/env node
 
-import { runLauncherCli } from "./wave-orchestrator/launcher.mjs";
+import { bootstrapWaveArgs } from "./wave-cli-bootstrap.mjs";
 
-runLauncherCli(process.argv.slice(2)).catch((error) => {
+const argv = bootstrapWaveArgs(process.argv.slice(2));
+const { runLauncherCli } = await import("./wave-orchestrator/launcher.mjs");
+
+runLauncherCli(argv).catch((error) => {
   console.error(`\n[wave-launcher] ${error instanceof Error ? error.message : String(error)}`);
   process.exit(Number.isInteger(error?.exitCode) ? error.exitCode : 1);
 });

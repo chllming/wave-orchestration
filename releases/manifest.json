@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "packageName": "@chllming/wave-orchestration",
+  "releases": [
+    {
+      "version": "0.1.0",
+      "date": "2026-03-21",
+      "summary": "Generic wave orchestrator runtime with Context7 and multi-executor support.",
+      "features": [
+        "Generic wave parsing, validation, dashboards, closure sweep, and human feedback queue.",
+        "Context7 bundle resolution, prefetch, and prompt injection.",
+        "Headless executors for Codex, Claude Code, OpenCode, and the local smoke executor."
+      ],
+      "manualSteps": [],
+      "breaking": false
+    },
+    {
+      "version": "0.2.0",
+      "date": "2026-03-21",
+      "summary": "Package-first install and non-destructive upgrade workflow.",
+      "features": [
+        "Workspace-root aware runtime so the orchestrator can run from an installed package against any target repo.",
+        "New `wave init`, `wave upgrade`, `wave changelog`, and `wave doctor` commands.",
+        "Install-state tracking and upgrade-history reports under `.wave/` without overwriting repo-owned plans, waves, or config."
+      ],
+      "manualSteps": [
+        "For fresh repos, install the package and run `pnpm exec wave init`.",
+        "For repos that already have Wave config or plans, run `pnpm exec wave init --adopt-existing` once so upgrades stay non-destructive."
+      ],
+      "breaking": false
+    }
+  ]
+}

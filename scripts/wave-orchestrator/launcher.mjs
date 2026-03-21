@@ -62,6 +62,7 @@ import {
   sanitizeOrchestratorId,
   shellQuote,
   sleep,
+  PACKAGE_ROOT,
   TMUX_COMMAND_TIMEOUT_MS,
   WAVE_VERDICT_REGEX,
   WAVE_TERMINAL_STATES,
@@ -103,7 +104,7 @@ import {
 export { CODEX_SANDBOX_MODES, DEFAULT_CODEX_SANDBOX_MODE, normalizeCodexSandboxMode, buildCodexExecInvocation };
 
 function printUsage(lanePaths) {
-  console.log(`Usage: node scripts/wave-launcher.mjs [options]
+  console.log(`Usage: pnpm exec wave launch [options]
 
 Options:
   --lane <name>          Wave lane name (default: ${DEFAULT_WAVE_LANE})
@@ -832,7 +833,7 @@ function launchWaveDashboardSession(lanePaths, { sessionName, dashboardPath, mes
     : "";
   const command = [
     `cd ${shellQuote(REPO_ROOT)}`,
-    `node ${shellQuote(path.join(REPO_ROOT, "scripts", "wave-dashboard.mjs"))} --dashboard-file ${shellQuote(
+    `node ${shellQuote(path.join(PACKAGE_ROOT, "scripts", "wave-dashboard.mjs"))} --dashboard-file ${shellQuote(
       dashboardPath,
     )}${messageBoardArg} --lane ${shellQuote(lanePaths.lane)} --watch`,
     "exec bash -l",
@@ -1075,14 +1076,14 @@ function monitorWaveHumanFeedback({
         `[human-feedback] wave=${waveNumber} agent=${request.agentId} request=${request.id} pending: ${question}`,
       );
       console.warn(
-        `[human-feedback] respond with: node scripts/wave-human-feedback.mjs respond --id ${request.id} --response "<answer>" --operator "<name>"`,
+        `[human-feedback] respond with: pnpm exec wave-feedback respond --id ${request.id} --response "<answer>" --operator "<name>"`,
       );
       appendCoordination({
         event: "human_feedback_requested",
         waves: [waveNumber],
         status: "waiting-human",
         details: `request_id=${request.id}; agent=${request.agentId}; question=${question}${context}`,
-        actionRequested: `Launcher operator should ask or answer in the parent session, then run: node scripts/wave-human-feedback.mjs respond --id ${request.id} --response "<answer>" --operator "<name>"`,
+        actionRequested: `Launcher operator should ask or answer in the parent session, then run: pnpm exec wave-feedback respond --id ${request.id} --response "<answer>" --operator "<name>"`,
       });
     } else if (request.status === "answered") {
       recordCombinedEvent({

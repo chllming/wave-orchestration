@@ -16,55 +16,76 @@ The Wave Orchestrator coordinates repository work as bounded execution waves.
 
 ## Main Commands
 
-- `pnpm wave:launch -- --lane main --dry-run --no-dashboard`
-- `pnpm wave:launch -- --lane main --start-wave 0 --end-wave 0 --executor codex --codex-sandbox danger-full-access`
-- `pnpm wave:launch -- --lane main --start-wave 0 --end-wave 0 --executor claude`
-- `pnpm wave:launch -- --lane main --start-wave 0 --end-wave 0 --executor opencode`
-- `pnpm wave:autonomous -- --lane main --executor codex --codex-sandbox danger-full-access`
-- `pnpm wave:autonomous -- --lane main --executor claude`
-- `pnpm wave:autonomous -- --lane main --executor opencode`
-- `pnpm wave:feedback -- list --lane main --pending`
+- `pnpm exec wave init`
+- `pnpm exec wave init --adopt-existing`
+- `pnpm exec wave doctor`
+- `pnpm exec wave launch --lane main --dry-run --no-dashboard`
+- `pnpm exec wave launch --lane main --start-wave 0 --end-wave 0 --executor codex --codex-sandbox danger-full-access`
+- `pnpm exec wave launch --lane main --start-wave 0 --end-wave 0 --executor claude`
+- `pnpm exec wave launch --lane main --start-wave 0 --end-wave 0 --executor opencode`
+- `pnpm exec wave autonomous --lane main --executor codex --codex-sandbox danger-full-access`
+- `pnpm exec wave feedback list --lane main --pending`
+- `pnpm exec wave upgrade`
 
 ## Configuration
 
 - `wave.config.json` controls docs roots, shared plan docs, role prompts, validation thresholds, executor defaults, and Context7 bundle-index location.
 - `docs/context7/bundles.json` controls allowed external library bundles and lane defaults.
+- `.wave/install-state.json` records how the workspace was initialized and which package version is installed.
 
 ## Setup
 
-1. Install dependencies with `pnpm install`.
+1. Install the package with `pnpm add -D @chllming/wave-orchestration`.
 2. Confirm `tmux` and at least one real executor (`codex`, `claude`, or `opencode`) are available if you want real wave execution.
-3. Review [wave.config.json](/home/coder/wave-orchestration/wave.config.json).
-4. Review the starter role prompts under [docs/agents](/home/coder/wave-orchestration/docs/agents).
-5. Review or replace the starter wave files under [docs/plans/waves](/home/coder/wave-orchestration/docs/plans/waves).
+3. Run `pnpm exec wave init` for a fresh repo, or `pnpm exec wave init --adopt-existing` for a repo with existing Wave files you want preserved.
+4. Review [wave.config.json](/home/coder/wave-orchestration/wave.config.json).
+5. Review the role prompts and docs you want the repo to own.
 
 ## Recommended Launch Flow
 
-1. Dry-run parse:
+1. Run health checks:
 
 ```bash
-pnpm wave:launch -- --lane main --dry-run --no-dashboard
+pnpm exec wave doctor
+pnpm exec wave launch --lane main --dry-run --no-dashboard
 ```
 
 2. Reconcile stale state if a prior run died mid-wave:
 
 ```bash
-pnpm wave:launch -- --lane main --reconcile-status
+pnpm exec wave launch --lane main --reconcile-status
 ```
 
 3. Inspect pending feedback:
 
 ```bash
-pnpm wave:feedback -- list --lane main --pending
+pnpm exec wave feedback list --lane main --pending
 ```
 
 4. Launch one wave:
 
 ```bash
-pnpm wave:launch -- --lane main --start-wave 0 --end-wave 0 --executor codex --codex-sandbox danger-full-access
+pnpm exec wave launch --lane main --start-wave 0 --end-wave 0 --executor codex --codex-sandbox danger-full-access
 ```
 
 5. Only move to `wave:autonomous` after single-wave runs are already stable.
+
+## Upgrade Flow
+
+1. Upgrade the package version:
+
+```bash
+pnpm up @chllming/wave-orchestration
+```
+
+2. Record the upgrade and review release notes:
+
+```bash
+pnpm exec wave upgrade
+pnpm exec wave changelog --since-installed
+```
+
+3. Review `.wave/upgrade-history/` for any manual follow-up. The upgrade flow does not overwrite repo-owned plans, waves, or config.
 
 ## What The Launcher Writes
 
@@ -101,9 +122,9 @@ pnpm wave:launch -- --lane main --start-wave 0 --end-wave 0 --executor codex --c
 Agents can request clarification through the file-backed feedback queue. Operators can inspect and answer requests with:
 
 ```bash
-pnpm wave:feedback -- list --lane main --pending
-pnpm wave:feedback -- show --id <request-id>
-pnpm wave:feedback -- respond --id <request-id> --response "..."
+pnpm exec wave feedback list --lane main --pending
+pnpm exec wave feedback show --id <request-id>
+pnpm exec wave feedback respond --id <request-id> --response "..."
 ```
 
 ## Closure Sweep

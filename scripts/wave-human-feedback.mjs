@@ -1,8 +1,11 @@
 #!/usr/bin/env node
 
-import { runFeedbackCli } from "./wave-orchestrator/feedback.mjs";
+import { bootstrapWaveArgs } from "./wave-cli-bootstrap.mjs";
 
-runFeedbackCli(process.argv.slice(2)).catch((error) => {
+const argv = bootstrapWaveArgs(process.argv.slice(2));
+const { runFeedbackCli } = await import("./wave-orchestrator/feedback.mjs");
+
+runFeedbackCli(argv).catch((error) => {
   console.error(`[wave-human-feedback] ${error instanceof Error ? error.message : String(error)}`);
   process.exit(1);
 });

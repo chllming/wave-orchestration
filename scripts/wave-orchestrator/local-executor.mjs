@@ -162,7 +162,7 @@ function parseArgs(argv) {
 export function runLocalExecutorCli(argv) {
   const { help, options } = parseArgs(argv);
   if (help) {
-    console.log("Usage: node scripts/wave-local-executor.mjs --prompt-file <path>");
+    console.log("Usage: pnpm exec wave local --prompt-file <path>");
     return;
   }
   const rawPrompt = fs.readFileSync(options.promptFile, "utf8");

@@ -247,11 +247,11 @@ async function waitForAnswer(filePath, timeoutSeconds) {
 
 function printHelp() {
   console.log(`Usage:
-  node scripts/wave-human-feedback.mjs ask --lane <lane> --wave <n> --agent <id> --question "<text>" [options]
-  node scripts/wave-human-feedback.mjs respond --id <request-id> --response "<text>" [options]
-  node scripts/wave-human-feedback.mjs list [--pending] [--lane <lane>] [--wave <n>] [--agent <id>] [--json]
-  node scripts/wave-human-feedback.mjs watch [--pending] [--lane <lane>] [--wave <n>] [--agent <id>] [--refresh-ms <n>]
-  node scripts/wave-human-feedback.mjs show --id <request-id>
+  pnpm exec wave-feedback ask --lane <lane> --wave <n> --agent <id> --question "<text>" [options]
+  pnpm exec wave-feedback respond --id <request-id> --response "<text>" [options]
+  pnpm exec wave-feedback list [--pending] [--lane <lane>] [--wave <n>] [--agent <id>] [--json]
+  pnpm exec wave-feedback watch [--pending] [--lane <lane>] [--wave <n>] [--agent <id>] [--refresh-ms <n>]
+  pnpm exec wave-feedback show --id <request-id>
 `);
 }
 

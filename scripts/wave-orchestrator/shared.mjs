@@ -1,14 +1,15 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import {
   DEFAULT_WAVE_LANE as CONFIG_DEFAULT_WAVE_LANE,
   loadWaveConfig,
   resolveLaneProfile,
 } from "./config.mjs";
+import { PACKAGE_ROOT, WORKSPACE_ROOT } from "./roots.mjs";
 
-export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+export { PACKAGE_ROOT };
+export const REPO_ROOT = WORKSPACE_ROOT;
 
 export const DEFAULT_WAVE_LANE = CONFIG_DEFAULT_WAVE_LANE;
 export const DEFAULT_TIMEOUT_MINUTES = 240;

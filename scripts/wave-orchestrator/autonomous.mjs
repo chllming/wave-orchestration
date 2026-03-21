@@ -10,6 +10,7 @@ import {
   DEFAULT_MAX_RETRIES_PER_WAVE,
   DEFAULT_TIMEOUT_MINUTES,
   DEFAULT_WAVE_LANE,
+  PACKAGE_ROOT,
   REPO_ROOT,
   buildLanePaths,
   parseNonNegativeInt,
@@ -23,7 +24,7 @@ import {
 import { readRunState } from "./wave-files.mjs";
 
 function printUsage() {
-  console.log(`Usage: node scripts/wave-autonomous.mjs [options]
+  console.log(`Usage: pnpm exec wave autonomous [options]
 
 Options:
   --lane <name>                 Lane name (default: ${DEFAULT_WAVE_LANE})
@@ -162,20 +163,20 @@ function runCommand(args) {
 }
 
 function reconcile(lane) {
-  return runCommand(["scripts/wave-launcher.mjs", "--lane", lane, "--reconcile-status"]);
+  return runCommand([path.join(PACKAGE_ROOT, "scripts", "wave-launcher.mjs"), "--lane", lane, "--reconcile-status"]);
 }
 
 function dryRun(lane) {
-  return runCommand(["scripts/wave-launcher.mjs", "--lane", lane, "--dry-run", "--no-dashboard"]);
+  return runCommand([path.join(PACKAGE_ROOT, "scripts", "wave-launcher.mjs"), "--lane", lane, "--dry-run", "--no-dashboard"]);
 }
 
 function listPendingFeedback(lane) {
-  return runCommand(["scripts/wave-human-feedback.mjs", "list", "--lane", lane, "--pending"]);
+  return runCommand([path.join(PACKAGE_ROOT, "scripts", "wave-human-feedback.mjs"), "list", "--lane", lane, "--pending"]);
 }
 
 function launchSingleWave(params) {
   const args = [
-    "scripts/wave-launcher.mjs",
+    path.join(PACKAGE_ROOT, "scripts", "wave-launcher.mjs"),
     "--lane",
     params.lane,
     "--start-wave",

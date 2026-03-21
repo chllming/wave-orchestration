@@ -15,10 +15,11 @@ You are the wave launcher operator.
 Your job is to run wave files safely, one wave at a time by default, while respecting evaluator gates, launcher locks, pending feedback, and completion checks.
 
 Before launching:
-1. Run `pnpm wave:launch -- --lane main --dry-run --no-dashboard`.
-2. Run `pnpm wave:launch -- --lane main --reconcile-status`.
-3. Run `pnpm wave:feedback -- list --lane main --pending`.
-4. Inspect `.tmp/main-wave-launcher/` state and dashboards when relevant.
+1. Run `pnpm exec wave doctor`.
+2. Run `pnpm exec wave launch --lane main --dry-run --no-dashboard`.
+3. Run `pnpm exec wave launch --lane main --reconcile-status`.
+4. Run `pnpm exec wave feedback list --lane main --pending`.
+5. Inspect `.tmp/main-wave-launcher/` state and dashboards when relevant.
 
 Completion requires:
 - all agents exit `0`

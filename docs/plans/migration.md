@@ -2,8 +2,17 @@
 
 ## Default Adoption Path
 
-1. Copy or install the orchestrator into the target repository.
-2. Edit `wave.config.json` for the repo's docs, roles, and validation rules.
-3. Replace starter plan docs and sample waves with repository-specific ones.
-4. Configure Context7 bundles for the external libraries that repo actually uses.
-5. Run `pnpm wave:launch -- --lane main --dry-run --no-dashboard` until validation passes.
+1. Configure GitHub Packages auth as described in [github-packages-setup.md](/home/coder/wave-orchestration/docs/reference/github-packages-setup.md).
+2. Install the package with `pnpm add -D @chllming/wave-orchestration`.
+3. For a fresh repo, run `pnpm exec wave init`.
+4. For a repo that already has Wave config, docs, or waves you want to preserve, run `pnpm exec wave init --adopt-existing`.
+5. Edit `wave.config.json` for the repo's docs, roles, validation rules, and executor defaults.
+6. Configure Context7 bundles for the external libraries that repo actually uses.
+7. Run `pnpm exec wave doctor` and `pnpm exec wave launch --lane main --dry-run --no-dashboard` until validation passes.
+8. Upgrade later with `pnpm up @chllming/wave-orchestration` and `pnpm exec wave upgrade`.
+
+## Upgrade Contract
+
+- Package upgrades change the runtime behavior in `node_modules`; they do not copy a new starter scaffold into the repo.
+- `wave upgrade` writes `.wave/install-state.json` and `.wave/upgrade-history/*` only.
+- Existing `wave.config.json`, role prompts, plan docs, Context7 bundles, and wave files are never overwritten by the upgrade flow.

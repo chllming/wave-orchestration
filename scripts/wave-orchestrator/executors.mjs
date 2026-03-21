@@ -6,7 +6,14 @@ import {
   DEFAULT_EXECUTOR_MODE,
   normalizeExecutorMode,
 } from "./config.mjs";
-import { REPO_ROOT, ensureDirectory, shellQuote, writeJsonAtomic, writeTextAtomic } from "./shared.mjs";
+import {
+  PACKAGE_ROOT,
+  REPO_ROOT,
+  ensureDirectory,
+  shellQuote,
+  writeJsonAtomic,
+  writeTextAtomic,
+} from "./shared.mjs";
 
 function appendSingleValueFlag(tokens, flag, value) {
   if (value === null || value === undefined || value === "") {
@@ -140,7 +147,7 @@ function buildLocalLaunchSpec({ promptPath, logPath }) {
     command: "node",
     useRateLimitRetries: false,
     invocationLines: [
-      `node ${shellQuote(path.join(REPO_ROOT, "scripts", "wave-local-executor.mjs"))} --prompt-file ${shellQuote(
+      `node ${shellQuote(path.join(PACKAGE_ROOT, "scripts", "wave-local-executor.mjs"))} --prompt-file ${shellQuote(
         promptPath,
       )} 2>&1 | tee ${shellQuote(logPath)}`,
     ],

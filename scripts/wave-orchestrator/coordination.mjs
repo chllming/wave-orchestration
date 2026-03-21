@@ -240,7 +240,7 @@ export function buildExecutionPrompt({
       ]
     : [];
   const askCommand = [
-    "node scripts/wave-human-feedback.mjs ask",
+    "pnpm exec wave-feedback ask",
     `--lane ${lane}`,
     `--wave ${wave}`,
     `--agent ${agent.agentId}`,

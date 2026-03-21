@@ -18,76 +18,118 @@ It includes:
 - one or more real executors on `PATH`: `codex`, `claude`, or `opencode`
 - optional: `CONTEXT7_API_KEY` for launcher-side Context7 prefetch
 
-## Quick Start
+## Install Into Another Repo
 
-1. Install dependencies:
+1. Configure GitHub Packages auth as shown in [github-packages-setup.md](/home/coder/wave-orchestration/docs/reference/github-packages-setup.md).
+
+2. Add the package:
+
+```bash
+pnpm add -D @chllming/wave-orchestration
+```
+
+3. Initialize the repo:
+
+Fresh repo:
+
+```bash
+pnpm exec wave init
+```
+
+Existing repo with Wave config/docs/waves you want to preserve:
+
+```bash
+pnpm exec wave init --adopt-existing
+```
+
+4. Run a non-mutating health check:
+
+```bash
+pnpm exec wave doctor
+pnpm exec wave launch --lane main --dry-run --no-dashboard
+```
+
+5. Upgrade later without overwriting plans or waves:
+
+```bash
+pnpm up @chllming/wave-orchestration
+pnpm exec wave upgrade
+pnpm exec wave changelog --since-installed
+```
+
+`wave upgrade` only updates `.wave/install-state.json` and writes upgrade reports under `.wave/upgrade-history/`. It does not overwrite existing `wave.config.json`, role prompts, plan docs, or wave files.
+
+## Develop This Package
+
+1. Install dependencies in this source repo:
 
 ```bash
 pnpm install
 ```
 
-2. Review the repo-level config in [wave.config.json](/home/coder/wave-orchestration/wave.config.json).
+2. Review the package-level config and starter assets in [wave.config.json](/home/coder/wave-orchestration/wave.config.json) and [docs](/home/coder/wave-orchestration/docs).
 
-3. Review the starter runbook in [docs/plans/wave-orchestrator.md](/home/coder/wave-orchestration/docs/plans/wave-orchestrator.md) and [docs/plans/context7-wave-orchestrator.md](/home/coder/wave-orchestration/docs/plans/context7-wave-orchestrator.md).
+3. Review the runbooks in [docs/plans/wave-orchestrator.md](/home/coder/wave-orchestration/docs/plans/wave-orchestrator.md) and [docs/plans/context7-wave-orchestrator.md](/home/coder/wave-orchestration/docs/plans/context7-wave-orchestrator.md).
 
 4. Dry-parse the starter wave:
 
 ```bash
-pnpm wave:launch -- --lane main --dry-run --no-dashboard
+pnpm exec wave launch --lane main --dry-run --no-dashboard
 ```
 
 5. When the wave parses cleanly, launch a single wave:
 
 ```bash
-pnpm wave:launch -- --lane main --start-wave 0 --end-wave 0 --executor codex --codex-sandbox danger-full-access
+pnpm exec wave launch --lane main --start-wave 0 --end-wave 0 --executor codex --codex-sandbox danger-full-access
 ```
 
 Alternative real executors:
 
 ```bash
-pnpm wave:launch -- --lane main --start-wave 0 --end-wave 0 --executor claude
-pnpm wave:launch -- --lane main --start-wave 0 --end-wave 0 --executor opencode
+pnpm exec wave launch --lane main --start-wave 0 --end-wave 0 --executor claude
+pnpm exec wave launch --lane main --start-wave 0 --end-wave 0 --executor opencode
 ```
 
 ## Typical Harness Workflow
 
-1. Configure the repo:
-   Edit [wave.config.json](/home/coder/wave-orchestration/wave.config.json) for your docs layout, shared plan docs, role prompt paths, validator thresholds, and Context7 bundle index path.
+1. Initialize or adopt the workspace:
+   Use `pnpm exec wave init` for a fresh repo or `pnpm exec wave init --adopt-existing` for an existing repo you do not want seeded with starter content.
 
-2. Write or revise the shared docs:
-   Keep [docs/plans/current-state.md](/home/coder/wave-orchestration/docs/plans/current-state.md), [docs/plans/master-plan.md](/home/coder/wave-orchestration/docs/plans/master-plan.md), and [docs/plans/migration.md](/home/coder/wave-orchestration/docs/plans/migration.md) aligned with the work you want the waves to execute.
+2. Configure the repo:
+   Edit [wave.config.json](/home/coder/wave-orchestration/wave.config.json) for docs layout, shared plan docs, role prompt paths, validator thresholds, and Context7 bundle index path.
 
-3. Create a wave file:
-   Put wave markdown under [docs/plans/waves](/home/coder/wave-orchestration/docs/plans/waves) using the same sections as the sample [wave-0.md](/home/coder/wave-orchestration/docs/plans/waves/wave-0.md).
+3. Write or revise the shared docs and waves:
+   Keep the shared plan docs and your wave files aligned with the work you want the harness to execute.
 
 4. Dry-run first:
 
 ```bash
-pnpm wave:launch -- --lane main --dry-run --no-dashboard
+pnpm exec wave doctor
+pnpm exec wave launch --lane main --dry-run --no-dashboard
 ```
 
 5. Reconcile stale state if needed:
 
 ```bash
-pnpm wave:launch -- --lane main --reconcile-status
+pnpm exec wave launch --lane main --reconcile-status
 ```
 
 6. Check pending human feedback:
 
 ```bash
-pnpm wave:feedback -- list --lane main --pending
+pnpm exec wave feedback list --lane main --pending
 ```
 
 7. Launch one wave at a time until the plan is stable:
 
 ```bash
-pnpm wave:launch -- --lane main --start-wave 0 --end-wave 0 --executor codex --codex-sandbox danger-full-access
+pnpm exec wave launch --lane main --start-wave 0 --end-wave 0 --executor codex --codex-sandbox danger-full-access
 ```
 
 8. Use autonomous mode only after the wave set is already solid:
 
 ```bash
-pnpm wave:autonomous -- --lane main --executor codex --codex-sandbox danger-full-access
+pnpm exec wave autonomous --lane main --executor codex --codex-sandbox danger-full-access
 ```
 
 ## Wave File Shape
@@ -264,16 +306,21 @@ Layering by executor:
 ## Useful Commands
 
 ```bash
-pnpm wave:launch -- --lane main --dry-run --no-dashboard
-pnpm wave:launch -- --lane main --reconcile-status
-pnpm wave:launch -- --lane main --start-wave 2 --end-wave 2 --executor codex --codex-sandbox danger-full-access
-pnpm wave:launch -- --lane main --start-wave 2 --end-wave 2 --executor claude
-pnpm wave:launch -- --lane main --start-wave 2 --end-wave 2 --executor opencode
-pnpm wave:launch -- --lane main --auto-next --executor codex --codex-sandbox danger-full-access
-pnpm wave:feedback -- list --lane main --pending
-pnpm wave:autonomous -- --lane main --executor codex --codex-sandbox danger-full-access
-pnpm wave:autonomous -- --lane main --executor claude
-pnpm wave:autonomous -- --lane main --executor opencode
+pnpm exec wave init
+pnpm exec wave init --adopt-existing
+pnpm exec wave doctor
+pnpm exec wave launch --lane main --dry-run --no-dashboard
+pnpm exec wave launch --lane main --reconcile-status
+pnpm exec wave launch --lane main --start-wave 2 --end-wave 2 --executor codex --codex-sandbox danger-full-access
+pnpm exec wave launch --lane main --start-wave 2 --end-wave 2 --executor claude
+pnpm exec wave launch --lane main --start-wave 2 --end-wave 2 --executor opencode
+pnpm exec wave launch --lane main --auto-next --executor codex --codex-sandbox danger-full-access
+pnpm exec wave feedback list --lane main --pending
+pnpm exec wave autonomous --lane main --executor codex --codex-sandbox danger-full-access
+pnpm exec wave autonomous --lane main --executor claude
+pnpm exec wave autonomous --lane main --executor opencode
+pnpm exec wave upgrade
+pnpm exec wave changelog --since-installed
 ```
 
 ## Research Sources

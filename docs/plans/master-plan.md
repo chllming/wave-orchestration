@@ -9,6 +9,6 @@
 
 ## Near-Term Work
 
-- Finish genericizing remaining tests and runtime helpers.
 - Add additional starter templates for common repository shapes.
-- Expand package-level documentation and install guidance.
+- Add richer doctor checks and guided migrations for future breaking config changes.
+- Expand release automation and changelog generation around the package-first install flow.
