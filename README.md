@@ -11,6 +11,28 @@ It includes:
 - Context7 bundle selection, prefetch, caching, and prompt injection
 - starter docs and a sample wave scaffold
 
+## Quick Start
+
+Published package:
+- `@chllming/wave-orchestration@0.2.0`
+- Registry: `https://npm.pkg.github.com`
+- Release: [v0.2.0](https://github.com/chllming/wave-orchestration/releases/tag/v0.2.0)
+
+Install:
+
+```bash
+pnpm add -D @chllming/wave-orchestration
+pnpm exec wave init
+pnpm exec wave doctor
+pnpm exec wave launch --lane main --dry-run --no-dashboard
+```
+
+If your repo already has Wave config, docs, or waves you want to keep:
+
+```bash
+pnpm exec wave init --adopt-existing
+```
+
 ## Requirements
 
 - Node.js 22+
