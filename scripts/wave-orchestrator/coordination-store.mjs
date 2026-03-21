@@ -239,13 +239,13 @@ export function clarificationIdFromClosureCondition(value) {
 
 export function isClarificationLinkedRequest(record, clarificationIds = null) {
   const closureClarificationId = clarificationIdFromClosureCondition(record?.closureCondition);
-  if (closureClarificationId) {
-    return true;
-  }
   const clarificationIdSet =
     clarificationIds instanceof Set
       ? clarificationIds
       : new Set(Array.isArray(clarificationIds) ? clarificationIds : []);
+  if (closureClarificationId) {
+    return clarificationIdSet.size === 0 || clarificationIdSet.has(closureClarificationId);
+  }
   return Array.isArray(record?.dependsOn)
     ? record.dependsOn.some((dependencyId) => clarificationIdSet.has(String(dependencyId || "").trim()))
     : false;
@@ -366,6 +366,31 @@ function isTargetedToAgent(record, agent) {
   return false;
 }
 
+function recordTouchesAgentArtifacts(record, agent) {
+  const artifactRefs = Array.isArray(record?.artifactRefs)
+    ? record.artifactRefs.map((entry) => String(entry || "").trim()).filter(Boolean)
+    : [];
+  if (artifactRefs.length === 0) {
+    return false;
+  }
+  const ownedPaths = Array.isArray(agent?.ownedPaths)
+    ? agent.ownedPaths.map((entry) => String(entry || "").trim()).filter(Boolean)
+    : [];
+  for (const ref of artifactRefs) {
+    for (const ownedPath of ownedPaths) {
+      if (ref === ownedPath || ref.startsWith(`${ownedPath}/`)) {
+        return true;
+      }
+    }
+  }
+  const components = new Set(
+    Array.isArray(agent?.components)
+      ? agent.components.map((entry) => String(entry || "").trim()).filter(Boolean)
+      : [],
+  );
+  return artifactRefs.some((ref) => components.has(ref));
+}
+
 export function compileSharedSummary({
   wave,
   state,
@@ -441,6 +466,9 @@ export function compileAgentInbox({
   maxChars = 8000,
 }) {
   const targetedRecords = state.openRecords.filter((record) => isTargetedToAgent(record, agent));
+  const artifactScopedRecords = state.openRecords.filter((record) =>
+    recordTouchesAgentArtifacts(record, agent),
+  );
   const ownedRecords = (state.recordsByAgentId.get(agent.agentId) || []).filter((record) =>
     OPEN_COORDINATION_STATUSES.has(record.status),
   );
@@ -461,22 +489,37 @@ export function compileAgentInbox({
     Array.isArray(ledger?.tasks) && ledger.tasks.length > 0
       ? ledger.tasks.filter((task) => task.owner === agent.agentId)
       : [];
+  const seenInboxRecordIds = new Set();
+  const uniqueRecords = (records) =>
+    records.filter((record) => {
+      const recordId = String(record?.id || "").trim();
+      if (!recordId || seenInboxRecordIds.has(recordId)) {
+        return false;
+      }
+      seenInboxRecordIds.add(recordId);
+      return true;
+    });
   const text = [
     `# Wave ${wave.wave} Inbox for ${agent.agentId}`,
     "",
     "## Targeted open coordination",
     ...(targetedRecords.length > 0
-      ? targetedRecords.map((record) => renderOpenRecord(record))
+      ? uniqueRecords(targetedRecords).map((record) => renderOpenRecord(record))
+      : ["- None."]),
+    "",
+    "## Artifact-linked open coordination",
+    ...(artifactScopedRecords.length > 0
+      ? uniqueRecords(artifactScopedRecords).map((record) => renderOpenRecord(record))
       : ["- None."]),
     "",
     "## Your open coordination items",
     ...(ownedRecords.length > 0
-      ? ownedRecords.map((record) => renderOpenRecord(record))
+      ? uniqueRecords(ownedRecords).map((record) => renderOpenRecord(record))
       : ["- None."]),
     "",
     "## Clarifications",
     ...(clarificationRecords.length > 0
-      ? clarificationRecords.map((record) => renderOpenRecord(record))
+      ? uniqueRecords(clarificationRecords).map((record) => renderOpenRecord(record))
       : ["- None."]),
     "",
     "## Ledger tasks",

@@ -440,6 +440,98 @@ describe("resolveRelaunchRuns", () => {
       initialExecutorId: "codex",
     });
   });
+
+  it("blocks relaunch when configured fallbacks are unavailable or violate mix policy", () => {
+    const agentRuns = [
+      {
+        agent: {
+          agentId: "A1",
+          capabilities: ["runtime"],
+          executorResolved: {
+            id: "codex",
+            initialExecutorId: "codex",
+            model: null,
+            role: "implementation",
+            profile: null,
+            selectedBy: "lane-role-default",
+            fallbacks: ["claude"],
+            tags: [],
+            budget: null,
+            fallbackUsed: false,
+            fallbackReason: null,
+            executorHistory: [{ attempt: 0, executorId: "codex", reason: "initial" }],
+            codex: { command: "missing-codex", sandbox: "danger-full-access" },
+            claude: {
+              command: "bash",
+              model: "claude-sonnet-4-6",
+              appendSystemPromptMode: "append",
+              permissionMode: null,
+              permissionPromptTool: null,
+              maxTurns: null,
+              mcpConfig: [],
+              strictMcpConfig: false,
+              settings: null,
+              outputFormat: "text",
+              allowedTools: [],
+              disallowedTools: [],
+            },
+            opencode: {
+              command: "missing-opencode",
+              model: null,
+              agent: null,
+              attach: null,
+              format: "default",
+              steps: null,
+              instructions: [],
+              permission: null,
+            },
+          },
+        },
+      },
+    ];
+    const derivedState = {
+      coordinationState: {
+        humanFeedback: [],
+        humanEscalations: [],
+        clarifications: [],
+        requests: [],
+        blockers: [],
+      },
+      ledger: { phase: "running", attempt: 1, tasks: [] },
+    };
+
+    const selected = resolveRelaunchRuns(
+      agentRuns,
+      [{ agentId: "A1", statusCode: "127" }],
+      derivedState,
+      {
+        documentationAgentId: "A9",
+        evaluatorAgentId: "A0",
+        integrationAgentId: "A8",
+        laneProfile: {
+          runtimePolicy: {
+            runtimeMixTargets: {
+              claude: 0,
+            },
+          },
+        },
+        capabilityRouting: { preferredAgents: {} },
+      },
+    );
+
+    expect(selected).toEqual([]);
+    expect(derivedState.retryFallbackBlockers).toEqual([
+      {
+        agentId: "A1",
+        detail: expect.stringContaining("violates runtime mix targets"),
+      },
+    ]);
+    expect(agentRuns[0].agent.executorResolved).toMatchObject({
+      id: "codex",
+      fallbackUsed: false,
+      fallbackReason: null,
+    });
+  });
 });
 
 describe("runClosureSweepPhase", () => {

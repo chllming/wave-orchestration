@@ -1788,6 +1788,7 @@ function buildFallbackExecutorState(executorState, executorId, attempt, reason) 
 function applyRetryFallbacks(agentRuns, failures, lanePaths, attemptNumber) {
   const failedAgentIds = new Set(failures.map((failure) => failure.agentId));
   let changed = false;
+  const blockedFailures = [];
   for (const run of agentRuns) {
     if (!failedAgentIds.has(run.agent.agentId)) {
       continue;
@@ -1802,12 +1803,15 @@ function applyRetryFallbacks(agentRuns, failures, lanePaths, attemptNumber) {
         : [executorState.id],
     );
     const fallbackReason = failures.find((failure) => failure.agentId === run.agent.agentId);
+    let blockedDetail = null;
+    let appliedToRun = false;
     for (const candidate of executorFallbackChain(executorState)) {
       if (!candidate || candidate === executorState.id || attemptedExecutors.has(candidate)) {
         continue;
       }
       const command = commandForExecutor(executorState, candidate);
       if (!isExecutorCommandAvailable(command)) {
+        blockedDetail = `fallback ${candidate} is unavailable on PATH`;
         continue;
       }
       const nextState = buildFallbackExecutorState(
@@ -1825,14 +1829,23 @@ function applyRetryFallbacks(agentRuns, failures, lanePaths, attemptNumber) {
         lanePaths,
       );
       if (!validation.ok) {
+        blockedDetail = `fallback ${candidate} violates runtime mix targets (${validation.detail})`;
         continue;
       }
       run.agent.executorResolved = nextState;
       changed = true;
+      appliedToRun = true;
+      blockedDetail = null;
       break;
     }
+    if (executorFallbackChain(executorState).length > 0 && !appliedToRun && blockedDetail) {
+      blockedFailures.push({
+        agentId: run.agent.agentId,
+        detail: blockedDetail,
+      });
+    }
   }
-  return changed;
+  return { changed, blockedFailures };
 }
 
 function readClarificationBarrier(derivedState) {
@@ -1890,7 +1903,13 @@ export function resolveRelaunchRuns(agentRuns, failures, derivedState, lanePaths
     return [];
   }
   const nextAttemptNumber = Number(derivedState?.ledger?.attempt || 0) + 1;
-  applyRetryFallbacks(agentRuns, failures, lanePaths, nextAttemptNumber);
+  const fallbackOutcome = applyRetryFallbacks(agentRuns, failures, lanePaths, nextAttemptNumber);
+  if (derivedState && typeof derivedState === "object") {
+    derivedState.retryFallbackBlockers = fallbackOutcome.blockedFailures;
+  }
+  if (fallbackOutcome.blockedFailures.length > 0) {
+    return [];
+  }
   const clarificationTargets = new Set();
   for (const record of openClarificationLinkedRequests(derivedState?.coordinationState)) {
     for (const target of record.targets || []) {
@@ -2997,9 +3016,19 @@ export async function runLauncherCli(argv) {
           });
           runsToLaunch = resolveRelaunchRuns(agentRuns, failures, derivedState, lanePaths);
           if (runsToLaunch.length === 0) {
-            const error = new Error(
-              `Wave ${wave.wave} is waiting on human feedback or unresolved coordination state; no safe relaunch target is available.`,
-            );
+            const blockedFallbacks = Array.isArray(derivedState?.retryFallbackBlockers)
+              ? derivedState.retryFallbackBlockers
+              : [];
+            const error =
+              blockedFallbacks.length > 0
+                ? new Error(
+                    `Wave ${wave.wave} cannot continue because retry fallback policy blocked relaunches:\n${blockedFallbacks
+                      .map((entry) => `  - ${entry.agentId}: ${entry.detail}`)
+                      .join("\n")}`,
+                  )
+                : new Error(
+                    `Wave ${wave.wave} is waiting on human feedback or unresolved coordination state; no safe relaunch target is available.`,
+                  );
             error.exitCode = 43;
             throw error;
           }

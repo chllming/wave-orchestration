@@ -3,6 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  appendCoordinationRecord,
+  compileAgentInbox,
+  isClarificationLinkedRequest,
   readMaterializedCoordinationState,
   serializeCoordinationState,
   updateSeedRecords,
@@ -97,5 +100,75 @@ describe("serializeCoordinationState", () => {
       summary: "Wave 0 assigned to A1: Runtime",
     });
     expect(serialized.recordsByTarget["agent:A1"]).toHaveLength(1);
+  });
+});
+
+describe("clarification-linked coordination matching", () => {
+  it("matches closure conditions only for the referenced clarification id", () => {
+    expect(
+      isClarificationLinkedRequest(
+        { closureCondition: "clarification:clarify-b" },
+        new Set(["clarify-a"]),
+      ),
+    ).toBe(false);
+    expect(
+      isClarificationLinkedRequest(
+        { closureCondition: "clarification:clarify-b" },
+        new Set(["clarify-b"]),
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("compileAgentInbox", () => {
+  it("includes open artifact-linked coordination for the owning agent", () => {
+    const dir = makeTempDir();
+    const logPath = path.join(dir, "wave-0.jsonl");
+
+    updateSeedRecords(logPath, {
+      lane: "main",
+      wave: 0,
+      agents: [
+        {
+          agentId: "A1",
+          title: "Runtime",
+          prompt: "Own the runtime",
+          ownedPaths: ["src/runtime.ts"],
+          components: ["runtime-engine"],
+        },
+      ],
+      componentPromotions: [],
+      sharedPlanDocs: [],
+      feedbackRequests: [],
+    });
+    appendCoordinationRecord(logPath, {
+      id: "block-runtime",
+      lane: "main",
+      wave: 0,
+      agentId: "A8",
+      kind: "blocker",
+      targets: [],
+      priority: "high",
+      summary: "Runtime change is blocked pending integration confirmation",
+      detail: "This blocker touches the implementation-owned runtime file.",
+      artifactRefs: ["src/runtime.ts"],
+      status: "open",
+      source: "agent",
+    });
+
+    const state = readMaterializedCoordinationState(logPath);
+    const inbox = compileAgentInbox({
+      wave: { wave: 0 },
+      agent: {
+        agentId: "A1",
+        ownedPaths: ["src/runtime.ts"],
+        components: ["runtime-engine"],
+      },
+      state,
+    });
+
+    expect(inbox.text).toContain("## Artifact-linked open coordination");
+    expect(inbox.text).toContain("Runtime change is blocked pending integration confirmation");
+    expect(inbox.text).toContain("src/runtime.ts");
   });
 });
