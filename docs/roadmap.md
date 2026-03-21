@@ -16,6 +16,8 @@ The recent harness and blackboard sources point in the same direction:
 - compaction alone is not enough for long-running work
 - append-only communication logs are useful, but not sufficient as the canonical coordination substrate
 - messaging quality matters less than whether the system can integrate distributed findings into a coherent decision
+- runtime choice should be treated as authored plan data, not only as a launch-time default
+- clarification should stay inside the harness loop until the orchestrator can prove that human input is actually required
 - the harness needs reproducible traces, explicit loop control, and durable state across sessions
 
 Wave Orchestration already has a strong base:
@@ -23,11 +25,12 @@ Wave Orchestration already has a strong base:
 - wave parsing and role imports
 - lane-scoped state under `.tmp/`
 - message boards
+- basic per-agent executor overrides for Codex, Claude, and OpenCode
 - structured proof and documentation markers
 - documentation closure and evaluator closure sweep
 - a file-backed human feedback queue
 
-The next step is to evolve the harness from “agents write progress notes” into “agents coordinate through typed shared state, compiled inboxes, and an explicit integration phase.”
+The next step is to evolve the harness from “agents write progress notes” into “agents coordinate through typed shared state, compiled inboxes, runtime-aware planning, and an explicit integration phase.”
 
 ## What To Keep
 
@@ -36,6 +39,7 @@ These parts of the current model should stay:
 - Wave markdown remains the authored planning surface.
 - Lanes remain the top-level isolation unit for separate workstreams.
 - Agent IDs and role prompts remain the basic execution model.
+- The per-agent `### Executor` section remains the planning surface for runtime choice; it just becomes richer and more enforceable.
 - Exit contracts, component promotions, documentation stewardship, and evaluator closure remain the primary completion controls.
 - The markdown message board remains as a human-readable audit view.
 
@@ -201,7 +205,71 @@ Additions:
 - if only documentation deltas remain, relaunch only the documentation steward
 - if only deployment or infra proof remains, relaunch only the relevant infra/deploy role
 
-### 6. Capability-Based Volunteer Roles
+### 6. Mixed-Runtime Planning And Runtime Profiles
+
+Treat executor choice as authored plan data at wave design time, not only as a launcher default.
+
+Why this is useful:
+
+- The current harness already supports per-agent executor selection, but the planning surface is too narrow for real mixed-runtime lane design.
+- Different roles benefit from different runtimes: implementation, evaluation, documentation, integration, and infra/deploy do not need identical execution substrates.
+- The OpenAI App Server pattern and OPENDEV's provider-conditional harness design both point toward a stable harness loop with swappable underlying runtimes.
+
+Wave file change:
+
+- strengthen `### Executor` from optional override into a first-class planning section for roles that need non-default runtime behavior
+- allow runtime profiles plus inline overrides
+
+Recommended keys:
+
+- `id`
+- `profile`
+- `model`
+- `fallbacks`
+- `tags`
+- `budget.turns`
+- `budget.minutes`
+- `codex.command`
+- `codex.sandbox`
+- `claude.command`
+- `claude.agent`
+- `claude.permission_mode`
+- `claude.permission_prompt_tool`
+- `claude.max_turns`
+- `claude.mcp_config`
+- `claude.settings`
+- `claude.output_format`
+- `claude.allowed_tools`
+- `claude.disallowed_tools`
+- `opencode.command`
+- `opencode.agent`
+- `opencode.attach`
+- `opencode.format`
+- `opencode.steps`
+- `opencode.instructions`
+- `opencode.permission`
+
+Lane config additions:
+
+- `executors.profiles.<profile-name>`
+- `lanes.<lane>.runtimeMixTargets`
+- `lanes.<lane>.defaultExecutorByRole`
+- `lanes.<lane>.fallbackExecutorOrder`
+
+Example runtime mix target:
+
+- `codex: 3`
+- `claude: 2`
+- `opencode: 2`
+
+Use:
+
+- planners assign runtime and runtime profile inside the wave, not only at launch time
+- launcher validation accepts only supported runtime fields and rejects silent drift
+- the orchestrator can reassign an agent only when the fallback policy allows it
+- dashboards, ledgers, and traces report runtime by agent, by role, and by fallback path
+
+### 7. Capability-Based Volunteer Roles
 
 Extend fixed roles with optional capability-based volunteering.
 
@@ -228,21 +296,47 @@ Use:
 - requests can target a named agent or a capability class
 - the launcher can assign the next step to the least-busy matching agent or a configured preferred role
 
-### 7. Stronger Human Feedback As A Board Primitive
+### 8. Orchestrator-First Clarification And Feedback Triage
 
-Unify the feedback queue with the coordination model.
+Put the orchestrator, not the human, on the first line for unresolved questions.
 
 Why:
 
 - the current feedback queue is useful but separate from the main shared workspace
-- human feedback should participate in the same lifecycle as requests, acknowledgements, and closure
+- autonomous mode currently treats pending feedback as a blocking condition rather than as a triage problem the harness should try to solve
+- many requests can be resolved from repository guidance, ownership rules, prior wave decisions, or current coordination state without asking a human
 
-Change:
+Clarification ladder:
 
-- every `wave-feedback ask` request creates both the existing JSON file and a coordination event
-- answering feedback writes a typed `human-feedback` record and updates dependent open requests
+1. the agent checks its inbox, ledger, coordination store, owned files, and repo guidance
+2. if still blocked, it emits a typed `clarification-request`
+3. the orchestrator triages the request and either:
+   - answers directly with `orchestrator-guidance`
+   - routes it to another agent as a targeted request
+   - resolves it from existing policy or prior decisions
+   - escalates to a human when external intent is truly missing
+4. only unresolved product, policy, safety, or externally-owned decisions become human tickets
 
-### 8. Reproducible Harness Traces
+Proposed record kinds:
+
+- `clarification-request`
+- `orchestrator-guidance`
+- `resolved-by-policy`
+- `human-escalation`
+- `human-feedback`
+
+Proposed artifacts:
+
+- `.tmp/<lane>-wave-launcher/feedback/triage/wave-<n>.jsonl`
+- `.tmp/<lane>-wave-launcher/feedback/triage/wave-<n>/pending-human.md`
+
+Escalation policy:
+
+- escalate only for missing business intent, conflicting top-level instructions, security or compliance ambiguity, external-system risk, or repeated failed orchestrator resolution attempts
+- autonomous mode should drain orchestrator-resolvable clarification items before refusing to continue
+- answered human feedback should be written back into the coordination store and wave ledger so the same question is not asked twice
+
+### 9. Reproducible Harness Traces
 
 Add replayable trace capture for evaluation and regression control.
 
@@ -280,25 +374,29 @@ Current flow, simplified:
 4. Parse logs and structured markers.
 5. Run documentation closure and evaluator closure.
 
-This is workable, but it leaves three gaps:
+This is workable, but it leaves five gaps:
 
 - communication is mostly free-text
 - integration is implicit
+- runtime planning is still too lane-default and not expressive enough for deliberate mixed-runtime teams
+- clarification escalates too early to a human queue
 - scheduling is not strongly driven by shared state
 
 ### Proposed Model
 
 Upgraded flow, still wave- and lane-native:
 
-1. Parse wave file into the manifest and wave ledger.
-2. Build or update the canonical coordination store.
-3. Compile shared summary and per-agent inboxes.
-4. Launch implementation, infra, deploy, docs, or research roles based on the ledger and open requests.
-5. Continuously ingest structured outputs into the coordination store and ledger.
-6. Run a dedicated integration phase to synthesize all claims and remaining gaps.
-7. Run documentation closure using the integration summary.
-8. Run evaluator closure using the integration summary plus final doc state.
-9. Persist the attempt trace bundle for replay and evaluation.
+1. Parse the wave file into the manifest, runtime plan, and wave ledger.
+2. Resolve executor profiles, fallback policy, and runtime-mix targets for the lane.
+3. Build or update the canonical coordination store.
+4. Compile the shared summary and per-agent inboxes.
+5. Launch implementation, infra, deploy, docs, research, or evaluation roles based on the ledger, runtime plan, and open requests.
+6. Let the orchestrator triage clarification requests and resolve or route them before escalating to a human.
+7. Continuously ingest structured outputs into the coordination store and ledger.
+8. Run a dedicated integration phase to synthesize all claims and remaining gaps.
+9. Run documentation closure using the integration summary.
+10. Run evaluator closure using the integration summary plus final doc state.
+11. Persist the attempt trace bundle for replay and evaluation.
 
 ## Recommended Role Model
 
@@ -318,6 +416,26 @@ Responsibilities:
 - integration steward synthesizes cross-role state
 - documentation steward reconciles shared docs and component matrix
 - evaluator decides whether the wave is coherent enough to pass
+
+## Runtime Planning And Lane Mix
+
+Wave orchestration should support a deliberate runtime mix inside one lane. A lane can run `3 codex`, `2 claude`, and `2 opencode` agents as long as the wave declares which agent prefers which runtime and what fallbacks are allowed.
+
+Recommended starting mapping for this repo:
+
+- implementation and test-fix roles: `codex`
+- integration steward, evaluator, and documentation steward: `claude`
+- exploratory helper, research, and CLI-heavy ops roles: `opencode`
+- infra and deploy roles: choose `codex` or `opencode` based on the command workflow and tooling needs, not by habit
+
+Planning rules:
+
+- every agent in a deliberate mixed-runtime wave should declare `### Executor`
+- runtime reassignment during execution must preserve ownership and leave an audit record
+- runtime profiles should capture the common presets such as `implement-fast`, `deep-review`, `docs-pass`, and `ops-triage`
+- integration summaries should report the final runtime used by each agent and whether any fallback fired
+
+This keeps runtime choice visible in the authored plan instead of hiding it inside CLI defaults.
 
 ## Lanes And Cross-Lane Coordination
 
@@ -346,6 +464,7 @@ Improve it by adding:
 - explicit shared-plan reconciliation checklist
 - component-matrix reconciliation checklist
 - release-notes or changelog queue when a wave changes public package behavior
+- a per-wave runtime assignment summary so doc and eval roles can see which runtime owned which artifacts
 
 Documentation should consume integration outputs, not rediscover them from raw logs.
 
@@ -359,6 +478,8 @@ Add:
 - replayable trace bundles
 - scoring for communication health, integration quality, and proof quality
 - continuous-history benchmark scenarios, not only single-wave success
+- runtime-mix reporting so success can be segmented by executor and by role
+- clarification reporting so orchestrator-resolved questions and human escalations are both measurable
 
 Suggested metrics:
 
@@ -367,8 +488,12 @@ Suggested metrics:
 - documentation drift count
 - proof completeness ratio
 - relaunch count by role
+- relaunch count by executor
+- runtime fallback rate
 - mean time to first acknowledgement
 - mean time to blocker resolution
+- orchestrator clarification resolution rate
+- human escalation rate
 - evaluator reversal rate between early and final verdicts
 
 ## Infra And DevOps Upgrades
@@ -380,38 +505,42 @@ Add:
 - infra proof records into the coordination store and ledger
 - deploy readiness and deploy verification as separate states
 - environment baseline checks at wave start
+- executor binary, credential, and profile availability checks for every runtime referenced by the wave
 - required rollback or recovery guidance for waves that touch live systems
 
 For infra- or deploy-heavy lanes, the integration steward should treat infra proof as first-class, not as a side detail in implementation logs.
 
 ## Prioritized Delivery Order
 
-### Phase 1: Coordination Foundation
+### Phase 1: Coordination And Planning Foundation
 
 - canonical coordination store
 - markdown board as rendered view
 - per-agent inbox compiler
-- typed human-feedback events
+- full per-agent `### Executor` schema with runtime profiles
+- typed clarification and human-feedback events
 
 Why first:
 
-- every other improvement depends on better shared state
+- every other improvement depends on better shared state, a durable runtime plan, and a typed clarification model
 
 ### Phase 2: Integration And Scheduling
 
 - integration steward role
 - integration summary artifacts
 - communication-aware relaunch and closure rules
+- orchestrator-first clarification resolver
 - wave ledger
 
 Why second:
 
-- this closes the communication-reasoning gap without changing the authored wave format
+- this closes the communication-reasoning gap and the too-early human escalation loop without changing the authored wave format
 
 ### Phase 3: Evaluation And Replay
 
 - trace bundles
 - wave quality metrics
+- runtime-mix and clarification metrics
 - continuous-history replay scenarios
 
 Why third:
@@ -435,11 +564,15 @@ The highest-value near-term upgrade is:
 1. canonical coordination store
 2. compiled agent inboxes
 3. explicit integration steward and integration summary
+4. full planning-time runtime profiles in `### Executor`
+5. orchestrator-first clarification triage
 
 That combination gives the harness the biggest improvement in:
 
 - long-running robustness
 - intra-agent messaging quality
+- mixed-runtime planning quality
+- reduced unnecessary human interruption
 - closure reliability
 - lane and multi-role scalability
 
