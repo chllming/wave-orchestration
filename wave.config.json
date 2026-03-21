@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "projectName": "Wave Orchestration",
+  "repoMode": "single-repo",
+  "defaultLane": "main",
+  "paths": {
+    "docsDir": "docs",
+    "stateRoot": ".tmp",
+    "orchestratorStateDir": ".tmp/wave-orchestrator",
+    "terminalsPath": ".vscode/terminals.json",
+    "context7BundleIndexPath": "docs/context7/bundles.json"
+  },
+  "roles": {
+    "rolePromptDir": "docs/agents",
+    "evaluatorAgentId": "A0",
+    "documentationAgentId": "A9",
+    "evaluatorRolePromptPath": "docs/agents/wave-evaluator-role.md",
+    "documentationRolePromptPath": "docs/agents/wave-documentation-role.md"
+  },
+  "sharedPlanDocs": [
+    "docs/plans/current-state.md",
+    "docs/plans/master-plan.md",
+    "docs/plans/migration.md"
+  ],
+  "validation": {
+    "requiredPromptReferences": [
+      "docs/reference/repository-guidance.md",
+      "docs/research/agent-context-sources.md"
+    ],
+    "requireDocumentationStewardFromWave": 5,
+    "requireContext7DeclarationsFromWave": 6,
+    "requireExitContractsFromWave": 6
+  }
+}

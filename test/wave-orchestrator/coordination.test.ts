@@ -1,0 +1,217 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  analyzeMessageBoardCommunication,
+  buildExecutionPrompt,
+  parseMessageBoardEntries,
+  withFileLock,
+} from "../../scripts/wave-orchestrator/coordination.mjs";
+
+const tempDirs = [];
+
+function makeTempDir() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "slowfast-wave-coordination-"));
+  tempDirs.push(dir);
+  return dir;
+}
+
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+describe("buildExecutionPrompt", () => {
+  it("includes the lane, board path, feedback command, and resolved assigned prompt", () => {
+    const resolvedPrompt = [
+      "You are the standing implementation role for this wave.",
+      "",
+      "Implement the provider runtime contract.",
+    ].join("\n");
+    const prompt = buildExecutionPrompt({
+      lane: "main",
+      wave: 2,
+      agent: {
+        agentId: "A3",
+        title: "Provider Contracts",
+        slug: "2-a3",
+        prompt: resolvedPrompt,
+        exitContract: {
+          completion: "integrated",
+          durability: "none",
+          proof: "integration",
+          docImpact: "owned",
+        },
+      },
+      orchestratorId: "main-orch",
+      messageBoardPath: "/repo/.tmp/main-wave-launcher/messageboards/wave-2.md",
+      messageBoardSnapshot: "# Wave 2 Message Board",
+    });
+
+    expect(prompt).toContain("You are Codex running Wave 2 / Agent A3: Provider Contracts.");
+    expect(prompt).toContain("node scripts/wave-human-feedback.mjs ask");
+    expect(prompt).toContain("--lane main");
+    expect(prompt).toContain("/repo/.tmp/main-wave-launcher/messageboards/wave-2.md");
+    expect(prompt).toContain("You are the standing implementation role for this wave.");
+    expect(prompt).toContain("Implement the provider runtime contract.");
+    expect(prompt).toContain("docs/plans/master-plan.md");
+    expect(prompt).toContain("docs/plans/current-state.md");
+    expect(prompt).toContain("docs/plans/migration.md");
+    expect(prompt).toContain("deliver the assigned outcome end-to-end");
+    expect(prompt).toContain("post the exact doc paths and exact delta");
+    expect(prompt).toContain("stay engaged until they confirm `closed` or `no-change`");
+    expect(prompt).toContain("[wave-proof]");
+    expect(prompt).toContain("Exit contract for this run:");
+    expect(prompt).toContain("completion: integrated");
+    expect(prompt).not.toContain("docs/leap-claw/plans");
+  });
+
+  it("adds evaluator verdict requirements for agent A0", () => {
+    const prompt = buildExecutionPrompt({
+      lane: "main",
+      wave: 0,
+      agent: {
+        agentId: "A0",
+        title: "Evaluator",
+        slug: "0-a0",
+        prompt: "Review the wave.",
+      },
+      orchestratorId: "main-orch",
+      messageBoardPath: "/repo/.tmp/main-wave-launcher/messageboards/wave-0.md",
+      messageBoardSnapshot: "# Wave 0 Message Board",
+    });
+
+    expect(prompt).toContain("Verdict: PASS");
+    expect(prompt).toContain("[wave-verdict] pass");
+    expect(prompt).toContain("[wave-gate]");
+    expect(prompt).toContain("documentation gate is closed");
+    expect(prompt).toContain("exact remaining doc delta");
+    expect(prompt).toContain("explicit `closed` or `no-change` note");
+  });
+
+  it("uses lane-scoped shared plan doc paths for non-default lanes", () => {
+    const prompt = buildExecutionPrompt({
+      lane: "compat-lane",
+      wave: 2,
+      agent: {
+        agentId: "A3",
+        title: "Provider Contracts",
+        slug: "2-a3",
+        prompt: "Implement the provider runtime contract.",
+      },
+      orchestratorId: "compat-lane-orch",
+      messageBoardPath: "/repo/.tmp/compat-lane-wave-launcher/messageboards/wave-2.md",
+      messageBoardSnapshot: "# Wave 2 Message Board",
+    });
+
+    expect(prompt).toContain("docs/compat-lane/plans/master-plan.md");
+    expect(prompt).toContain("docs/compat-lane/plans/current-state.md");
+    expect(prompt).toContain("docs/compat-lane/plans/migration.md");
+  });
+
+  it("describes scoped Context7 access and injected external docs when present", () => {
+    const prompt = buildExecutionPrompt({
+      lane: "main",
+      wave: 4,
+      agent: {
+        agentId: "A1",
+        title: "Temporal Bootstrap",
+        slug: "4-a1",
+        prompt: "Implement Temporal bootstrap.",
+        context7Resolved: {
+          bundleId: "core-go",
+          query: "Temporal schedules and worker bootstrap",
+          libraries: [{ libraryName: "temporal", libraryId: "/temporalio/temporal" }],
+        },
+      },
+      orchestratorId: "main-orch",
+      messageBoardPath: "/repo/.tmp/main-wave-launcher/messageboards/wave-4.md",
+      messageBoardSnapshot: "# Wave 4 Message Board",
+      context7: {
+        selection: {
+          bundleId: "core-go",
+          query: "Temporal schedules and worker bootstrap",
+          libraries: [{ libraryName: "temporal", libraryId: "/temporalio/temporal" }],
+        },
+        promptText: "Temporal docs snippet",
+      },
+    });
+
+    expect(prompt).toContain("Context7 scope for this run:");
+    expect(prompt).toContain("Bundle: core-go");
+    expect(prompt).toContain("Allowed external libraries: temporal");
+    expect(prompt).toContain("External reference only (Context7, non-canonical)");
+    expect(prompt).toContain("Temporal docs snippet");
+  });
+});
+
+describe("message board parsing", () => {
+  it("recognizes A-style agent ids in action requests", () => {
+    const board = `# Wave 0 Message Board
+
+## Entries
+
+## 2026-03-19T00:00:00.000Z | Agent A0
+- Change: Reviewed the plan.
+- Reason: Keep scope aligned.
+- Impact on other agents: A1 owns the next fix.
+- Action requested (if any): A1 should update the provider contract notes.
+
+## 2026-03-19T00:01:00.000Z | Agent A1
+- Change: Acknowledged and resolved the request.
+- Reason: Address the request.
+- Impact on other agents: None.
+- Action requested (if any): None.
+`;
+
+    const entries = parseMessageBoardEntries(board);
+    expect(entries[0]?.targetOwners).toEqual(["A1"]);
+
+    const dir = makeTempDir();
+    const boardPath = path.join(dir, "wave-0.md");
+    fs.writeFileSync(boardPath, board, "utf8");
+
+    expect(analyzeMessageBoardCommunication(boardPath)).toMatchObject({
+      actionableRequests: 1,
+      unresolvedRequests: 0,
+      unacknowledgedRequests: 0,
+    });
+  });
+});
+
+describe("withFileLock", () => {
+  it("recovers stale lock files", () => {
+    const dir = makeTempDir();
+    const lockPath = path.join(dir, "requests.lock");
+    fs.writeFileSync(
+      lockPath,
+      JSON.stringify(
+        {
+          pid: 999999,
+          createdAt: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const result = withFileLock(lockPath, () => "ok", 250);
+
+    expect(result).toBe("ok");
+    expect(fs.existsSync(lockPath)).toBe(false);
+  });
+
+  it("releases the lock after async work completes", async () => {
+    const dir = makeTempDir();
+    const lockPath = path.join(dir, "requests.lock");
+
+    await withFileLock(lockPath, async () => {
+      expect(fs.existsSync(lockPath)).toBe(true);
+    });
+
+    expect(fs.existsSync(lockPath)).toBe(false);
+  });
+});

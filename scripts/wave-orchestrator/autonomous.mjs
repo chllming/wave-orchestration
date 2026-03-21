@@ -1,0 +1,282 @@
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import {
+  DEFAULT_AGENT_LAUNCH_STAGGER_MS,
+  DEFAULT_AGENT_RATE_LIMIT_BASE_DELAY_SECONDS,
+  DEFAULT_AGENT_RATE_LIMIT_MAX_DELAY_SECONDS,
+  DEFAULT_AGENT_RATE_LIMIT_RETRIES,
+  DEFAULT_MAX_RETRIES_PER_WAVE,
+  DEFAULT_TIMEOUT_MINUTES,
+  DEFAULT_WAVE_LANE,
+  REPO_ROOT,
+  buildLanePaths,
+  parseNonNegativeInt,
+  parsePositiveInt,
+  sanitizeLaneName,
+} from "./shared.mjs";
+import {
+  DEFAULT_CODEX_SANDBOX_MODE,
+  normalizeCodexSandboxMode,
+} from "./launcher.mjs";
+import { readRunState } from "./wave-files.mjs";
+
+function printUsage() {
+  console.log(`Usage: node scripts/wave-autonomous.mjs [options]
+
+Options:
+  --lane <name>                 Lane name (default: ${DEFAULT_WAVE_LANE})
+  --timeout-minutes <n>         Per-wave timeout passed to launcher (default: ${DEFAULT_TIMEOUT_MINUTES})
+  --max-retries-per-wave <n>    Per-wave relaunches inside launcher (default: ${DEFAULT_MAX_RETRIES_PER_WAVE})
+  --max-attempts-per-wave <n>   External attempts for each wave (default: 1)
+  --agent-rate-limit-retries <n>
+                                Per-agent retries for 429 or rate-limit errors (default: ${DEFAULT_AGENT_RATE_LIMIT_RETRIES})
+  --agent-rate-limit-base-delay-seconds <n>
+                                Base backoff delay for 429 retries (default: ${DEFAULT_AGENT_RATE_LIMIT_BASE_DELAY_SECONDS})
+  --agent-rate-limit-max-delay-seconds <n>
+                                Max backoff delay for 429 retries (default: ${DEFAULT_AGENT_RATE_LIMIT_MAX_DELAY_SECONDS})
+  --agent-launch-stagger-ms <n> Delay between agent launches (default: ${DEFAULT_AGENT_LAUNCH_STAGGER_MS})
+  --orchestrator-id <id>        Orchestrator ID for coordination board
+  --executor <mode>             Executor mode passed to launcher: codex | local (default: codex)
+  --codex-sandbox <mode>        Codex sandbox mode passed to launcher (default: ${DEFAULT_CODEX_SANDBOX_MODE})
+  --dashboard                   Enable dashboards (default: disabled)
+  --keep-sessions               Keep tmux sessions between waves
+  --keep-terminals              Keep temporary terminal entries between waves
+`);
+}
+
+export function parseArgs(argv) {
+  const options = {
+    lane: DEFAULT_WAVE_LANE,
+    timeoutMinutes: DEFAULT_TIMEOUT_MINUTES,
+    maxRetriesPerWave: DEFAULT_MAX_RETRIES_PER_WAVE,
+    maxAttemptsPerWave: 1,
+    agentRateLimitRetries: DEFAULT_AGENT_RATE_LIMIT_RETRIES,
+    agentRateLimitBaseDelaySeconds: DEFAULT_AGENT_RATE_LIMIT_BASE_DELAY_SECONDS,
+    agentRateLimitMaxDelaySeconds: DEFAULT_AGENT_RATE_LIMIT_MAX_DELAY_SECONDS,
+    agentLaunchStaggerMs: DEFAULT_AGENT_LAUNCH_STAGGER_MS,
+    orchestratorId: null,
+    executorMode: "codex",
+    codexSandboxMode: DEFAULT_CODEX_SANDBOX_MODE,
+    noDashboard: true,
+    keepSessions: false,
+    keepTerminals: false,
+  };
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === "--") {
+      continue;
+    }
+    if (arg === "--help" || arg === "-h") {
+      return { help: true, options };
+    }
+    if (arg === "--lane") {
+      options.lane = sanitizeLaneName(argv[++i]);
+    } else if (arg === "--timeout-minutes") {
+      options.timeoutMinutes = parsePositiveInt(argv[++i], "--timeout-minutes");
+    } else if (arg === "--max-retries-per-wave") {
+      options.maxRetriesPerWave = parseNonNegativeInt(argv[++i], "--max-retries-per-wave");
+    } else if (arg === "--max-attempts-per-wave") {
+      options.maxAttemptsPerWave = parsePositiveInt(argv[++i], "--max-attempts-per-wave");
+    } else if (arg === "--agent-rate-limit-retries") {
+      options.agentRateLimitRetries = parseNonNegativeInt(argv[++i], "--agent-rate-limit-retries");
+    } else if (arg === "--agent-rate-limit-base-delay-seconds") {
+      options.agentRateLimitBaseDelaySeconds = parsePositiveInt(
+        argv[++i],
+        "--agent-rate-limit-base-delay-seconds",
+      );
+    } else if (arg === "--agent-rate-limit-max-delay-seconds") {
+      options.agentRateLimitMaxDelaySeconds = parsePositiveInt(
+        argv[++i],
+        "--agent-rate-limit-max-delay-seconds",
+      );
+    } else if (arg === "--agent-launch-stagger-ms") {
+      options.agentLaunchStaggerMs = parseNonNegativeInt(argv[++i], "--agent-launch-stagger-ms");
+    } else if (arg === "--orchestrator-id") {
+      options.orchestratorId = String(argv[++i] || "").trim();
+    } else if (arg === "--executor") {
+      options.executorMode = String(argv[++i] || "")
+        .trim()
+        .toLowerCase();
+    } else if (arg === "--codex-sandbox") {
+      options.codexSandboxMode = normalizeCodexSandboxMode(argv[++i], "--codex-sandbox");
+    } else if (arg === "--dashboard") {
+      options.noDashboard = false;
+    } else if (arg === "--keep-sessions") {
+      options.keepSessions = true;
+    } else if (arg === "--keep-terminals") {
+      options.keepTerminals = true;
+    } else {
+      throw new Error(`Unknown argument: ${arg}`);
+    }
+  }
+  options.orchestratorId ||= `${options.lane}-autonomous`;
+  if (!["codex", "local"].includes(options.executorMode)) {
+    throw new Error(`--executor must be one of: codex, local (got: ${options.executorMode})`);
+  }
+  if (options.executorMode !== "codex") {
+    throw new Error(
+      "Autonomous mode requires --executor codex. The local executor is for smoke tests only.",
+    );
+  }
+  if (options.agentRateLimitMaxDelaySeconds < options.agentRateLimitBaseDelaySeconds) {
+    throw new Error(
+      "--agent-rate-limit-max-delay-seconds must be >= --agent-rate-limit-base-delay-seconds",
+    );
+  }
+  return { help: false, options };
+}
+
+function getWaveNumbers(lane) {
+  const lanePaths = buildLanePaths(lane);
+  if (!fs.existsSync(lanePaths.wavesDir)) {
+    throw new Error(`Waves directory not found: ${path.relative(REPO_ROOT, lanePaths.wavesDir)}`);
+  }
+  const waveNumbers = fs
+    .readdirSync(lanePaths.wavesDir)
+    .filter((name) => /^wave-\d+\.md$/.test(name))
+    .map((name) => Number.parseInt(name.match(/^wave-(\d+)\.md$/)[1], 10))
+    .toSorted((a, b) => a - b);
+  if (waveNumbers.length === 0) {
+    throw new Error(`No wave files found in ${path.relative(REPO_ROOT, lanePaths.wavesDir)}`);
+  }
+  return waveNumbers;
+}
+
+export function nextIncompleteWave(allWaves, completed) {
+  const done = new Set(completed);
+  for (const wave of allWaves) {
+    if (!done.has(wave)) {
+      return wave;
+    }
+  }
+  return null;
+}
+
+function runCommand(args) {
+  const result = spawnSync("node", args, {
+    cwd: REPO_ROOT,
+    stdio: "inherit",
+    env: process.env,
+  });
+  return Number.isInteger(result.status) ? result.status : 1;
+}
+
+function reconcile(lane) {
+  return runCommand(["scripts/wave-launcher.mjs", "--lane", lane, "--reconcile-status"]);
+}
+
+function dryRun(lane) {
+  return runCommand(["scripts/wave-launcher.mjs", "--lane", lane, "--dry-run", "--no-dashboard"]);
+}
+
+function listPendingFeedback(lane) {
+  return runCommand(["scripts/wave-human-feedback.mjs", "list", "--lane", lane, "--pending"]);
+}
+
+function launchSingleWave(params) {
+  const args = [
+    "scripts/wave-launcher.mjs",
+    "--lane",
+    params.lane,
+    "--start-wave",
+    String(params.wave),
+    "--end-wave",
+    String(params.wave),
+    "--timeout-minutes",
+    String(params.timeoutMinutes),
+    "--max-retries-per-wave",
+    String(params.maxRetriesPerWave),
+    "--agent-rate-limit-retries",
+    String(params.agentRateLimitRetries),
+    "--agent-rate-limit-base-delay-seconds",
+    String(params.agentRateLimitBaseDelaySeconds),
+    "--agent-rate-limit-max-delay-seconds",
+    String(params.agentRateLimitMaxDelaySeconds),
+    "--agent-launch-stagger-ms",
+    String(params.agentLaunchStaggerMs),
+    "--executor",
+    params.executorMode,
+    "--codex-sandbox",
+    params.codexSandboxMode,
+    "--orchestrator-id",
+    params.orchestratorId,
+    "--coordination-note",
+    `autonomous single-wave run wave=${params.wave} attempt=${params.attempt}`,
+  ];
+  if (params.noDashboard) {
+    args.push("--no-dashboard");
+  }
+  if (params.keepSessions) {
+    args.push("--keep-sessions");
+  }
+  if (params.keepTerminals) {
+    args.push("--keep-terminals");
+  }
+  return runCommand(args);
+}
+
+export function runAutonomousCli(argv) {
+  const parsed = parseArgs(argv);
+  if (parsed.help) {
+    printUsage();
+    return;
+  }
+  const options = parsed.options;
+  const allWaves = getWaveNumbers(options.lane);
+  console.log(`[autonomous] lane=${options.lane} orchestrator=${options.orchestratorId}`);
+  console.log(`[autonomous] executor=${options.executorMode}`);
+  console.log(`[autonomous] codex_sandbox=${options.codexSandboxMode}`);
+  console.log(`[autonomous] waves=${allWaves.join(", ")}`);
+
+  const dryRunStatus = dryRun(options.lane);
+  if (dryRunStatus !== 0) {
+    throw new Error(`[autonomous] dry-run preflight failed with status=${dryRunStatus}`);
+  }
+  const feedbackListStatus = listPendingFeedback(options.lane);
+  if (feedbackListStatus !== 0) {
+    throw new Error(`[autonomous] feedback preflight failed with status=${feedbackListStatus}`);
+  }
+  const reconcileStatus = reconcile(options.lane);
+  if (reconcileStatus !== 0) {
+    throw new Error(`[autonomous] initial reconcile failed with status=${reconcileStatus}`);
+  }
+
+  let launchedCount = 0;
+  const lanePaths = buildLanePaths(options.lane);
+  while (true) {
+    const completed = readRunState(lanePaths.defaultRunStatePath).completedWaves;
+    const wave = nextIncompleteWave(allWaves, completed);
+    if (wave === null) {
+      console.log(`[autonomous] all waves complete for lane=${options.lane}`);
+      break;
+    }
+    let success = false;
+    for (let attempt = 1; attempt <= options.maxAttemptsPerWave; attempt += 1) {
+      console.log(
+        `\n[autonomous] launching wave ${wave} (attempt ${attempt}/${options.maxAttemptsPerWave})`,
+      );
+      const status = launchSingleWave({
+        ...options,
+        wave,
+        attempt,
+      });
+      reconcile(options.lane);
+      if (status === 0) {
+        launchedCount += 1;
+        success = true;
+        console.log(`[autonomous] wave ${wave} completed.`);
+        break;
+      }
+      console.warn(`[autonomous] wave ${wave} failed with status=${status}.`);
+      break;
+    }
+    if (!success) {
+      throw new Error(`Stopping after repeated failures on wave ${wave}.`);
+    }
+  }
+  const finalCompleted = readRunState(lanePaths.defaultRunStatePath).completedWaves;
+  console.log(
+    `[autonomous] launched waves=${launchedCount}; completed=${finalCompleted.join(", ") || "none"}`,
+  );
+}

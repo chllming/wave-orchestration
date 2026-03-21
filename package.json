@@ -1,0 +1,30 @@
+{
+  "name": "wave-orchestration",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "description": "Generic wave-based multi-agent orchestration for repository work.",
+  "packageManager": "pnpm@10.23.0",
+  "bin": {
+    "wave-launch": "./scripts/wave-launcher.mjs",
+    "wave-autonomous": "./scripts/wave-autonomous.mjs",
+    "wave-feedback": "./scripts/wave-human-feedback.mjs",
+    "wave-dashboard": "./scripts/wave-dashboard.mjs",
+    "wave-local-executor": "./scripts/wave-local-executor.mjs"
+  },
+  "scripts": {
+    "context7:api-check": "bash scripts/context7-export-env.sh run bash scripts/context7-api-check.sh",
+    "test": "vitest run --config vitest.config.ts",
+    "wave:autonomous": "node scripts/wave-autonomous.mjs",
+    "wave:dashboard": "node scripts/wave-dashboard.mjs",
+    "wave:feedback": "node scripts/wave-human-feedback.mjs",
+    "wave:launch": "node scripts/wave-launcher.mjs",
+    "wave:local": "node scripts/wave-local-executor.mjs"
+  },
+  "devDependencies": {
+    "@mozilla/readability": "^0.6.0",
+    "jsdom": "^29.0.1",
+    "pdfjs-dist": "^5.5.207",
+    "vitest": "3.2.4"
+  }
+}

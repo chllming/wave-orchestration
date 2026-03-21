@@ -1,0 +1,74 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  resolveRepoOwnedDeliverablePath,
+  runLocalExecutorCli,
+} from "../../scripts/wave-orchestrator/local-executor.mjs";
+import { REPO_ROOT } from "../../scripts/wave-orchestrator/shared.mjs";
+
+const tempPaths = [];
+
+function registerTempPath(targetPath) {
+  tempPaths.push(targetPath);
+  return targetPath;
+}
+
+afterEach(() => {
+  for (const targetPath of tempPaths.splice(0)) {
+    fs.rmSync(targetPath, { recursive: true, force: true });
+  }
+  vi.restoreAllMocks();
+});
+
+describe("resolveRepoOwnedDeliverablePath", () => {
+  it("rejects deliverables that escape the repo root", () => {
+    expect(() => resolveRepoOwnedDeliverablePath("../outside.md")).toThrow(/escapes repo root/);
+    expect(() => resolveRepoOwnedDeliverablePath("/tmp/outside.md")).toThrow(
+      /Unsafe deliverable path/,
+    );
+  });
+});
+
+describe("runLocalExecutorCli", () => {
+  it("writes evaluator placeholders with a verdict and emits a wave verdict marker", () => {
+    const promptFile = registerTempPath(
+      path.join(fs.mkdtempSync(path.join(os.tmpdir(), "slowfast-wave-local-")), "prompt.md"),
+    );
+    const deliverable = `.tmp/wave-local-executor-test-${Date.now()}-${Math.random()
+      .toString(16)
+      .slice(2)}/wave-0-evaluator.md`;
+    registerTempPath(path.join(REPO_ROOT, path.dirname(deliverable)));
+
+    fs.writeFileSync(
+      promptFile,
+      `You are Codex running Wave 0 / Agent A0: Evaluator.
+
+Assigned implementation prompt:
+\`\`\`text
+You are the LEAP-Claw running evaluator for the current wave.
+
+Primary goal:
+- Keep the wave coherent.
+
+File ownership (only touch these paths):
+- ${deliverable}
+\`\`\`
+`,
+      "utf8",
+    );
+
+    const logs = [];
+    vi.spyOn(console, "log").mockImplementation((...args) => {
+      logs.push(args.join(" "));
+    });
+
+    runLocalExecutorCli(["--prompt-file", promptFile]);
+
+    const reportPath = path.join(REPO_ROOT, deliverable);
+    expect(fs.readFileSync(reportPath, "utf8")).toContain("Verdict: PASS");
+    expect(logs.some((line) => line.includes("[wave-gate] architecture=pass"))).toBe(true);
+    expect(logs.some((line) => line.includes("[wave-verdict] pass"))).toBe(true);
+  });
+});

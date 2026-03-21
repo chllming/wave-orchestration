@@ -1,0 +1,91 @@
+{
+  "version": 1,
+  "defaultBundle": "none",
+  "laneDefaults": {
+    "main": "none"
+  },
+  "bundles": {
+    "none": {
+      "description": "Disable Context7 prefetch for this run.",
+      "libraries": []
+    },
+    "node-typescript": {
+      "description": "Node.js and TypeScript runtime docs for JavaScript service and tooling work.",
+      "libraries": [
+        {
+          "libraryName": "nodejs",
+          "queryHint": "runtime APIs, child processes, streams, filesystem behavior, and process lifecycle"
+        },
+        {
+          "libraryName": "typescript",
+          "queryHint": "types, declarations, module resolution, tsconfig, and compiler behavior"
+        }
+      ]
+    },
+    "react-web": {
+      "description": "React and Next.js docs for frontend work.",
+      "libraries": [
+        {
+          "libraryName": "react",
+          "queryHint": "components, hooks, rendering, forms, and data flow"
+        },
+        {
+          "libraryName": "nextjs",
+          "queryHint": "routing, server components, data fetching, and app router behavior"
+        }
+      ]
+    },
+    "python-services": {
+      "description": "Python backend docs for API and worker services.",
+      "libraries": [
+        {
+          "libraryName": "python",
+          "queryHint": "language features, packaging, typing, and standard library behavior"
+        },
+        {
+          "libraryName": "fastapi",
+          "queryHint": "routing, request validation, dependency injection, and OpenAPI behavior"
+        }
+      ]
+    },
+    "go-services": {
+      "description": "Go service and workflow docs for backend work.",
+      "libraries": [
+        {
+          "libraryName": "golang",
+          "queryHint": "packages, testing, concurrency, errors, and module layout"
+        },
+        {
+          "libraryName": "temporal",
+          "queryHint": "workflow setup, activities, schedules, retries, and worker bootstrap"
+        }
+      ]
+    },
+    "persistence": {
+      "description": "Database and storage docs for persistence work.",
+      "libraries": [
+        {
+          "libraryName": "postgresql",
+          "queryHint": "schema changes, indexes, transactions, constraints, and query behavior"
+        },
+        {
+          "libraryName": "sqlite",
+          "queryHint": "local persistence, fts, schema migration, and durability patterns"
+        }
+      ]
+    },
+    "infra-ops": {
+      "description": "Infrastructure and service-manager docs for deployment and operations work.",
+      "libraries": [
+        {
+          "libraryName": "docker",
+          "queryHint": "images, builds, volumes, networking, and runtime configuration"
+        },
+        {
+          "libraryName": "systemd",
+          "queryHint": "units, dependencies, restart policies, readiness, and service management"
+        }
+      ]
+    }
+  }
+}
