@@ -2133,6 +2133,13 @@ function isClosureAgentId(agentId, lanePaths) {
   ].includes(agentId);
 }
 
+export function selectInitialWaveRuns(agentRuns, lanePaths) {
+  const implementationRuns = (agentRuns || []).filter(
+    (run) => !isClosureAgentId(run?.agent?.agentId, lanePaths),
+  );
+  return implementationRuns.length > 0 ? implementationRuns : agentRuns;
+}
+
 function isLauncherSeedRequest(record) {
   return (
     record?.source === "launcher" &&
@@ -3149,7 +3156,10 @@ export async function runLauncherCli(argv) {
           });
         }
 
-        let runsToLaunch = agentRuns.filter((run) => !preCompletedAgentIds.has(run.agent.agentId));
+        let runsToLaunch = selectInitialWaveRuns(
+          agentRuns.filter((run) => !preCompletedAgentIds.has(run.agent.agentId)),
+          lanePaths,
+        );
         let attempt = 1;
         const feedbackStateByRequestId = new Map();
 
@@ -3271,16 +3281,19 @@ export async function runLauncherCli(argv) {
 
             const waitResult = await waitForWaveCompletion(
               lanePaths,
-              agentRuns,
+              runsToLaunch,
               options.timeoutMinutes,
               ({ pendingAgentIds }) => {
-                refreshWaveDashboardAgentStates(dashboardState, agentRuns, pendingAgentIds, (event) =>
-                  recordCombinedEvent(event),
+                refreshWaveDashboardAgentStates(
+                  dashboardState,
+                  runsToLaunch,
+                  pendingAgentIds,
+                  (event) => recordCombinedEvent(event),
                 );
                 monitorWaveHumanFeedback({
                   lanePaths,
                   waveNumber: wave.wave,
-                  agentRuns,
+                  agentRuns: runsToLaunch,
                   orchestratorId: options.orchestratorId,
                   coordinationLogPath: derivedState.coordinationLogPath,
                   feedbackStateByRequestId,

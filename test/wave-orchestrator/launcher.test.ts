@@ -18,6 +18,7 @@ import {
   releaseLauncherLock,
   resolveRelaunchRuns,
   runClosureSweepPhase,
+  selectInitialWaveRuns,
 } from "../../scripts/wave-orchestrator/launcher.mjs";
 import { materializeCoordinationState } from "../../scripts/wave-orchestrator/coordination-store.mjs";
 import { hashAgentPromptFingerprint } from "../../scripts/wave-orchestrator/context7.mjs";
@@ -872,6 +873,37 @@ describe("runClosureSweepPhase", () => {
       agentId: "A8",
       statusCode: "integration-needs-more-work",
     });
+  });
+});
+
+describe("selectInitialWaveRuns", () => {
+  it("launches only implementation agents before the closure sweep", () => {
+    const lanePaths = makeLanePaths(makeTempDir());
+    const runs = [
+      { agent: { agentId: "A1", title: "Implementation" } },
+      { agent: { agentId: "A8", title: "Integration" } },
+      { agent: { agentId: "A9", title: "Docs" } },
+      { agent: { agentId: "A0", title: "Evaluator" } },
+    ];
+
+    expect(selectInitialWaveRuns(runs, lanePaths).map((run) => run.agent.agentId)).toEqual([
+      "A1",
+    ]);
+  });
+
+  it("preserves closure-only retries when no implementation agents remain", () => {
+    const lanePaths = makeLanePaths(makeTempDir());
+    const runs = [
+      { agent: { agentId: "A8", title: "Integration" } },
+      { agent: { agentId: "A9", title: "Docs" } },
+      { agent: { agentId: "A0", title: "Evaluator" } },
+    ];
+
+    expect(selectInitialWaveRuns(runs, lanePaths).map((run) => run.agent.agentId)).toEqual([
+      "A8",
+      "A9",
+      "A0",
+    ]);
   });
 });
 
