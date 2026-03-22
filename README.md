@@ -17,9 +17,9 @@ It includes:
 ## Quick Start
 
 Published package:
-- `@chllming/wave-orchestration@0.5.1`
+- `@chllming/wave-orchestration@0.5.2`
 - Current release registry: `https://registry.npmjs.org`
-- Release: [v0.5.1](https://github.com/chllming/wave-orchestration/releases/tag/v0.5.1)
+- Release: [v0.5.2](https://github.com/chllming/wave-orchestration/releases/tag/v0.5.2)
 - npmjs trusted publishing workflow: [publish-npm.yml](./.github/workflows/publish-npm.yml)
 
 Install directly from npmjs:
@@ -37,6 +37,12 @@ If your repo already has Wave config, docs, or waves you want to keep:
 ```bash
 pnpm exec wave init --adopt-existing
 ```
+
+## New In 0.5.2
+
+- Example `[wave-*]` markers inside fenced snippets or prose no longer satisfy closure; only real standalone structured signals count.
+- `### Deliverables` is now enforced as an ownership-scoped file contract, so declared outputs must stay inside that agent's `File ownership` block.
+- Regression coverage now includes both of those failure paths directly.
 
 ## New In 0.5.1
 
