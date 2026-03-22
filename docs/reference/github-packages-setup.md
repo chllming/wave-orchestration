@@ -3,6 +3,7 @@
 Use this package through GitHub Packages under the `@chllming` scope.
 
 GitHub's npm registry still requires authentication for installs from `npm.pkg.github.com`, even when the package and backing repository are public.
+This remains the current install path for released versions until the npmjs publish workflow is used for a public npmjs release. If you want to prepare zero-token npmjs publishing for future releases, see [npmjs-trusted-publishing.md](./npmjs-trusted-publishing.md).
 
 ## `.npmrc`
 

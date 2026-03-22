@@ -18,10 +18,11 @@ It includes:
 
 Published package:
 - `@chllming/wave-orchestration@0.5.0`
-- Registry: `https://npm.pkg.github.com`
+- Current release registry: `https://npm.pkg.github.com`
 - Release: [v0.5.0](https://github.com/chllming/wave-orchestration/releases/tag/v0.5.0)
+- npmjs trusted publishing workflow: [publish-npm.yml](./.github/workflows/publish-npm.yml)
 
-Install:
+Install after configuring the current GitHub Packages path from [github-packages-setup.md](./docs/reference/github-packages-setup.md):
 
 ```bash
 pnpm add -D @chllming/wave-orchestration
@@ -54,7 +55,9 @@ pnpm exec wave init --adopt-existing
 
 ## Install Into Another Repo
 
-1. Configure GitHub Packages auth as shown in [github-packages-setup.md](./docs/reference/github-packages-setup.md).
+1. Use the current GitHub Packages install path from [github-packages-setup.md](./docs/reference/github-packages-setup.md).
+
+   npmjs trusted publishing is prepared in this repo, but zero-token npmjs installs only become available after the first npmjs release is published.
 
    GitHub Packages npm installs still require authentication, even for public packages on `npm.pkg.github.com`.
 
@@ -137,6 +140,7 @@ node scripts/wave.mjs launch --lane main --start-wave 0 --end-wave 0 --executor 
 - [docs/plans/master-plan.md](./docs/plans/master-plan.md): next priorities after the current shipped runtime
 - [docs/plans/migration.md](./docs/plans/migration.md): adopt this package into another repository
 - [docs/reference/github-packages-setup.md](./docs/reference/github-packages-setup.md): `.npmrc` and GitHub Packages auth details
+- [docs/reference/npmjs-trusted-publishing.md](./docs/reference/npmjs-trusted-publishing.md): maintainer setup for zero-token npmjs publishing from GitHub Actions
 - [docs/reference/runtime-config/README.md](./docs/reference/runtime-config/README.md): runtime precedence, merge rules, and generated artifact paths
 - [docs/reference/runtime-config/codex.md](./docs/reference/runtime-config/codex.md): full Codex configuration reference
 - [docs/reference/runtime-config/claude.md](./docs/reference/runtime-config/claude.md): full Claude configuration reference
