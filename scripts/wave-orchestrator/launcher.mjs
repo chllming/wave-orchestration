@@ -87,9 +87,12 @@ import {
   createGlobalDashboardTerminalEntry,
   createTemporaryTerminalEntries,
   killTmuxSessionIfExists,
+  normalizeTerminalSurface,
   pruneOrphanLaneTemporaryTerminalEntries,
   removeLaneTemporaryTerminalEntries,
   removeTerminalEntries,
+  terminalSurfaceUsesTerminalRegistry,
+  TERMINAL_SURFACES,
 } from "./terminals.mjs";
 import {
   buildCodexExecInvocation,
@@ -124,6 +127,7 @@ import { buildDocsQueue, readDocsQueue, writeDocsQueue } from "./docs-queue.mjs"
 import { deriveWaveLedger, readWaveLedger, writeWaveLedger } from "./ledger.mjs";
 import { buildQualityMetrics, writeTraceBundle } from "./traces.mjs";
 import { triageClarificationRequests } from "./clarification-triage.mjs";
+import { readProjectProfile, resolveDefaultTerminalSurface } from "./project-profile.mjs";
 import {
   buildDependencySnapshot,
   buildRequestAssignments,
@@ -133,7 +137,7 @@ import {
 } from "./routing-state.mjs";
 export { CODEX_SANDBOX_MODES, DEFAULT_CODEX_SANDBOX_MODE, normalizeCodexSandboxMode, buildCodexExecInvocation };
 
-function printUsage(lanePaths) {
+function printUsage(lanePaths, terminalSurface) {
   console.log(`Usage: pnpm exec wave launch [options]
 
 Options:
@@ -158,6 +162,8 @@ Options:
   --codex-sandbox <mode> Codex sandbox mode: ${CODEX_SANDBOX_MODES.join(" | ")} (default: ${DEFAULT_CODEX_SANDBOX_MODE})
   --manifest-out <path>  Write parsed wave manifest JSON (default: ${path.relative(REPO_ROOT, lanePaths.defaultManifestPath)})
   --dry-run              Parse waves and update manifest only
+  --terminal-surface <mode>
+                        Terminal surface: ${TERMINAL_SURFACES.join(" | ")} (default: ${terminalSurface})
   --no-dashboard         Disable per-wave tmux dashboard session
   --cleanup-sessions     Kill lane tmux sessions after each wave (default: on)
   --keep-sessions        Keep lane tmux sessions after each wave
@@ -176,6 +182,7 @@ Options:
 
 function parseArgs(argv) {
   let lanePaths = buildLanePaths(DEFAULT_WAVE_LANE);
+  const projectProfile = readProjectProfile();
   const options = {
     lane: DEFAULT_WAVE_LANE,
     startWave: 0,
@@ -193,6 +200,7 @@ function parseArgs(argv) {
     codexSandboxMode: DEFAULT_CODEX_SANDBOX_MODE,
     manifestOut: lanePaths.defaultManifestPath,
     dryRun: false,
+    terminalSurface: resolveDefaultTerminalSurface(projectProfile),
     dashboard: true,
     cleanupSessions: true,
     keepTerminals: false,
@@ -216,6 +224,8 @@ function parseArgs(argv) {
     }
     if (arg === "--dry-run") {
       options.dryRun = true;
+    } else if (arg === "--terminal-surface") {
+      options.terminalSurface = normalizeTerminalSurface(argv[++i], "--terminal-surface");
     } else if (arg === "--no-dashboard") {
       options.dashboard = false;
     } else if (arg === "--cleanup-sessions") {
@@ -304,6 +314,9 @@ function parseArgs(argv) {
   }
   if (!options.autoNext && options.endWave !== null && options.endWave < options.startWave) {
     throw new Error("--end-wave must be >= --start-wave");
+  }
+  if (!options.dryRun && options.terminalSurface === "none") {
+    throw new Error("--terminal-surface none is only supported with --dry-run");
   }
   return { help: false, lanePaths, options };
 }
@@ -1573,7 +1586,7 @@ function removeOrphanWaveDashboards(lanePaths, activeSessionNames) {
   return removedDashboardPaths;
 }
 
-export function reconcileStaleLauncherArtifacts(lanePaths) {
+export function reconcileStaleLauncherArtifacts(lanePaths, options = {}) {
   const outcome = {
     removedLock: false,
     removedSessions: [],
@@ -1597,12 +1610,14 @@ export function reconcileStaleLauncherArtifacts(lanePaths) {
 
   outcome.removedSessions = cleanupLaneTmuxSessions(lanePaths);
   const activeSessionNames = new Set(listLaneTmuxSessionNames(lanePaths));
-  const terminalCleanup = pruneOrphanLaneTemporaryTerminalEntries(
-    lanePaths.terminalsPath,
-    lanePaths,
-    activeSessionNames,
-  );
-  outcome.removedTerminalNames = terminalCleanup.removedNames;
+  if (terminalSurfaceUsesTerminalRegistry(options.terminalSurface || "vscode")) {
+    const terminalCleanup = pruneOrphanLaneTemporaryTerminalEntries(
+      lanePaths.terminalsPath,
+      lanePaths,
+      activeSessionNames,
+    );
+    outcome.removedTerminalNames = terminalCleanup.removedNames;
+  }
 
   const globalDashboard = readJsonOrNull(lanePaths.globalDashboardPath);
   if (globalDashboard && typeof globalDashboard === "object" && Array.isArray(globalDashboard.waves)) {
@@ -2671,7 +2686,7 @@ function preflightWavesForExecutorAvailability(waves, lanePaths) {
 export async function runLauncherCli(argv) {
   const parsed = parseArgs(argv);
   if (parsed.help) {
-    printUsage(parsed.lanePaths);
+    printUsage(parsed.lanePaths, parsed.options.terminalSurface);
     return;
   }
   const { lanePaths, options } = parsed;
@@ -2743,7 +2758,9 @@ export async function runLauncherCli(argv) {
   }
 
   try {
-    const staleArtifactCleanup = reconcileStaleLauncherArtifacts(lanePaths);
+    const staleArtifactCleanup = reconcileStaleLauncherArtifacts(lanePaths, {
+      terminalSurface: options.terminalSurface,
+    });
     const context7BundleIndex = loadContext7BundleIndex(lanePaths.context7BundleIndexPath);
     const allWaves = parseWaveFiles(lanePaths.wavesDir, { laneProfile: lanePaths.laneProfile })
       .map((wave) =>
@@ -2924,9 +2941,12 @@ export async function runLauncherCli(argv) {
       return;
     }
 
-    preflightWavesForExecutorAvailability(filteredWaves, lanePaths);
+	    preflightWavesForExecutorAvailability(filteredWaves, lanePaths);
+	    const terminalRegistryEnabled = terminalSurfaceUsesTerminalRegistry(
+	      options.terminalSurface,
+	    );
 
-    globalDashboard = buildGlobalDashboardState({
+	    globalDashboard = buildGlobalDashboardState({
       lane: lanePaths.lane,
       selectedWaves: filteredWaves,
       options,
@@ -2936,10 +2956,10 @@ export async function runLauncherCli(argv) {
     });
     writeGlobalDashboard(lanePaths.globalDashboardPath, globalDashboard);
 
-    if (!options.keepTerminals) {
-      const removed = removeLaneTemporaryTerminalEntries(lanePaths.terminalsPath, lanePaths);
-      if (removed > 0) {
-        recordGlobalDashboardEvent(globalDashboard, {
+	    if (terminalRegistryEnabled && !options.keepTerminals) {
+	      const removed = removeLaneTemporaryTerminalEntries(lanePaths.terminalsPath, lanePaths);
+	      if (removed > 0) {
+	        recordGlobalDashboardEvent(globalDashboard, {
           message: `Removed ${removed} stale temporary terminal entries for lane ${lanePaths.lane}.`,
         });
       }
@@ -2955,16 +2975,18 @@ export async function runLauncherCli(argv) {
     }
     writeGlobalDashboard(lanePaths.globalDashboardPath, globalDashboard);
 
-    if (options.dashboard) {
-      globalDashboardTerminalEntry = createGlobalDashboardTerminalEntry(
-        lanePaths,
-        globalDashboard.runId || "global",
-      );
-      appendTerminalEntries(lanePaths.terminalsPath, [globalDashboardTerminalEntry]);
-      globalDashboardTerminalAppended = true;
-      launchWaveDashboardSession(lanePaths, {
-        sessionName: globalDashboardTerminalEntry.sessionName,
-        dashboardPath: lanePaths.globalDashboardPath,
+	    if (options.dashboard) {
+	      globalDashboardTerminalEntry = createGlobalDashboardTerminalEntry(
+	        lanePaths,
+	        globalDashboard.runId || "global",
+	      );
+	      if (terminalRegistryEnabled) {
+	        appendTerminalEntries(lanePaths.terminalsPath, [globalDashboardTerminalEntry]);
+	        globalDashboardTerminalAppended = true;
+	      }
+	      launchWaveDashboardSession(lanePaths, {
+	        sessionName: globalDashboardTerminalEntry.sessionName,
+	        dashboardPath: lanePaths.globalDashboardPath,
       });
       console.log(
         `[dashboard] tmux -L ${lanePaths.tmuxSocketName} attach -t ${globalDashboardTerminalEntry.sessionName}`,
@@ -3033,15 +3055,17 @@ export async function runLauncherCli(argv) {
       };
 
       try {
-        terminalEntries = createTemporaryTerminalEntries(
-          lanePaths,
-          wave.wave,
-          wave.agents,
-          runTag,
-          options.dashboard,
-        );
-        appendTerminalEntries(lanePaths.terminalsPath, terminalEntries);
-        terminalsAppended = true;
+	        terminalEntries = createTemporaryTerminalEntries(
+	          lanePaths,
+	          wave.wave,
+	          wave.agents,
+	          runTag,
+	          options.dashboard,
+	        );
+	        if (terminalRegistryEnabled) {
+	          appendTerminalEntries(lanePaths.terminalsPath, terminalEntries);
+	          terminalsAppended = true;
+	        }
 
         const agentRuns = wave.agents.map((agent) => {
           const safeName = `wave-${wave.wave}-${agent.slug}`;
