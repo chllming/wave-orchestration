@@ -23,11 +23,15 @@ function extractAgentId(rawPrompt) {
 
 function extractRoleAgentIds(rawPrompt) {
   const evaluatorMatch = String(rawPrompt || "").match(/- Evaluator agent id:\s*([A-Za-z0-9.]+)/);
+  const integrationMatch = String(rawPrompt || "").match(
+    /- Integration steward agent id:\s*([A-Za-z0-9.]+)/,
+  );
   const documentationMatch = String(rawPrompt || "").match(
     /- Documentation steward agent id:\s*([A-Za-z0-9.]+)/,
   );
   return {
     evaluatorAgentId: evaluatorMatch ? evaluatorMatch[1].trim() : "A0",
+    integrationAgentId: integrationMatch ? integrationMatch[1].trim() : "A8",
     documentationAgentId: documentationMatch ? documentationMatch[1].trim() : "A9",
   };
 }
@@ -194,8 +198,9 @@ export function runLocalExecutorCli(argv) {
   }
   const rawPrompt = fs.readFileSync(options.promptFile, "utf8");
   const agentId = extractAgentId(rawPrompt);
-  const { evaluatorAgentId, documentationAgentId } = extractRoleAgentIds(rawPrompt);
+  const { evaluatorAgentId, integrationAgentId, documentationAgentId } = extractRoleAgentIds(rawPrompt);
   const evaluatorAgent = agentId === evaluatorAgentId;
+  const integrationAgent = agentId === integrationAgentId;
   const ownedComponents = extractOwnedComponents(rawPrompt);
   const assignedPrompt = extractAssignedPrompt(rawPrompt);
   const deliverables = extractDeliverables(assignedPrompt);
@@ -206,6 +211,10 @@ export function runLocalExecutorCli(argv) {
         "[wave-gate] architecture=pass integration=pass durability=pass live=pass docs=pass detail=local-executor-no-deliverables",
       );
       console.log("[wave-verdict] pass detail=local-executor-no-deliverables");
+    } else if (integrationAgent) {
+      console.log(
+        "[wave-integration] state=ready-for-doc-closure claims=0 conflicts=0 blockers=0 detail=local-executor-no-deliverables",
+      );
     } else if (agentId === documentationAgentId) {
       console.log("[wave-doc-closure] state=no-change detail=local-executor-no-deliverables");
     } else if (agentId) {
@@ -233,6 +242,10 @@ export function runLocalExecutorCli(argv) {
       "[wave-gate] architecture=pass integration=pass durability=pass live=pass docs=pass detail=local-executor-smoke",
     );
     console.log("[wave-verdict] pass detail=local-executor-smoke");
+  } else if (integrationAgent) {
+    console.log(
+      "[wave-integration] state=ready-for-doc-closure claims=0 conflicts=0 blockers=0 detail=local-executor-smoke",
+    );
   } else if (agentId === documentationAgentId) {
     console.log("[wave-doc-closure] state=no-change detail=local-executor-smoke");
   } else if (agentId) {

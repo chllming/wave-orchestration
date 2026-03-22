@@ -18,6 +18,8 @@ As of the current repository state:
 - `A8` integration stewardship and staged closure are shipped
 - orchestrator-first clarification triage and human-escalation artifacts are shipped
 - per-agent executor profiles, per-lane runtime policy, hard runtime mix targets, retry-time fallback, and generic budgets are shipped
+- required inbound cross-lane dependency tickets now block both autonomous wave launch and lane finalization
+- integration summaries now carry actionable evidence for claims, interface drift, proof gaps, docs gaps, and deploy or ops risk
 - cumulative `quality.json` metrics and internal, read-only hermetic trace replay validation are shipped
 
 The remaining roadmap work is mostly about extending those foundations rather than inventing a new orchestration model.
@@ -570,8 +572,9 @@ Why second:
   - cumulative wave quality metrics
   - runtime-mix and clarification metrics
   - internal replay validation against stored attempt bundles
+  - launcher-generated replay acceptance coverage for hermetic pass, clarification, blocking, and retry/fallback traces
 - still open:
-  - larger continuous-history replay scenario sets
+  - larger continuous-history replay scenario sets across more than one wave
   - a public replay CLI if the internal helper proves stable
 
 Why third:
@@ -582,7 +585,7 @@ Why third:
 
 - capability tags
 - volunteer or dynamic assignment for helper roles
-- typed cross-lane dependency tickets
+- broader operator workflows around typed cross-lane dependency tickets
 
 Why fourth:
 

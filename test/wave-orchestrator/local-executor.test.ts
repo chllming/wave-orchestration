@@ -72,6 +72,48 @@ File ownership (only touch these paths):
     expect(logs.some((line) => line.includes("[wave-verdict] pass"))).toBe(true);
   });
 
+  it("emits integration markers for the integration steward", () => {
+    const promptFile = registerTempPath(
+      path.join(fs.mkdtempSync(path.join(os.tmpdir(), "slowfast-wave-local-")), "prompt.md"),
+    );
+    const deliverable = `.tmp/wave-local-executor-test-${Date.now()}-${Math.random()
+      .toString(16)
+      .slice(2)}/integration.md`;
+    registerTempPath(path.join(REPO_ROOT, path.dirname(deliverable)));
+
+    fs.writeFileSync(
+      promptFile,
+      `You are the Wave executor running Wave 0 / Agent A8: Integration Steward.
+
+- Evaluator agent id: A0
+- Integration steward agent id: A8
+- Documentation steward agent id: A9
+
+Assigned implementation prompt:
+\`\`\`text
+File ownership (only touch these paths):
+- ${deliverable}
+\`\`\`
+`,
+      "utf8",
+    );
+
+    const logs = [];
+    vi.spyOn(console, "log").mockImplementation((...args) => {
+      logs.push(args.join(" "));
+    });
+
+    runLocalExecutorCli(["--prompt-file", promptFile]);
+
+    expect(
+      logs.some((line) =>
+        line.includes(
+          "[wave-integration] state=ready-for-doc-closure claims=0 conflicts=0 blockers=0",
+        ),
+      ),
+    ).toBe(true);
+  });
+
   it("emits component markers for owned components", () => {
     const promptFile = registerTempPath(
       path.join(fs.mkdtempSync(path.join(os.tmpdir(), "slowfast-wave-local-")), "prompt.md"),

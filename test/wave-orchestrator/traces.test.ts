@@ -102,6 +102,91 @@ function listFilesRecursively(dir) {
   return files.toSorted();
 }
 
+function traceAttemptDirForRepo(repoDir, attempt = 1) {
+  return path.join(repoDir, ".tmp", "main-wave-launcher", "traces", "wave-0", `attempt-${attempt}`);
+}
+
+function updateWaveConfig(repoDir, mutate) {
+  const filePath = path.join(repoDir, "wave.config.json");
+  const current = readJson(filePath);
+  const next = mutate(JSON.parse(JSON.stringify(current))) || current;
+  writeJson(filePath, next);
+  return next;
+}
+
+function configureRepoExecutorsForLiveTrace(repoDir, options = {}) {
+  return updateWaveConfig(repoDir, (config) => {
+    config.executors.default = options.defaultExecutor || "local";
+    config.executors.profiles["deep-review"] = {
+      ...config.executors.profiles["deep-review"],
+      id: options.deepReviewExecutor || "local",
+    };
+    config.executors.profiles["docs-pass"] = {
+      ...config.executors.profiles["docs-pass"],
+      id: options.docsExecutor || "local",
+    };
+    config.executors.profiles["implement-fast"] = {
+      ...config.executors.profiles["implement-fast"],
+      id: options.implementFastExecutor || "local",
+      ...(options.implementFastFallbacks
+        ? { fallbacks: options.implementFastFallbacks }
+        : {}),
+    };
+    if (options.codexCommand) {
+      config.executors.codex.command = options.codexCommand;
+    }
+    config.lanes.main.runtimePolicy.runtimeMixTargets =
+      options.runtimeMixTargets || {
+        local: 8,
+      };
+    config.lanes.main.runtimePolicy.defaultExecutorByRole = {
+      implementation: options.defaultExecutorByRole?.implementation || "local",
+      integration: options.defaultExecutorByRole?.integration || "local",
+      documentation: options.defaultExecutorByRole?.documentation || "local",
+      evaluator: options.defaultExecutorByRole?.evaluator || "local",
+      research: options.defaultExecutorByRole?.research || "local",
+      infra: options.defaultExecutorByRole?.infra || "local",
+      deploy: options.defaultExecutorByRole?.deploy || "local",
+    };
+    config.lanes.main.runtimePolicy.fallbackExecutorOrder =
+      options.fallbackExecutorOrder || ["local"];
+    return config;
+  });
+}
+
+function seedCoordinationRecord(repoDir, payload) {
+  const coordinationLogPath = path.join(
+    repoDir,
+    ".tmp",
+    "main-wave-launcher",
+    "coordination",
+    "wave-0.jsonl",
+  );
+  appendCoordinationRecord(coordinationLogPath, payload);
+  return coordinationLogPath;
+}
+
+function removeLiveSourceArtifacts(repoDir) {
+  fs.rmSync(path.join(repoDir, ".tmp", "main-wave-launcher", "status"), {
+    recursive: true,
+    force: true,
+  });
+  fs.rmSync(path.join(repoDir, ".tmp", "main-wave-launcher", "logs"), {
+    recursive: true,
+    force: true,
+  });
+  fs.rmSync(path.join(repoDir, ".tmp", "main-wave-launcher", "coordination"), {
+    recursive: true,
+    force: true,
+  });
+  fs.rmSync(path.join(repoDir, "docs", "plans", "waves", "wave-0.md"), {
+    force: true,
+  });
+  fs.rmSync(path.join(repoDir, "docs", "plans", "component-cutover-matrix.json"), {
+    force: true,
+  });
+}
+
 afterEach(() => {
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -593,6 +678,7 @@ describe("trace bundles", () => {
     expect(bundle.metadata.replayMode).toBe("hermetic");
     expect(Array.isArray(bundle.metadata.historySnapshot.launchEvents)).toBe(true);
     expect(bundle.metadata.artifacts.manifest.present).toBe(true);
+    expect(bundle.metadata.artifacts.outcome.present).toBe(true);
     expect(bundle.metadata.artifacts.structuredSignals.present).toBe(true);
     expect(bundle.metadata.artifacts.sharedSummary.present).toBe(true);
     expect(bundle.metadata.artifacts.agents.A1.prompt.present).toBe(true);
@@ -607,6 +693,8 @@ describe("trace bundles", () => {
     expect(replay.warnings).toEqual([]);
     expect(replay.matchesStoredGateSnapshot).toBe(true);
     expect(replay.matchesStoredQuality).toBe(true);
+    expect(replay.comparison.gateSnapshot.diffPaths).toEqual([]);
+    expect(replay.comparison.quality.diffPaths).toEqual([]);
     expect(filesAfterReplay).toEqual(filesBeforeReplay);
     expect(replay.quality.relaunchCountByRole).toMatchObject({
       implementation: 1,
@@ -653,6 +741,10 @@ describe("trace bundles", () => {
     writeText(path.join(traceDir, "shared-summary.md"), "# Shared summary\n");
     writeJson(path.join(traceDir, "structured-signals.json"), {});
     writeJson(path.join(traceDir, "quality.json"), {});
+    writeJson(path.join(traceDir, "outcome.json"), {
+      gateSnapshot: null,
+      quality: {},
+    });
     writeJson(path.join(traceDir, "run-metadata.json"), {
       traceVersion: 2,
       replayMode: "hermetic",
@@ -693,6 +785,7 @@ describe("trace bundles", () => {
           present: false,
           sha256: null,
         },
+        outcome: { path: "outcome.json", required: true, present: true, sha256: null },
         sharedSummary: { path: "shared-summary.md", required: true, present: true, sha256: null },
         structuredSignals: { path: "structured-signals.json", required: true, present: true, sha256: null },
         quality: { path: "quality.json", required: true, present: true, sha256: null },
@@ -725,6 +818,10 @@ describe("trace bundles", () => {
     writeText(path.join(traceDir, "shared-summary.md"), "# Shared summary\n");
     writeJson(path.join(traceDir, "structured-signals.json"), {});
     writeJson(path.join(traceDir, "quality.json"), {});
+    writeJson(path.join(traceDir, "outcome.json"), {
+      gateSnapshot: null,
+      quality: {},
+    });
     writeJson(path.join(traceDir, "run-metadata.json"), {
       traceVersion: 2,
       replayMode: "hermetic",
@@ -769,6 +866,7 @@ describe("trace bundles", () => {
         ledger: { path: "ledger.json", required: true, present: true, sha256: null },
         docsQueue: { path: "docs-queue.json", required: true, present: true, sha256: null },
         integration: { path: "integration.json", required: true, present: true, sha256: null },
+        outcome: { path: "outcome.json", required: true, present: true, sha256: null },
         sharedSummary: { path: "shared-summary.md", required: true, present: true, sha256: null },
         structuredSignals: {
           path: "structured-signals.json",
@@ -833,6 +931,10 @@ describe("trace bundles", () => {
     writeText(path.join(traceDir, "shared-summary.md"), "# Shared summary\n");
     writeJson(path.join(traceDir, "structured-signals.json"), {});
     writeJson(path.join(traceDir, "quality.json"), {});
+    writeJson(path.join(traceDir, "outcome.json"), {
+      gateSnapshot: null,
+      quality: {},
+    });
     writeText(path.join(traceDir, "prompts", "0-a1.prompt.md"), "Prompt for A1\n");
     writeText(path.join(traceDir, "logs", "0-a1.log"), "[wave-phase] complete\n");
     makeStatus(path.join(traceDir, "status", "0-a1.status"));
@@ -871,6 +973,7 @@ describe("trace bundles", () => {
         ledger: { path: "ledger.json", required: true, present: true, sha256: null },
         docsQueue: { path: "docs-queue.json", required: true, present: true, sha256: null },
         integration: { path: "integration.json", required: true, present: true, sha256: null },
+        outcome: { path: "outcome.json", required: true, present: true, sha256: null },
         sharedSummary: { path: "shared-summary.md", required: true, present: true, sha256: null },
         structuredSignals: { path: "structured-signals.json", required: true, present: true, sha256: null },
         quality: { path: "quality.json", required: true, present: true, sha256: null },
@@ -1009,6 +1112,210 @@ describe("trace bundles", () => {
     const files = listFilesRecursively(tracesDir);
     expect(files).toEqual([]);
   });
+
+  it(
+    "replays a launcher-generated local trace hermetically after live repo drift",
+    () => {
+      const repoDir = makeTempDir();
+      writeJson(path.join(repoDir, "package.json"), { name: "fixture-repo", private: true });
+
+      const initResult = runWaveCli(["init"], repoDir);
+      expect(initResult.status).toBe(0);
+      configureRepoExecutorsForLiveTrace(repoDir);
+      seedCoordinationRecord(repoDir, {
+        id: "decision-doc-owner",
+        lane: "main",
+        wave: 0,
+        agentId: "A9",
+        kind: "decision",
+        targets: ["agent:A1"],
+        status: "resolved",
+        priority: "normal",
+        artifactRefs: ["docs/plans/master-plan.md"],
+        dependsOn: [],
+        closureCondition: "",
+        confidence: "high",
+        summary: "A9 owns shared plan updates",
+        detail: "Documentation ownership is already resolved to A9.",
+        source: "agent",
+      });
+      seedCoordinationRecord(repoDir, {
+        id: "clarify-doc-owner",
+        lane: "main",
+        wave: 0,
+        agentId: "A1",
+        kind: "clarification-request",
+        targets: ["launcher"],
+        status: "open",
+        priority: "normal",
+        artifactRefs: ["docs/plans/master-plan.md"],
+        dependsOn: [],
+        closureCondition: "",
+        confidence: "medium",
+        summary: "Who owns docs/plans/master-plan.md?",
+        detail: "Need the shared-plan owner before closing docs.",
+        source: "agent",
+      });
+
+      const launchResult = runWaveCli(
+        [
+          "launch",
+          "--lane",
+          "main",
+          "--no-context7",
+          "--no-dashboard",
+          "--timeout-minutes",
+          "1",
+          "--max-retries-per-wave",
+          "0",
+        ],
+        repoDir,
+      );
+      expect(launchResult.status).toBe(0);
+
+      const traceDir = traceAttemptDirForRepo(repoDir, 1);
+      const bundle = loadTraceBundle(traceDir);
+      expect(validateTraceBundle(bundle).ok).toBe(true);
+      expect(bundle.metadata.artifacts.outcome.present).toBe(true);
+
+      const replay = replayTraceBundle(traceDir);
+      expect(replay.ok).toBe(true);
+      expect(replay.matchesStoredGateSnapshot).toBe(true);
+      expect(replay.matchesStoredQuality).toBe(true);
+      expect(replay.comparison.gateSnapshot.diffPaths).toEqual([]);
+      expect(replay.comparison.quality.diffPaths).toEqual([]);
+      expect(replay.quality.orchestratorResolvedClarificationCount).toBeGreaterThan(0);
+      expect(replay.bundle.metadata.artifacts.feedbackTriage.present).toBe(true);
+
+      updateWaveConfig(repoDir, (config) => {
+        config.roles.evaluatorAgentId = "Z0";
+        config.validation.requireIntegrationStewardFromWave = 99;
+        return config;
+      });
+      removeLiveSourceArtifacts(repoDir);
+
+      const isolatedReplay = replayTraceBundle(traceDir);
+      expect(isolatedReplay.ok).toBe(true);
+      expect(isolatedReplay.gateSnapshot).toEqual(replay.gateSnapshot);
+      expect(isolatedReplay.quality).toEqual(replay.quality);
+    },
+    30000,
+  );
+
+  it(
+    "captures a launcher-generated human escalation as a blocking replay outcome",
+    () => {
+      const repoDir = makeTempDir();
+      writeJson(path.join(repoDir, "package.json"), { name: "fixture-repo", private: true });
+
+      const initResult = runWaveCli(["init"], repoDir);
+      expect(initResult.status).toBe(0);
+      configureRepoExecutorsForLiveTrace(repoDir);
+
+      seedCoordinationRecord(repoDir, {
+        id: "clarify-product-name",
+        lane: "main",
+        wave: 0,
+        agentId: "A1",
+        kind: "clarification-request",
+        targets: ["launcher"],
+        status: "open",
+        priority: "high",
+        artifactRefs: ["product-direction/unknown.md"],
+        dependsOn: [],
+        closureCondition: "",
+        confidence: "medium",
+        summary: "Should the product be renamed to Nebula?",
+        detail: "No owning file or prior decision covers this naming choice.",
+        source: "agent",
+      });
+
+      const launchResult = runWaveCli(
+        [
+          "launch",
+          "--lane",
+          "main",
+          "--no-context7",
+          "--no-dashboard",
+          "--timeout-minutes",
+          "1",
+          "--max-retries-per-wave",
+          "0",
+        ],
+        repoDir,
+      );
+      expect(launchResult.status).not.toBe(0);
+
+      const replay = replayTraceBundle(traceAttemptDirForRepo(repoDir, 1));
+      expect(replay.ok).toBe(false);
+      expect(replay.gateSnapshot.overall.gate).toBe("clarificationBarrier");
+      expect(replay.quality.humanEscalationCount).toBeGreaterThan(0);
+    },
+    30000,
+  );
+
+  it(
+    "replays launcher-generated retry history after a codex-to-local fallback",
+    () => {
+      const repoDir = makeTempDir();
+      writeJson(path.join(repoDir, "package.json"), { name: "fixture-repo", private: true });
+
+      const initResult = runWaveCli(["init"], repoDir);
+      expect(initResult.status).toBe(0);
+      configureRepoExecutorsForLiveTrace(repoDir, {
+        implementFastExecutor: "codex",
+        implementFastFallbacks: ["local"],
+        codexCommand: "bash",
+        runtimeMixTargets: {
+          codex: 1,
+          local: 8,
+        },
+        defaultExecutorByRole: {
+          implementation: "codex",
+          integration: "local",
+          documentation: "local",
+          evaluator: "local",
+          research: "local",
+          infra: "local",
+          deploy: "local",
+        },
+        fallbackExecutorOrder: ["local"],
+      });
+
+      const launchResult = runWaveCli(
+        [
+          "launch",
+          "--lane",
+          "main",
+          "--no-context7",
+          "--no-dashboard",
+          "--timeout-minutes",
+          "1",
+          "--max-retries-per-wave",
+          "1",
+        ],
+        repoDir,
+      );
+      expect(launchResult.status).not.toBe(0);
+
+      const traceDir = traceAttemptDirForRepo(repoDir, 2);
+      const replay = replayTraceBundle(traceDir);
+      expect(replay.ok).toBe(false);
+      expect(replay.matchesStoredGateSnapshot).toBe(true);
+      expect(replay.matchesStoredQuality).toBe(true);
+      expect(replay.quality.runtimeFallbackCount).toBeGreaterThan(0);
+      expect(replay.quality.runtimeFallbackRate).toBeGreaterThan(0);
+      expect(replay.bundle.metadata.agents.some((agent) => agent.executor?.fallbackUsed === true)).toBe(
+        true,
+      );
+
+      fs.rmSync(traceAttemptDirForRepo(repoDir, 1), { recursive: true, force: true });
+      const isolatedReplay = replayTraceBundle(traceDir);
+      expect(isolatedReplay.ok).toBe(false);
+      expect(isolatedReplay.quality).toEqual(replay.quality);
+    },
+    30000,
+  );
 });
 
 function readJson(filePath) {

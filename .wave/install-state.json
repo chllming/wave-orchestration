@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "packageName": "@chllming/wave-orchestration",
+  "installedVersion": "0.4.0",
+  "initializedAt": "2026-03-21T22:06:19.813Z",
+  "lastUpgradeAt": "2026-03-22T05:44:21.138Z",
+  "initMode": "adopt-existing",
+  "seededFiles": [],
+  "adoptedFiles": [
+    "wave.config.json",
+    "docs/agents/wave-documentation-role.md",
+    "docs/agents/wave-evaluator-role.md",
+    "docs/agents/wave-integration-role.md",
+    "docs/context7/bundles.json",
+    "docs/plans/component-cutover-matrix.json",
+    "docs/plans/component-cutover-matrix.md",
+    "docs/plans/context7-wave-orchestrator.md",
+    "docs/plans/current-state.md",
+    "docs/plans/master-plan.md",
+    "docs/plans/migration.md",
+    "docs/plans/wave-orchestrator.md",
+    "docs/plans/waves/wave-0.md",
+    "docs/reference/repository-guidance.md",
+    "docs/research/agent-context-sources.md"
+  ],
+  "history": [
+    {
+      "at": "2026-03-21T22:06:19.813Z",
+      "action": "init-adopt-existing",
+      "version": "0.3.0"
+    },
+    {
+      "at": "2026-03-22T05:44:21.138Z",
+      "action": "upgrade",
+      "fromVersion": "0.3.0",
+      "toVersion": "0.4.0",
+      "report": ".wave/upgrade-history/2026-03-22T05-44-21.138Z-0.3.0-to-0.4.0.md"
+    }
+  ],
+  "lastUpgradeReport": ".wave/upgrade-history/2026-03-22T05-44-21.138Z-0.3.0-to-0.4.0.md"
+}

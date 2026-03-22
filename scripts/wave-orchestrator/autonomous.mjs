@@ -225,6 +225,42 @@ function requiredInboundDependenciesOpen(lanePaths, lane) {
   });
 }
 
+function pendingHumanItemsForWave(lanePaths, wave) {
+  const existingLedger = readWaveLedger(path.join(lanePaths.ledgerDir, `wave-${wave}.json`));
+  return [
+    ...(existingLedger?.humanFeedback || []),
+    ...(existingLedger?.humanEscalations || []),
+  ];
+}
+
+export function readAutonomousBarrier(lanePaths, lane, wave = null) {
+  const dependencyBlockers = requiredInboundDependenciesOpen(lanePaths, lane);
+  if (dependencyBlockers.length > 0) {
+    return {
+      kind: "dependencies",
+      dependencyBlockers,
+      pendingHumanItems: [],
+      message:
+        wave === null
+          ? `Stopping finalization for lane ${lane}: unresolved required inbound dependencies remain (${dependencyBlockers.map((item) => item.id).join(", ")}).`
+          : `Stopping before wave ${wave}: unresolved required inbound dependencies remain (${dependencyBlockers.map((item) => item.id).join(", ")}).`,
+    };
+  }
+  if (wave === null) {
+    return null;
+  }
+  const pendingHumanItems = pendingHumanItemsForWave(lanePaths, wave);
+  if (pendingHumanItems.length > 0) {
+    return {
+      kind: "human-input",
+      dependencyBlockers: [],
+      pendingHumanItems,
+      message: `Stopping before wave ${wave}: pending human input remains in the ledger (${pendingHumanItems.join(", ")}).`,
+    };
+  }
+  return null;
+}
+
 export function runAutonomousCli(argv) {
   const parsed = parseArgs(argv);
   if (parsed.help) {
@@ -257,24 +293,16 @@ export function runAutonomousCli(argv) {
     const completed = readRunState(lanePaths.defaultRunStatePath).completedWaves;
     const wave = nextIncompleteWave(allWaves, completed);
     if (wave === null) {
+      const finalBarrier = readAutonomousBarrier(lanePaths, options.lane);
+      if (finalBarrier) {
+        throw new Error(finalBarrier.message);
+      }
       console.log(`[autonomous] all waves complete for lane=${options.lane}`);
       break;
     }
-    const dependencyBlockers = requiredInboundDependenciesOpen(lanePaths, options.lane);
-    if (dependencyBlockers.length > 0) {
-      throw new Error(
-        `Stopping before wave ${wave}: unresolved required inbound dependencies remain (${dependencyBlockers.map((item) => item.id).join(", ")}).`,
-      );
-    }
-    const existingLedger = readWaveLedger(path.join(lanePaths.ledgerDir, `wave-${wave}.json`));
-    const pendingHumanItems = [
-      ...(existingLedger?.humanFeedback || []),
-      ...(existingLedger?.humanEscalations || []),
-    ];
-    if (pendingHumanItems.length > 0) {
-      throw new Error(
-        `Stopping before wave ${wave}: pending human input remains in the ledger (${pendingHumanItems.join(", ")}).`,
-      );
+    const barrier = readAutonomousBarrier(lanePaths, options.lane, wave);
+    if (barrier) {
+      throw new Error(barrier.message);
     }
     let success = false;
     for (let attempt = 1; attempt <= options.maxAttemptsPerWave; attempt += 1) {

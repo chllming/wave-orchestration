@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   compileAgentInbox,
+  compileSharedSummary,
   isClarificationLinkedRequest,
   materializeCoordinationState,
   readMaterializedCoordinationState,
@@ -196,5 +197,39 @@ describe("compileAgentInbox", () => {
     expect(inbox.text).toContain("Owned file blocked");
     expect(inbox.text).toContain("Owned directory evidence");
     expect(inbox.text).toContain("Runtime component follow-up");
+  });
+
+  it("renders enriched integration evidence in shared summaries and inboxes", () => {
+    const state = materializeCoordinationState([]);
+    const integrationSummary = {
+      recommendation: "needs-more-work",
+      detail: "Integration still has open cross-component issues.",
+      changedInterfaces: ["decision-1: API contract changed for runtime-engine"],
+      crossComponentImpacts: ["decision-1: API contract changed [owners: A1, A2]"],
+      proofGaps: ["A1: Missing integration proof."],
+      deployRisks: ["A2: Deployment api ended in state failed (healthcheck-failed)."],
+      docGaps: ["A1:shared:docs/plans/master-plan.md: Shared-plan reconciliation required"],
+      runtimeAssignments: [],
+      conflictingClaims: [],
+    };
+
+    const shared = compileSharedSummary({
+      wave: { wave: 0 },
+      state,
+      integrationSummary,
+    });
+    const inbox = compileAgentInbox({
+      wave: { wave: 0 },
+      agent: { agentId: "A1", ownedPaths: [], components: [] },
+      state,
+      integrationSummary,
+    });
+
+    expect(shared.text).toContain("## Changed interfaces");
+    expect(shared.text).toContain("## Deploy risks");
+    expect(shared.text).toContain("API contract changed for runtime-engine");
+    expect(inbox.text).toContain("Changed interfaces");
+    expect(inbox.text).toContain("Cross-component impacts");
+    expect(inbox.text).toContain("Deployment api ended in state failed");
   });
 });

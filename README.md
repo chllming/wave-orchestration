@@ -102,6 +102,8 @@ pnpm install
 
 2. Review the package-level config and starter assets in [wave.config.json](./wave.config.json) and [docs](./docs).
 
+   This source repo is kept as an adopted Wave workspace; `node scripts/wave.mjs doctor --json` should stay green here.
+
 3. Review the starter runbook in [docs/plans/wave-orchestrator.md](./docs/plans/wave-orchestrator.md), [docs/plans/context7-wave-orchestrator.md](./docs/plans/context7-wave-orchestrator.md), and [docs/plans/component-cutover-matrix.md](./docs/plans/component-cutover-matrix.md).
 
 4. Dry-parse the starter wave:
@@ -220,9 +222,10 @@ The launcher writes runtime state under `.tmp/<lane>-wave-launcher/`:
 - `--dry-run` does not write `attempt-<k>` trace snapshots. The `traces/` directory may exist in dry-run state, but it should remain file-empty.
 - Real attempts write a full hermetic `traceVersion: 2` bundle under `.tmp/<lane>-wave-launcher/traces/wave-<n>/attempt-<k>/`.
 - `run-metadata.json` is the canonical bundle index. It records the wave hash, attempt number, launcher settings, agent prompt hashes, executor history, Context7 snippet hashes, gate snapshot, artifact-presence map, `replayContext`, and `historySnapshot`.
+- `outcome.json` is the stored replay baseline for the bundle. It carries the normalized stored gate snapshot plus the stored cumulative quality report so replay can compare recomputed results against a hashed bundle-local source of truth.
 - For `traceVersion: 2`, every launched agent must have copied prompt, log, status, inbox, and summary artifacts inside the bundle. Waves with `## Component promotions` must also carry the copied component matrix JSON.
 - `quality.json` is cumulative through the current attempt. It reports unresolved request and clarification counts, human-escalation and orchestrator-resolution counts, contradiction and documentation-drift counts, proof completeness, relaunch counts, fallback rate, acknowledgement and blocker timing, evaluator reversal, and the final integration recommendation.
-- Hermetic replay is read-only. Replay uses only the stored bundle contents, ignores inline summary duplicates in `run-metadata.json`, revalidates recorded artifact hashes, and does not rewrite summaries or other bundle files.
+- Hermetic replay is read-only. Replay uses only the stored bundle contents, ignores inline summary duplicates in `run-metadata.json`, revalidates recorded artifact hashes, reports stored-vs-recomputed diffs for gate and quality state, and does not rewrite summaries or other bundle files.
 - Legacy `traceVersion: 1` bundles are still accepted in best-effort mode with explicit warnings. They are not treated as fully hermetic.
 - Replay validation is internal today. The source tree exposes helper modules for loading, validating, and replaying trace bundles, but there is no supported `wave replay` public CLI yet.
 

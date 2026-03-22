@@ -324,6 +324,20 @@ function renderActivityRecord(record) {
   return `- ${record.updatedAt} | ${record.agentId} | ${record.kind}/${record.status}${targets} | ${summary}`;
 }
 
+function renderIntegrationItems(title, items, options = {}) {
+  const normalized = Array.isArray(items)
+    ? items.map((item) => compactSingleLine(item, options.maxChars || 180)).filter(Boolean)
+    : [];
+  const visible = normalized.slice(0, options.maxItems || 4);
+  return [
+    title,
+    ...(visible.length > 0 ? visible.map((item) => `- ${item}`) : ["- None."]),
+    ...(normalized.length > visible.length
+      ? [`- ... ${normalized.length - visible.length} more item(s)`]
+      : []),
+  ];
+}
+
 export function renderCoordinationBoardProjection({
   wave,
   waveFile,
@@ -434,6 +448,14 @@ export function compileSharedSummary({
     ...(integrationSummary
       ? [`- Integration recommendation: ${integrationSummary.recommendation || "n/a"}`]
       : []),
+    ...(integrationSummary
+      ? [
+          `- Integration conflicts: ${(integrationSummary.conflictingClaims || []).length}`,
+          `- Integration proof gaps: ${(integrationSummary.proofGaps || []).length}`,
+          `- Integration deploy risks: ${(integrationSummary.deployRisks || []).length}`,
+          `- Integration doc gaps: ${(integrationSummary.docGaps || []).length}`,
+        ]
+      : []),
     ...(ledger ? [`- Ledger phase: ${ledger.phase || "n/a"}`] : []),
     "",
     "## Current blockers",
@@ -450,6 +472,25 @@ export function compileSharedSummary({
     ...(state.decisions.length > 0
       ? state.decisions.slice(-5).map((record) => renderActivityRecord(record))
       : ["- None."]),
+    ...(integrationSummary
+      ? [
+          "",
+          ...renderIntegrationItems("## Integration conflicts", integrationSummary.conflictingClaims),
+          "",
+          ...renderIntegrationItems("## Changed interfaces", integrationSummary.changedInterfaces),
+          "",
+          ...renderIntegrationItems(
+            "## Cross-component impacts",
+            integrationSummary.crossComponentImpacts,
+          ),
+          "",
+          ...renderIntegrationItems("## Proof gaps", integrationSummary.proofGaps),
+          "",
+          ...renderIntegrationItems("## Deploy risks", integrationSummary.deployRisks),
+          "",
+          ...renderIntegrationItems("## Documentation gaps", integrationSummary.docGaps),
+        ]
+      : []),
     ...(Array.isArray(integrationSummary?.runtimeAssignments) &&
     integrationSummary.runtimeAssignments.length > 0
       ? [
@@ -558,6 +599,29 @@ export function compileAgentInbox({
           "## Integration note",
           `- Recommendation: ${integrationSummary.recommendation || "n/a"}`,
           `- Detail: ${compactSingleLine(integrationSummary.detail || "n/a", 180)}`,
+          `- Conflicts: ${(integrationSummary.conflictingClaims || []).length}`,
+          `- Proof gaps: ${(integrationSummary.proofGaps || []).length}`,
+          `- Deploy risks: ${(integrationSummary.deployRisks || []).length}`,
+          `- Documentation gaps: ${(integrationSummary.docGaps || []).length}`,
+          ...renderIntegrationItems(
+            "- Changed interfaces",
+            integrationSummary.changedInterfaces,
+            { maxItems: 3 },
+          ),
+          ...renderIntegrationItems(
+            "- Cross-component impacts",
+            integrationSummary.crossComponentImpacts,
+            { maxItems: 3 },
+          ),
+          ...renderIntegrationItems("- Proof gaps", integrationSummary.proofGaps, {
+            maxItems: 3,
+          }),
+          ...renderIntegrationItems("- Deploy risks", integrationSummary.deployRisks, {
+            maxItems: 3,
+          }),
+          ...renderIntegrationItems("- Documentation gaps", integrationSummary.docGaps, {
+            maxItems: 3,
+          }),
           ...(Array.isArray(integrationSummary.runtimeAssignments) &&
           integrationSummary.runtimeAssignments.length > 0
             ? [
@@ -772,16 +836,27 @@ export function deriveIntegrationSummaryFromState({
   const unresolvedBlockers = state.blockers.filter((record) =>
     OPEN_COORDINATION_STATUSES.has(record.status),
   );
-  const conflictingClaims = openClaims.filter((record) => /conflict|contradict/i.test(record.detail || record.summary || ""));
+  const conflictingClaims = openClaims.filter((record) =>
+    /conflict|contradict/i.test(record.detail || record.summary || ""),
+  );
+  const changedInterfaces = (state.latestRecords || [])
+    .filter(
+      (record) =>
+        !["cancelled", "superseded"].includes(String(record?.status || "").trim().toLowerCase()) &&
+        /interface|contract|api|schema|migration|signature/i.test(
+          [record.summary, record.detail, ...(record.artifactRefs || [])].join("\n"),
+        ),
+    )
+    .map((record) => summarizeIntegrationRecord(record));
   return {
     wave,
     lane,
     agentId: "launcher",
     attempt,
-    openClaims: openClaims.map((record) => record.id),
-    conflictingClaims: conflictingClaims.map((record) => record.id),
-    unresolvedBlockers: unresolvedBlockers.map((record) => record.id),
-    changedInterfaces: [],
+    openClaims: openClaims.map((record) => summarizeIntegrationRecord(record)),
+    conflictingClaims: conflictingClaims.map((record) => summarizeIntegrationRecord(record)),
+    unresolvedBlockers: unresolvedBlockers.map((record) => summarizeIntegrationRecord(record)),
+    changedInterfaces,
     crossComponentImpacts: [],
     proofGaps: [],
     docGaps: [],

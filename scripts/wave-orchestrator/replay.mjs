@@ -94,6 +94,53 @@ function buildReplayAgentRuns(dir, wave, metadata) {
   });
 }
 
+function diffStructuredValues(expected, actual, basePath = "") {
+  if (JSON.stringify(expected) === JSON.stringify(actual)) {
+    return [];
+  }
+  const expectedIsObject =
+    expected !== null && typeof expected === "object" && !Array.isArray(expected);
+  const actualIsObject = actual !== null && typeof actual === "object" && !Array.isArray(actual);
+  if (expectedIsObject && actualIsObject) {
+    const keys = new Set([...Object.keys(expected), ...Object.keys(actual)]);
+    return Array.from(keys)
+      .toSorted()
+      .flatMap((key) =>
+        diffStructuredValues(
+          expected[key],
+          actual[key],
+          basePath ? `${basePath}.${key}` : key,
+        ),
+      );
+  }
+  const expectedIsArray = Array.isArray(expected);
+  const actualIsArray = Array.isArray(actual);
+  if (expectedIsArray && actualIsArray) {
+    if (expected.length !== actual.length) {
+      return [basePath || "<root>"];
+    }
+    return expected.flatMap((value, index) =>
+      diffStructuredValues(value, actual[index], `${basePath}[${index}]`),
+    );
+  }
+  return [basePath || "<root>"];
+}
+
+function buildReplayComparison(storedGateSnapshot, gateSnapshot, storedQuality, quality) {
+  const gateDiffPaths = diffStructuredValues(storedGateSnapshot || null, gateSnapshot || null);
+  const qualityDiffPaths = diffStructuredValues(storedQuality || null, quality || null);
+  return {
+    gateSnapshot: {
+      matches: gateDiffPaths.length === 0,
+      diffPaths: gateDiffPaths,
+    },
+    quality: {
+      matches: qualityDiffPaths.length === 0,
+      diffPaths: qualityDiffPaths,
+    },
+  };
+}
+
 export function replayTraceBundle(dir) {
   const bundle = loadTraceBundle(dir);
   const validation = validateTraceBundle(bundle);
@@ -173,6 +220,10 @@ export function replayTraceBundle(dir) {
     agentRuns,
     gateSnapshot,
   });
+  const storedGateSnapshot =
+    bundle.storedOutcome?.gateSnapshot || bundle.metadata.gateSnapshot || null;
+  const storedQuality = bundle.storedOutcome?.quality || bundle.quality || null;
+  const comparison = buildReplayComparison(storedGateSnapshot, gateSnapshot, storedQuality, quality);
   return {
     ok: validation.ok && gateSnapshot.overall.ok === true,
     replayMode: validation.replayMode,
@@ -182,10 +233,10 @@ export function replayTraceBundle(dir) {
     wave,
     gateSnapshot,
     quality,
-    storedGateSnapshot: bundle.metadata.gateSnapshot || null,
-    storedQuality: bundle.quality || null,
-    matchesStoredGateSnapshot:
-      JSON.stringify(bundle.metadata.gateSnapshot || null) === JSON.stringify(gateSnapshot),
-    matchesStoredQuality: JSON.stringify(bundle.quality || null) === JSON.stringify(quality),
+    storedGateSnapshot,
+    storedQuality,
+    comparison,
+    matchesStoredGateSnapshot: comparison.gateSnapshot.matches,
+    matchesStoredQuality: comparison.quality.matches,
   };
 }

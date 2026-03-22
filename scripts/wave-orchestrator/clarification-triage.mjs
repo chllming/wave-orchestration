@@ -154,6 +154,7 @@ function findIntegrationResolution(record, lanePaths, resolutionContext = {}) {
     return null;
   }
   const mentionsIntegration = textMentionsAny(searchableText, [
+    ...(integrationSummary.openClaims || []),
     "contradict",
     "cross-component",
     "cross component",
@@ -162,6 +163,10 @@ function findIntegrationResolution(record, lanePaths, resolutionContext = {}) {
     ...(integrationSummary.conflictingClaims || []),
     ...(integrationSummary.unresolvedBlockers || []),
     ...(integrationSummary.changedInterfaces || []),
+    ...(integrationSummary.crossComponentImpacts || []),
+    ...(integrationSummary.proofGaps || []),
+    ...(integrationSummary.deployRisks || []),
+    ...(integrationSummary.docGaps || []),
   ]);
   if (!mentionsIntegration) {
     return null;

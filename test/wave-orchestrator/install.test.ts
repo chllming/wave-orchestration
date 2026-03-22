@@ -104,6 +104,45 @@ describe("wave init", () => {
       expect.arrayContaining(["wave.config.json", "docs/plans/waves/wave-0.md"]),
     );
   });
+
+  it("lets an adopted workspace pass doctor without rewriting repo-owned files", () => {
+    const repoDir = makeTempRepo();
+    fs.mkdirSync(path.join(repoDir, "docs", "plans", "waves"), { recursive: true });
+    fs.mkdirSync(path.join(repoDir, "docs", "agents"), { recursive: true });
+    fs.mkdirSync(path.join(repoDir, "docs", "context7"), { recursive: true });
+    fs.mkdirSync(path.join(repoDir, "docs", "plans"), { recursive: true });
+    fs.mkdirSync(path.join(repoDir, "docs", "reference"), { recursive: true });
+    fs.mkdirSync(path.join(repoDir, "docs", "research"), { recursive: true });
+    fs.writeFileSync(path.join(repoDir, ".gitignore"), ".tmp/\ndocs/research/cache/\ndocs/research/agent-context-cache/\ndocs/research/papers/\ndocs/research/articles/\n", "utf8");
+    for (const relPath of [
+      "wave.config.json",
+      "docs/agents/wave-evaluator-role.md",
+      "docs/agents/wave-documentation-role.md",
+      "docs/agents/wave-integration-role.md",
+      "docs/context7/bundles.json",
+      "docs/plans/component-cutover-matrix.json",
+      "docs/plans/component-cutover-matrix.md",
+      "docs/plans/context7-wave-orchestrator.md",
+      "docs/plans/current-state.md",
+      "docs/plans/master-plan.md",
+      "docs/plans/migration.md",
+      "docs/plans/wave-orchestrator.md",
+      "docs/plans/waves/wave-0.md",
+      "docs/reference/repository-guidance.md",
+      "docs/research/agent-context-sources.md",
+    ]) {
+      const targetPath = path.join(repoDir, relPath);
+      fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+      fs.writeFileSync(targetPath, fs.readFileSync(path.join(PACKAGE_ROOT, relPath), "utf8"), "utf8");
+    }
+
+    const initResult = runWaveCli(["init", "--adopt-existing"], { cwd: repoDir });
+    expect(initResult.status).toBe(0);
+
+    const doctorResult = runWaveCli(["doctor", "--json"], { cwd: repoDir });
+    expect(doctorResult.status).toBe(0);
+    expect(JSON.parse(doctorResult.stdout)).toMatchObject({ ok: true });
+  });
 });
 
 describe("wave upgrade", () => {
@@ -167,6 +206,13 @@ describe("wave upgrade", () => {
 });
 
 describe("wave doctor", () => {
+  it("passes for the adopted package source repo", () => {
+    const doctorResult = runWaveCli(["doctor", "--json"], { cwd: REPO_ROOT });
+
+    expect(doctorResult.status).toBe(0);
+    expect(JSON.parse(doctorResult.stdout)).toMatchObject({ ok: true });
+  });
+
   it("supports --repo-root from outside the target workspace", () => {
     const repoDir = makeTempRepo();
     const initResult = runWaveCli(["init"], { cwd: repoDir });

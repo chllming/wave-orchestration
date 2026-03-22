@@ -20,7 +20,6 @@ import {
   appendCoordinationRecord,
   compileAgentInbox,
   compileSharedSummary,
-  deriveIntegrationSummaryFromState,
   isOpenCoordinationStatus,
   openClarificationLinkedRequests,
   readMaterializedCoordinationState,
@@ -61,6 +60,7 @@ import {
   DEFAULT_TIMEOUT_MINUTES,
   DEFAULT_WAIT_PROGRESS_INTERVAL_MS,
   DEFAULT_WAVE_LANE,
+  compactSingleLine,
   parseVerdictFromText,
   readStatusRecordIfPresent,
   REPO_ROOT,
@@ -440,6 +440,338 @@ function waveIntegrationMarkdownPath(lanePaths, waveNumber) {
   return path.join(lanePaths.integrationDir, `wave-${waveNumber}.md`);
 }
 
+function uniqueStringEntries(values) {
+  return Array.from(
+    new Set(
+      (Array.isArray(values) ? values : [])
+        .map((value) => String(value || "").trim())
+        .filter(Boolean),
+    ),
+  );
+}
+
+function summarizeIntegrationRecord(record, options = {}) {
+  const summary = compactSingleLine(
+    record?.summary || record?.detail || record?.kind || "coordination item",
+    options.maxChars || 180,
+  );
+  return `${record.id}: ${summary}`;
+}
+
+function summarizeDocsQueueItem(item) {
+  return `${item.id}: ${compactSingleLine(item.summary || item.path || item.detail || "documentation update required", 180)}`;
+}
+
+function summarizeGap(agentId, detail, fallback) {
+  return `${agentId}: ${compactSingleLine(detail || fallback, 180)}`;
+}
+
+function textMentionsAnyKeyword(value, keywords) {
+  const text = String(value || "").trim().toLowerCase();
+  if (!text) {
+    return false;
+  }
+  return keywords.some((keyword) => text.includes(String(keyword || "").trim().toLowerCase()));
+}
+
+function actionableIntegrationRecords(coordinationState) {
+  return (coordinationState?.latestRecords || []).filter(
+    (record) =>
+      !["cancelled", "superseded"].includes(String(record?.status || "").trim().toLowerCase()) &&
+      ![
+        "human-feedback",
+        "human-escalation",
+        "orchestrator-guidance",
+        "resolved-by-policy",
+        "integration-summary",
+      ].includes(record?.kind),
+  );
+}
+
+function normalizeOwnedReference(value) {
+  return String(value || "").trim().replace(/\/+$/, "");
+}
+
+function matchesOwnedPathArtifact(artifactRef, ownedPath) {
+  const normalizedArtifact = normalizeOwnedReference(artifactRef);
+  const normalizedOwnedPath = normalizeOwnedReference(ownedPath);
+  if (!normalizedArtifact || !normalizedOwnedPath) {
+    return false;
+  }
+  return (
+    normalizedArtifact === normalizedOwnedPath ||
+    normalizedArtifact.startsWith(`${normalizedOwnedPath}/`)
+  );
+}
+
+function resolveArtifactOwners(artifactRef, agents) {
+  const owners = [];
+  const normalizedArtifact = normalizeOwnedReference(artifactRef);
+  if (!normalizedArtifact) {
+    return owners;
+  }
+  for (const agent of agents || []) {
+    const ownedComponents = Array.isArray(agent?.components) ? agent.components : [];
+    const ownedPaths = Array.isArray(agent?.ownedPaths) ? agent.ownedPaths : [];
+    if (
+      ownedComponents.some((componentId) => normalizeOwnedReference(componentId) === normalizedArtifact) ||
+      ownedPaths.some((ownedPath) => matchesOwnedPathArtifact(normalizedArtifact, ownedPath))
+    ) {
+      owners.push(agent.agentId);
+    }
+  }
+  return owners;
+}
+
+function inferIntegrationRecommendation(evidence) {
+  if ((evidence.unresolvedBlockers || []).length > 0) {
+    return {
+      recommendation: "needs-more-work",
+      detail: `${evidence.unresolvedBlockers.length} unresolved blocker(s) remain.`,
+    };
+  }
+  if ((evidence.conflictingClaims || []).length > 0) {
+    return {
+      recommendation: "needs-more-work",
+      detail: `${evidence.conflictingClaims.length} conflicting claim(s) remain.`,
+    };
+  }
+  if ((evidence.proofGaps || []).length > 0) {
+    return {
+      recommendation: "needs-more-work",
+      detail: `${evidence.proofGaps.length} proof gap(s) remain.`,
+    };
+  }
+  if ((evidence.deployRisks || []).length > 0) {
+    return {
+      recommendation: "needs-more-work",
+      detail: `${evidence.deployRisks.length} deploy or ops risk(s) remain.`,
+    };
+  }
+  return {
+    recommendation: "ready-for-doc-closure",
+    detail:
+      "No unresolved blockers, contradictions, proof gaps, or deploy risks remain in integration state.",
+  };
+}
+
+function padReportedEntries(entries, minimumCount, label) {
+  const padded = [...entries];
+  for (let index = padded.length + 1; index <= minimumCount; index += 1) {
+    padded.push(`${label} #${index}`);
+  }
+  return padded;
+}
+
+function buildIntegrationEvidence({
+  lanePaths,
+  wave,
+  coordinationState,
+  summariesByAgentId,
+  docsQueue,
+  agentRuns,
+}) {
+  const openClaims = (coordinationState?.claims || [])
+    .filter((record) => isOpenCoordinationStatus(record.status))
+    .map((record) => summarizeIntegrationRecord(record));
+  const conflictingClaims = (coordinationState?.claims || [])
+    .filter(
+      (record) =>
+        isOpenCoordinationStatus(record.status) &&
+        /conflict|contradict/i.test(`${record.summary || ""}\n${record.detail || ""}`),
+    )
+    .map((record) => summarizeIntegrationRecord(record));
+  const unresolvedBlockers = (coordinationState?.blockers || [])
+    .filter((record) => isOpenCoordinationStatus(record.status))
+    .map((record) => summarizeIntegrationRecord(record));
+
+  const interfaceKeywords = ["interface", "contract", "api", "schema", "migration", "signature"];
+  const changedInterfaces = actionableIntegrationRecords(coordinationState)
+    .filter((record) =>
+      textMentionsAnyKeyword(
+        [record.summary, record.detail, ...(record.artifactRefs || [])].join("\n"),
+        interfaceKeywords,
+      ),
+    )
+    .map((record) => summarizeIntegrationRecord(record));
+
+  const crossComponentImpacts = actionableIntegrationRecords(coordinationState)
+    .flatMap((record) => {
+      const owners = new Set();
+      for (const artifactRef of record.artifactRefs || []) {
+        for (const owner of resolveArtifactOwners(artifactRef, wave.agents)) {
+          owners.add(owner);
+        }
+      }
+      for (const target of record.targets || []) {
+        if (String(target).startsWith("agent:")) {
+          owners.add(String(target).slice("agent:".length));
+        } else if ((wave.agents || []).some((agent) => agent.agentId === target)) {
+          owners.add(String(target));
+        }
+      }
+      if (owners.size <= 1) {
+        return [];
+      }
+      return [
+        `${summarizeIntegrationRecord(record)} [owners: ${Array.from(owners).toSorted().join(", ")}]`,
+      ];
+    });
+
+  const proofGapEntries = [];
+  const docGapEntries = Array.isArray(docsQueue?.items)
+    ? docsQueue.items.map((item) => summarizeDocsQueueItem(item))
+    : [];
+  const deployRiskEntries = [];
+  for (const agent of wave.agents || []) {
+    const summary = summariesByAgentId?.[agent.agentId] || null;
+    if (
+      ![
+        lanePaths.evaluatorAgentId,
+        lanePaths.integrationAgentId,
+        lanePaths.documentationAgentId,
+      ].includes(agent.agentId)
+    ) {
+      const validation = validateImplementationSummary(agent, summary);
+      if (!validation.ok) {
+        const entry = summarizeGap(agent.agentId, validation.detail, "Implementation validation failed.");
+        if (["missing-doc-delta", "doc-impact-gap"].includes(validation.statusCode)) {
+          docGapEntries.push(entry);
+        } else {
+          proofGapEntries.push(entry);
+        }
+      }
+    }
+    for (const gap of summary?.gaps || []) {
+      const entry = summarizeGap(
+        agent.agentId,
+        gap.detail,
+        `${gap.kind || "unknown"} gap reported.`,
+      );
+      if (gap.kind === "docs") {
+        docGapEntries.push(entry);
+      } else if (gap.kind === "ops") {
+        deployRiskEntries.push(entry);
+      } else {
+        proofGapEntries.push(entry);
+      }
+    }
+  }
+
+  for (const run of agentRuns || []) {
+    const signals = parseStructuredSignalsFromLog(run.logPath);
+    if (signals?.deployment && signals.deployment.state !== "healthy") {
+      deployRiskEntries.push(
+        summarizeGap(
+          run.agent.agentId,
+          `Deployment ${signals.deployment.service} ended in state ${signals.deployment.state}${signals.deployment.detail ? ` (${signals.deployment.detail})` : ""}.`,
+          "Deployment did not finish healthy.",
+        ),
+      );
+    }
+    if (
+      signals?.infra &&
+      !["conformant", "action-complete"].includes(
+        String(signals.infra.state || "").trim().toLowerCase(),
+      )
+    ) {
+      deployRiskEntries.push(
+        summarizeGap(
+          run.agent.agentId,
+          `Infra ${signals.infra.kind || "unknown"} on ${signals.infra.target || "unknown"} ended in state ${signals.infra.state || "unknown"}${signals.infra.detail ? ` (${signals.infra.detail})` : ""}.`,
+          "Infra risk remains open.",
+        ),
+      );
+    }
+  }
+
+  return {
+    openClaims: uniqueStringEntries(openClaims),
+    conflictingClaims: uniqueStringEntries(conflictingClaims),
+    unresolvedBlockers: uniqueStringEntries(unresolvedBlockers),
+    changedInterfaces: uniqueStringEntries(changedInterfaces),
+    crossComponentImpacts: uniqueStringEntries(crossComponentImpacts),
+    proofGaps: uniqueStringEntries(proofGapEntries),
+    docGaps: uniqueStringEntries(docGapEntries),
+    deployRisks: uniqueStringEntries(deployRiskEntries),
+  };
+}
+
+export function buildWaveIntegrationSummary({
+  lanePaths,
+  wave,
+  attempt,
+  coordinationState,
+  summariesByAgentId,
+  docsQueue,
+  runtimeAssignments,
+  agentRuns,
+}) {
+  const explicitIntegration = summariesByAgentId[lanePaths.integrationAgentId]?.integration || null;
+  const evidence = buildIntegrationEvidence({
+    lanePaths,
+    wave,
+    coordinationState,
+    summariesByAgentId,
+    docsQueue,
+    agentRuns,
+  });
+  if (explicitIntegration) {
+    return {
+      wave: wave.wave,
+      lane: lanePaths.lane,
+      agentId: lanePaths.integrationAgentId,
+      attempt,
+      openClaims: padReportedEntries(
+        evidence.openClaims,
+        explicitIntegration.claims || 0,
+        "Integration steward reported unresolved claim",
+      ),
+      conflictingClaims: padReportedEntries(
+        evidence.conflictingClaims,
+        explicitIntegration.conflicts || 0,
+        "Integration steward reported unresolved conflict",
+      ),
+      unresolvedBlockers: padReportedEntries(
+        evidence.unresolvedBlockers,
+        explicitIntegration.blockers || 0,
+        "Integration steward reported unresolved blocker",
+      ),
+      changedInterfaces: evidence.changedInterfaces,
+      crossComponentImpacts: evidence.crossComponentImpacts,
+      proofGaps: evidence.proofGaps,
+      docGaps: evidence.docGaps,
+      deployRisks: evidence.deployRisks,
+      runtimeAssignments,
+      recommendation: explicitIntegration.state,
+      detail: explicitIntegration.detail || "",
+      createdAt: toIsoTimestamp(),
+      updatedAt: toIsoTimestamp(),
+    };
+  }
+  const inferred = inferIntegrationRecommendation(evidence);
+  return {
+    wave: wave.wave,
+    lane: lanePaths.lane,
+    agentId: "launcher",
+    attempt,
+    ...evidence,
+    runtimeAssignments,
+    recommendation: inferred.recommendation,
+    detail: inferred.detail,
+    createdAt: toIsoTimestamp(),
+    updatedAt: toIsoTimestamp(),
+  };
+}
+
+function renderIntegrationSection(title, items) {
+  return [
+    title,
+    ...((items || []).length > 0 ? items.map((item) => `- ${item}`) : ["- None."]),
+    "",
+  ];
+}
+
 function renderIntegrationSummaryMarkdown(integrationSummary) {
   return [
     `# Wave ${integrationSummary.wave} Integration Summary`,
@@ -449,7 +781,22 @@ function renderIntegrationSummaryMarkdown(integrationSummary) {
     `- Open claims: ${(integrationSummary.openClaims || []).length}`,
     `- Conflicting claims: ${(integrationSummary.conflictingClaims || []).length}`,
     `- Unresolved blockers: ${(integrationSummary.unresolvedBlockers || []).length}`,
+    `- Changed interfaces: ${(integrationSummary.changedInterfaces || []).length}`,
+    `- Cross-component impacts: ${(integrationSummary.crossComponentImpacts || []).length}`,
+    `- Proof gaps: ${(integrationSummary.proofGaps || []).length}`,
+    `- Deploy risks: ${(integrationSummary.deployRisks || []).length}`,
+    `- Documentation gaps: ${(integrationSummary.docGaps || []).length}`,
     "",
+    ...renderIntegrationSection("## Open Claims", integrationSummary.openClaims),
+    ...renderIntegrationSection("## Conflicting Claims", integrationSummary.conflictingClaims),
+    ...renderIntegrationSection("## Unresolved Blockers", integrationSummary.unresolvedBlockers),
+    ...renderIntegrationSection("## Changed Interfaces", integrationSummary.changedInterfaces),
+    ...renderIntegrationSection(
+      "## Cross-Component Impacts",
+      integrationSummary.crossComponentImpacts,
+    ),
+    ...renderIntegrationSection("## Proof Gaps", integrationSummary.proofGaps),
+    ...renderIntegrationSection("## Deploy Risks", integrationSummary.deployRisks),
     "## Runtime Assignments",
     ...((integrationSummary.runtimeAssignments || []).length > 0
       ? integrationSummary.runtimeAssignments.map(
@@ -458,11 +805,7 @@ function renderIntegrationSummaryMarkdown(integrationSummary) {
         )
       : ["- None."]),
     "",
-    "## Documentation Gaps",
-    ...((integrationSummary.docGaps || []).length > 0
-      ? integrationSummary.docGaps.map((gap) => `- ${gap}`)
-      : ["- None."]),
-    "",
+    ...renderIntegrationSection("## Documentation Gaps", integrationSummary.docGaps),
   ].join("\n");
 }
 
@@ -529,35 +872,16 @@ function writeWaveDerivedState({
     runtimeAssignments,
   });
   writeDocsQueue(waveDocsQueuePath(lanePaths, wave.wave), docsQueue);
-  const explicitIntegration = summariesByAgentId[lanePaths.integrationAgentId]?.integration;
-  const integrationSummary = explicitIntegration
-    ? {
-        wave: wave.wave,
-        lane: lanePaths.lane,
-        agentId: lanePaths.integrationAgentId,
-        attempt,
-        openClaims: [],
-        conflictingClaims: Array.from({ length: explicitIntegration.conflicts || 0 }, (_, index) => `conflict-${index + 1}`),
-        unresolvedBlockers: Array.from({ length: explicitIntegration.blockers || 0 }, (_, index) => `blocker-${index + 1}`),
-        changedInterfaces: [],
-        crossComponentImpacts: [],
-        proofGaps: [],
-        docGaps: (docsQueue.items || []).map((item) => item.id),
-        deployRisks: [],
-        runtimeAssignments,
-        recommendation: explicitIntegration.state,
-        detail: explicitIntegration.detail || "",
-        createdAt: toIsoTimestamp(),
-        updatedAt: toIsoTimestamp(),
-      }
-    : deriveIntegrationSummaryFromState({
-        lane: lanePaths.lane,
-        wave: wave.wave,
-        state: coordinationState,
-        attempt,
-      });
-  integrationSummary.runtimeAssignments = runtimeAssignments;
-  integrationSummary.docGaps = (docsQueue.items || []).map((item) => item.id);
+  const integrationSummary = buildWaveIntegrationSummary({
+    lanePaths,
+    wave,
+    attempt,
+    coordinationState,
+    summariesByAgentId,
+    docsQueue,
+    runtimeAssignments,
+    agentRuns,
+  });
   writeJsonArtifact(waveIntegrationPath(lanePaths, wave.wave), integrationSummary);
   writeTextAtomic(
     waveIntegrationMarkdownPath(lanePaths, wave.wave),

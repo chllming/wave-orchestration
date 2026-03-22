@@ -121,6 +121,7 @@ pnpm exec wave changelog --since-installed
 - compiled inboxes: `.tmp/<lane>-wave-launcher/inboxes/`
 - ledger: `.tmp/<lane>-wave-launcher/ledger/`
 - integration summaries: `.tmp/<lane>-wave-launcher/integration/`
+  These summaries now carry actionable evidence for conflicting claims, changed interfaces, cross-component impacts, proof gaps, documentation gaps, and deploy or ops risk.
 - docs queue: `.tmp/<lane>-wave-launcher/docs-queue/`
 - trace bundles: `.tmp/<lane>-wave-launcher/traces/`
 - clarification triage: `.tmp/<lane>-wave-launcher/feedback/triage/`
@@ -128,6 +129,7 @@ pnpm exec wave changelog --since-installed
 - Context7 cache: `.tmp/<lane>-wave-launcher/context7-cache/`
 - executor overlays: `.tmp/<lane>-wave-launcher/executors/`
 - cross-lane dependencies: `.tmp/wave-orchestrator/dependencies/`
+  Required inbound tickets in this directory block both autonomous wave launch and lane finalization until they resolve.
 - cross-wave orchestration board: `.tmp/wave-orchestrator/messageboards/orchestrator.md`
 
 ## Trace Contract
@@ -141,16 +143,18 @@ pnpm exec wave changelog --since-installed
   - `ledger.json`
   - `docs-queue.json`
   - `integration.json`
+  - `outcome.json`
   - `shared-summary.md`
   - copied prompt, log, status, inbox, and summary artifacts per launched agent
   - `structured-signals.json`
   - `quality.json`
   - `run-metadata.json`
 - `run-metadata.json` is the canonical trace index. It records attempt settings, artifact presence, executor history, prompt hashes, Context7 snippet hashes, the gate snapshot, `replayContext`, and the cumulative `historySnapshot` for that attempt.
+- `outcome.json` is the stored replay baseline. Replay compares recomputed gates and quality against it instead of trusting only inline metadata.
 - For `traceVersion: 2`, launched agents must have copied prompt/log/status/inbox/summary artifacts, and promoted-component waves must include the copied component matrix JSON.
 - `quality.json` is cumulative through the current attempt. It is intended for regression comparison, not only for one-shot pass/fail reporting.
 - Replay support is internal. The source tree contains helpers to load, validate, and replay trace bundles against the same gate logic the launcher uses, but there is no public replay CLI yet.
-- Replay is read-only and hash-validating for `traceVersion: 2` bundles. It ignores inline summary duplicates in `run-metadata.json`. Legacy `traceVersion: 1` bundles remain best-effort and emit warnings instead of claiming full hermetic replay.
+- Replay is read-only and hash-validating for `traceVersion: 2` bundles. It ignores inline summary duplicates in `run-metadata.json` and returns a stored-vs-recomputed comparison report for gate and quality state. Legacy `traceVersion: 1` bundles remain best-effort and emit warnings instead of claiming full hermetic replay.
 
 ## Authoring Rules
 

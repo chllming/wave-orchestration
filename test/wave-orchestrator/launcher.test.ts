@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   acquireLauncherLock,
+  buildWaveIntegrationSummary,
   buildCodexExecInvocation,
   collectUnexpectedSessionFailures,
   DEFAULT_CODEX_SANDBOX_MODE,
@@ -18,6 +19,7 @@ import {
   resolveRelaunchRuns,
   runClosureSweepPhase,
 } from "../../scripts/wave-orchestrator/launcher.mjs";
+import { materializeCoordinationState } from "../../scripts/wave-orchestrator/coordination-store.mjs";
 import { hashAgentPromptFingerprint } from "../../scripts/wave-orchestrator/context7.mjs";
 
 const tempDirs = [];
@@ -192,6 +194,236 @@ describe("readWaveInfraGate", () => {
       ok: true,
       statusCode: "pass",
     });
+  });
+});
+
+describe("buildWaveIntegrationSummary", () => {
+  it("derives actionable integration evidence from coordination, docs, validation, and runtime signals", () => {
+    const dir = makeTempDir();
+    const a1LogPath = path.join(dir, "wave-0-a1.log");
+    const a2LogPath = path.join(dir, "wave-0-a2.log");
+    fs.writeFileSync(
+      a1LogPath,
+      "[deploy-status] service=api state=failed detail=healthcheck-failed\n",
+      "utf8",
+    );
+    fs.writeFileSync(
+      a2LogPath,
+      "[infra-status] kind=dependency target=database state=setup-required detail=waiting-on-operator\n",
+      "utf8",
+    );
+
+    const wave = {
+      wave: 0,
+      agents: [
+        {
+          agentId: "A1",
+          title: "Runtime",
+          ownedPaths: ["src/runtime"],
+          components: ["runtime-engine"],
+          exitContract: {
+            completion: "integrated",
+            durability: "durable",
+            proof: "integration",
+            docImpact: "shared-plan",
+          },
+        },
+        {
+          agentId: "A2",
+          title: "UI",
+          ownedPaths: ["src/ui"],
+          components: ["ui-shell"],
+        },
+        { agentId: "A8", title: "Integration" },
+        { agentId: "A9", title: "Docs" },
+        { agentId: "A0", title: "Evaluator" },
+      ],
+    };
+    const coordinationState = materializeCoordinationState([
+      {
+        id: "claim-conflict",
+        kind: "claim",
+        lane: "main",
+        wave: 0,
+        agentId: "A1",
+        targets: [],
+        status: "open",
+        priority: "high",
+        artifactRefs: ["runtime-engine"],
+        dependsOn: [],
+        closureCondition: "",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        confidence: "medium",
+        summary: "Runtime contract conflicts with UI expectations",
+        detail: "Conflicting interface contract remains open.",
+        source: "agent",
+      },
+      {
+        id: "block-release",
+        kind: "blocker",
+        lane: "main",
+        wave: 0,
+        agentId: "A2",
+        targets: [],
+        status: "open",
+        priority: "high",
+        artifactRefs: ["ui-shell"],
+        dependsOn: [],
+        closureCondition: "",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        confidence: "medium",
+        summary: "Release blocker remains open",
+        detail: "Need rollout proof before release.",
+        source: "agent",
+      },
+      {
+        id: "decision-interface",
+        kind: "decision",
+        lane: "main",
+        wave: 0,
+        agentId: "A8",
+        targets: ["agent:A1", "agent:A2"],
+        status: "resolved",
+        priority: "normal",
+        artifactRefs: ["runtime-engine", "ui-shell"],
+        dependsOn: [],
+        closureCondition: "",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        confidence: "high",
+        summary: "Interface contract changed between runtime and UI",
+        detail: "Cross-component interface update requires coordinated rollout.",
+        source: "agent",
+      },
+    ]);
+
+    const integrationSummary = buildWaveIntegrationSummary({
+      lanePaths: makeLanePaths(dir),
+      wave,
+      attempt: 1,
+      coordinationState,
+      summariesByAgentId: {
+        A1: {
+          gaps: [{ kind: "integration", detail: "Need end-to-end runtime proof." }],
+        },
+        A2: {
+          gaps: [{ kind: "ops", detail: "Operational rollout evidence is still missing." }],
+        },
+      },
+      docsQueue: {
+        items: [
+          {
+            id: "A1:shared:docs/plans/master-plan.md",
+            summary: "Shared-plan reconciliation required in docs/plans/master-plan.md",
+          },
+        ],
+      },
+      runtimeAssignments: [],
+      agentRuns: [
+        { agent: { agentId: "A1" }, logPath: a1LogPath },
+        { agent: { agentId: "A2" }, logPath: a2LogPath },
+      ],
+    });
+
+    expect(integrationSummary.recommendation).toBe("needs-more-work");
+    expect(integrationSummary.openClaims).toContain(
+      "claim-conflict: Runtime contract conflicts with UI expectations",
+    );
+    expect(integrationSummary.conflictingClaims[0]).toContain("claim-conflict:");
+    expect(integrationSummary.unresolvedBlockers[0]).toContain("block-release:");
+    expect(
+      integrationSummary.changedInterfaces.some((entry) => entry.includes("decision-interface:")),
+    ).toBe(true);
+    expect(
+      integrationSummary.crossComponentImpacts.some((entry) => entry.includes("[owners: A1, A2]")),
+    ).toBe(true);
+    expect(integrationSummary.proofGaps.some((entry) => entry.includes("Need end-to-end runtime proof."))).toBe(
+      true,
+    );
+    expect(
+      integrationSummary.docGaps.some((entry) =>
+        entry.includes("A1:shared:docs/plans/master-plan.md"),
+      ),
+    ).toBe(true);
+    expect(
+      integrationSummary.deployRisks.some((entry) => entry.includes("Deployment api ended in state failed")),
+    ).toBe(true);
+    expect(
+      integrationSummary.deployRisks.some((entry) =>
+        entry.includes("Infra dependency on database ended in state setup-required"),
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps the integration steward recommendation authoritative while enriching supporting evidence", () => {
+    const dir = makeTempDir();
+    const wave = {
+      wave: 0,
+      agents: [
+        {
+          agentId: "A1",
+          title: "Runtime",
+          ownedPaths: ["src/runtime"],
+          components: ["runtime-engine"],
+          exitContract: {
+            completion: "integrated",
+            durability: "durable",
+            proof: "integration",
+            docImpact: "shared-plan",
+          },
+        },
+        { agentId: "A8", title: "Integration" },
+        { agentId: "A9", title: "Docs" },
+        { agentId: "A0", title: "Evaluator" },
+      ],
+    };
+
+    const integrationSummary = buildWaveIntegrationSummary({
+      lanePaths: makeLanePaths(dir),
+      wave,
+      attempt: 2,
+      coordinationState: materializeCoordinationState([]),
+      summariesByAgentId: {
+        A1: {
+          proof: {
+            completion: "integrated",
+            durability: "durable",
+            proof: "integration",
+            state: "met",
+            detail: "",
+          },
+          docDelta: {
+            state: "shared-plan",
+            paths: ["docs/plans/master-plan.md"],
+            detail: "Update shared plan docs.",
+          },
+          gaps: [{ kind: "integration", detail: "Need integration proof." }],
+        },
+        A8: {
+          integration: {
+            state: "ready-for-doc-closure",
+            claims: 1,
+            conflicts: 2,
+            blockers: 1,
+            detail: "Integration steward signed off the wave.",
+          },
+        },
+      },
+      docsQueue: { items: [] },
+      runtimeAssignments: [],
+      agentRuns: [],
+    });
+
+    expect(integrationSummary.recommendation).toBe("ready-for-doc-closure");
+    expect(integrationSummary.detail).toBe("Integration steward signed off the wave.");
+    expect(integrationSummary.openClaims).toHaveLength(1);
+    expect(integrationSummary.conflictingClaims).toHaveLength(2);
+    expect(integrationSummary.unresolvedBlockers).toHaveLength(1);
+    expect(
+      integrationSummary.proofGaps.some((entry) => entry.includes("Need integration proof.")),
+    ).toBe(true);
   });
 });
 

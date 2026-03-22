@@ -489,6 +489,13 @@ export function normalizeGateSnapshotForBundle(gateSnapshot, agentArtifacts) {
   return normalized;
 }
 
+function buildStoredOutcomeSnapshot(gateSnapshot, quality) {
+  return {
+    gateSnapshot: gateSnapshot || null,
+    quality: quality || null,
+  };
+}
+
 function writeArtifactDescriptor(dir, filePath, payload, mode = "json", required = true) {
   if (mode === "json") {
     writeJsonAtomic(filePath, payload || {});
@@ -766,6 +773,13 @@ export function writeTraceBundle({
   }
   const replayContext = buildReplayContext({ lanePaths, wave });
   const normalizedGateSnapshot = normalizeGateSnapshotForBundle(gateSnapshot || null, agentArtifacts);
+  const outcomeArtifact = writeArtifactDescriptor(
+    dir,
+    path.join(dir, "outcome.json"),
+    buildStoredOutcomeSnapshot(normalizedGateSnapshot, quality),
+    "json",
+    true,
+  );
 
   const metadata = {
     traceVersion: TRACE_VERSION,
@@ -798,6 +812,7 @@ export function writeTraceBundle({
       integrationMarkdown: integrationMarkdownArtifact,
       componentMatrix: componentMatrixArtifact,
       componentMatrixMarkdown: componentMatrixMarkdownArtifact,
+      outcome: outcomeArtifact,
       sharedSummary: sharedSummaryArtifact,
       structuredSignals: structuredSignalsArtifact,
       quality: qualityArtifact,
@@ -833,6 +848,7 @@ export function loadTraceBundle(dir) {
     docsQueue: readJsonOrNull(path.join(dir, "docs-queue.json")),
     integrationSummary: readJsonOrNull(path.join(dir, "integration.json")),
     quality: readJsonOrNull(path.join(dir, "quality.json")),
+    storedOutcome: readJsonOrNull(path.join(dir, "outcome.json")),
     structuredSignals: readJsonOrNull(path.join(dir, "structured-signals.json")),
     componentMatrix: readJsonOrNull(path.join(dir, "component-cutover-matrix.json")),
     componentMatrixPath: path.join(dir, "component-cutover-matrix.json"),
@@ -895,6 +911,9 @@ export function validateTraceBundle(bundle) {
     }
     if (!bundle.metadata.historySnapshot || typeof bundle.metadata.historySnapshot !== "object") {
       errors.push("Hermetic trace bundle is missing historySnapshot.");
+    }
+    if (!bundle.storedOutcome || typeof bundle.storedOutcome !== "object") {
+      errors.push("Hermetic trace bundle is missing outcome.json.");
     }
   }
   if (!bundle.metadata.artifacts || typeof bundle.metadata.artifacts !== "object") {
@@ -962,6 +981,21 @@ export function validateTraceBundle(bundle) {
   }
   if (!Array.isArray(bundle.manifest?.waves) || bundle.manifest.waves.length === 0) {
     errors.push("Trace manifest is missing wave definitions.");
+  }
+  if (bundle.metadata.traceVersion >= TRACE_VERSION && bundle.storedOutcome) {
+    if (
+      JSON.stringify(bundle.storedOutcome.quality || null) !==
+      JSON.stringify(bundle.quality || null)
+    ) {
+      errors.push("Stored outcome quality snapshot does not match quality.json.");
+    }
+    if (
+      bundle.metadata.gateSnapshot &&
+      JSON.stringify(bundle.storedOutcome.gateSnapshot || null) !==
+        JSON.stringify(bundle.metadata.gateSnapshot || null)
+    ) {
+      warnings.push("Stored outcome gate snapshot differs from inline run-metadata gateSnapshot.");
+    }
   }
   return {
     ok: errors.length === 0,

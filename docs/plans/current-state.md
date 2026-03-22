@@ -2,6 +2,7 @@
 
 - The repository contains the published `@chllming/wave-orchestration` package plus the starter scaffold used by `wave init`.
 - The runtime is package-first and non-destructive for adopting repos: `wave init --adopt-existing` records existing repo-owned plans, waves, prompts, and config without overwriting them, and `wave upgrade` writes only `.wave/install-state.json` plus `.wave/upgrade-history/`.
+- This source repo is itself kept as an adopted Wave workspace, so `node scripts/wave.mjs doctor --json` should pass from the repo root.
 - The default lane is `main`.
 - The harness supports `codex`, `claude`, `opencode`, and `local` executors.
 - The runtime now includes:
@@ -10,8 +11,8 @@
   - compiled shared summaries and per-agent inboxes
   - a per-wave ledger
   - docs queues
-  - explicit integration summaries
-  - hermetic `traceVersion: 2` per-attempt trace bundles with copied launched-agent summaries, copied component matrices for promoted waves, run metadata, and cumulative quality metrics
+  - explicit integration summaries with actionable claim, interface, proof, docs, and deploy-risk evidence
+  - hermetic `traceVersion: 2` per-attempt trace bundles with copied launched-agent summaries, copied component matrices for promoted waves, a hashed `outcome.json` replay baseline, run metadata, and cumulative quality metrics
   - an internal, read-only replay validator for trace bundles, with legacy `traceVersion: 1` bundles kept in best-effort warning mode
   - orchestrator-first clarification triage plus human escalation artifacts
 - Runtime executor support now includes:
@@ -28,6 +29,7 @@
   - generic runtime budgets
 - Closure now runs in staged order: implementation and proof, then `A8` integration, then `A9` documentation, then `A0` evaluator.
 - Routed clarifications remain blocking until the linked follow-up request or escalation is fully resolved.
+- Required inbound cross-lane dependency tickets under `.tmp/wave-orchestrator/dependencies/` block both autonomous wave launch and lane finalization while they remain unresolved.
 - Dry-run remains pre-attempt only: it seeds derived state under `.tmp/<lane>-wave-launcher/dry-run/` and leaves `traces/` file-empty.
 - Component maturity and starter wave promotions are tracked in `docs/plans/component-cutover-matrix.md` and `docs/plans/component-cutover-matrix.json`.
 - Context7 bundle selection and launcher-side prompt injection are enabled through `docs/context7/bundles.json`.
