@@ -4,6 +4,30 @@ Context7 and skills solve different problems.
 
 Use Context7 for external library truth. Use skills for repo-owned, reusable operating knowledge.
 
+That comparison matters because Wave treats context as something to compile at runtime, not something humans should maintain separately for Claude, Codex, OpenCode, and every other executor.
+
+## Compiled Context, Not Hand-Maintained Context Files
+
+The active context for an agent is assembled from multiple layers:
+
+- repository source and the wave's owned files
+- wave markdown and shared plan docs
+- generated shared summary and per-agent inbox
+- saved project defaults such as `.wave/project-profile.json`
+- resolved repo-owned skills
+- selected Context7 snippets for external library truth
+- generated runtime overlays and launch artifacts
+
+Because of that, the question is not "which hand-written context file does this runtime use?" The question is "which context sources does this wave compile for the selected runtime right now?"
+
+Runtime-specific context is still real, but it is mostly generated:
+
+- Claude gets merged system-prompt and settings overlays
+- Codex gets executor flags plus runtime-projected skills
+- OpenCode gets generated config, attachments, and runtime instructions
+
+That keeps the context model unified even when the transport layer differs.
+
 ## Short Version
 
 - Context7

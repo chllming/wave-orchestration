@@ -2,6 +2,8 @@
 
 A wave is the main planning and execution unit in Wave Orchestration.
 
+It turns free-form agent runs into a bounded blackboard-style work package with shared state, explicit ownership, dynamic context, goal-driven execution, and proof-bounded closure.
+
 It is not just a prompt file. A wave is a bounded slice of repository work with:
 
 - explicit scope
@@ -33,6 +35,16 @@ Waves force a higher planning bar than ad hoc prompts. A good wave answers:
 - Which agent owns each slice?
 - What evidence closes the wave?
 - Which dependencies, helper requests, or escalations can still block completion?
+
+## Why This Is A Blackboard-Style Model
+
+Wave is blackboard-style because agents work against shared state instead of treating chat output as the system of record.
+
+- the canonical coordination log is the machine-readable source of truth
+- the rolling board is a human projection over that state, not the scheduler's authority
+- shared summaries and per-agent inboxes are compiled views over the same state
+- helper assignments, clarification flow, dependencies, and integration all operate on that shared state
+- closure depends on the integrated state, not on whether an agent says "done"
 
 ## Wave Anatomy
 
@@ -135,6 +147,22 @@ Current live waves are strict about closure artifacts:
 - Security reviewers must leave a security review report and emit a final `[wave-security]` marker with `state=<clear|concerns|blocked>`, finding count, and approval count.
 - `cont-QA` must emit both a final `Verdict:` line and a final `[wave-gate]` marker.
 - Replay keeps read-only compatibility with older traces and older evaluator-era artifacts, but live waves do not pass on verdict-only or underspecified closure markers.
+
+## Context Is Compiled At Runtime
+
+Wave also treats context as something to compile for the current task, not something humans should hand-maintain separately for each runtime.
+
+The active context for an agent is assembled from:
+
+- repository source and owned files
+- wave markdown and shared plan docs
+- saved project defaults such as `.wave/project-profile.json`
+- the generated shared summary and the agent's inbox
+- resolved skills and runtime-specific skill projections
+- selected Context7 snippets for external library truth
+- generated executor overlays and launch artifacts
+
+That is why switching an agent between Codex, Claude, or OpenCode does not require maintaining separate parallel context files. The orchestrator recomputes the context package for the selected runtime and the current wave state.
 
 ## What Makes A Wave "Done"
 

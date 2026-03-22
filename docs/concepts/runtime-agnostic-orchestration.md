@@ -1,15 +1,22 @@
 # Runtime-Agnostic Orchestration
 
+In short: one orchestrator, many runtimes.
+
 Wave is runtime agnostic at the orchestration layer.
 
-That means planning, coordination, closure, and traces do not depend on whether the selected executor is Codex, Claude Code, OpenCode, or the local smoke executor.
+That means planning, skills, evaluation, proof, coordination, closure, and traces do not depend on whether the selected executor is Codex, Claude Code, OpenCode, or the local smoke executor.
+
+Wave abstracts the runtime away without flattening everything to the lowest common denominator. The wave contract stays stable while the executor adapter preserves the useful runtime-native features.
 
 ## What Stays The Same Across Runtimes
 
 These layers are runtime-neutral:
 
 - wave parsing and validation
+- planner-produced wave specs and authored wave markdown
+- eval targets, deliverables, and proof artifacts
 - component and closure gates
+- skill resolution and attachment policy
 - compiled shared summaries and per-agent inboxes
 - coordination log and rendered message board
 - helper assignments and dependency handling
@@ -34,11 +41,19 @@ Runtime-specific behavior is isolated to the executor adapter layer:
 
 The orchestration substrate above those adapters does not need to know how the runtime transports prompts.
 
+This is the important distinction:
+
+- the orchestration layer owns goals, ownership, proof, and shared state
+- the executor adapter owns prompt transport, runtime-native flags, files, and settings
+
+That split is what lets Wave stay portable without giving up runtime-specific leverage.
+
 ## Why This Matters
 
 Runtime agnosticism gives you:
 
-- the same plan and closure model across vendors
+- the same plan, skill, and closure model across vendors
+- the same eval and proof model across vendors
 - replay and audit surfaces that do not care which runtime produced the work
 - per-role runtime choice without rewriting authoring conventions
 - retry-time fallback without inventing a second planning model

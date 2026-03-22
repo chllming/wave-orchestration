@@ -1,6 +1,12 @@
 # Wave Documentation
 
-This repository now uses a layered docs structure, but the useful path is journey-first:
+These docs are organized around three core ideas:
+
+- one orchestrator, many runtimes across Claude, Codex, OpenCode, and local execution
+- a blackboard-style multi-agent system with goal-driven, proof-bounded closure
+- compiled context from shared state, skills, runtime files, and Context7 instead of hand-maintained per-runtime context files
+
+The useful path is journey-first:
 
 - start with one core concept doc
 - then use one end-to-end workflow guide
@@ -22,7 +28,11 @@ This repository now uses a layered docs structure, but the useful path is journe
 ## Start Here
 
 - New to Wave:
-  Read [concepts/what-is-a-wave.md](./concepts/what-is-a-wave.md). It now covers the core execution model, runtime posture, closure, and state model in one place.
+  Read [concepts/what-is-a-wave.md](./concepts/what-is-a-wave.md). It covers the blackboard execution model, proof-bounded closure, runtime posture, and durable state model in one place.
+- Want the runtime abstraction story:
+  Read [concepts/runtime-agnostic-orchestration.md](./concepts/runtime-agnostic-orchestration.md) to see how planning, skills, evals, proof, and traces stay stable across Claude, Codex, OpenCode, and local execution.
+- Want the context story:
+  Read [concepts/context7-vs-skills.md](./concepts/context7-vs-skills.md) for the compiled-context model: shared summary, inboxes, project defaults, skills, Context7, and runtime overlays.
 - Drafting or revising waves:
   Read [guides/author-and-run-waves.md](./guides/author-and-run-waves.md), then use [plans/wave-orchestrator.md](./plans/wave-orchestrator.md) as the operator runbook.
 - Adding a security review pass:
@@ -37,8 +47,10 @@ This repository now uses a layered docs structure, but the useful path is journe
   Start with [guides/author-and-run-waves.md](./guides/author-and-run-waves.md), then use [plans/wave-orchestrator.md](./plans/wave-orchestrator.md) for the live operator flow.
 - Tuning runtime behavior:
   Read [reference/runtime-config/README.md](./reference/runtime-config/README.md) and [reference/skills.md](./reference/skills.md).
+- Want the research framing behind the design:
+  Read [research/coordination-failure-review.md](./research/coordination-failure-review.md) for the common MAS failure modes and how Wave tries to mitigate them, then use [research/agent-context-sources.md](./research/agent-context-sources.md) as the bibliography.
 - Looking for supporting concept pages:
-  Use [concepts/runtime-agnostic-orchestration.md](./concepts/runtime-agnostic-orchestration.md), [concepts/operating-modes.md](./concepts/operating-modes.md), and [concepts/context7-vs-skills.md](./concepts/context7-vs-skills.md) after the main concept and workflow docs.
+  Use [concepts/operating-modes.md](./concepts/operating-modes.md) after the main concept, runtime, and context docs.
 
 ## Package vs Repo-Owned Material
 

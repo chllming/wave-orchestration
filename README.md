@@ -1,32 +1,75 @@
 # Wave Orchestration
 
-Wave Orchestration is a repository harness for running multi-agent work in bounded waves. You define shared plan docs plus per-wave markdown, the launcher validates the wave, compiles prompts and inboxes, runs implementation agents first, then performs staged closure. Every run writes durable state under `.tmp/<lane>-wave-launcher/` so humans can inspect progress, replay outcomes, and intervene only when needed.
+Wave Orchestration is my framework for "vibe-coding." It keeps the speed of agentic coding, but makes the runtime, coordination, and context model explicit enough to inspect, replay, and improve.
 
-## How It Works
+The framework does three things:
 
-1. Write shared docs and one or more `docs/plans/waves/wave-<n>.md` files.
-2. Run `wave launch --dry-run` to validate the wave and materialize prompts, inboxes, dashboards, and executor previews.
-3. A real launch runs implementation agents first. Agents post claims, evidence, requests, and decisions into the coordination log and rolling message board.
-4. When implementation gates pass, closure runs in order: optional `cont-EVAL` (`E0`), integration (`A8`), documentation (`A9`), and `cont-QA` (`A0`).
-5. Operators use the generated ledgers, inboxes, feedback queue, dependency views, and traces instead of guessing from raw terminal output.
+1. It abstracts the agent runtime away without flattening everything to the lowest common denominator. The same waves, skills, planning, evaluation, proof, and traces can run across Claude, Codex, and OpenCode while still preserving runtime-native features through executor adapters.
+2. It runs work as a blackboard-style multi-agent system. Agents do not just exchange chat messages; they work against shared state, generated inboxes, explicit ownership, and staged closure, and a wave keeps going until the declared goals, proof, production-live criteria, or eval targets are actually satisfied.
+3. It compiles context dynamically for the task at hand. Shared memory, generated runtime files, project defaults, skills, Context7, and cached external docs are assembled at runtime so you do not have to hand-maintain separate Claude, Codex, or other context files.
 
-## Features
+## Core Ideas
 
-- Planner foundation with saved project profile memory, draft specs, and rendered wave markdown
-- Implementation-first execution with staged closure and retry support
-- Durable coordination log, rolling message board, compiled inboxes, and per-wave ledger
-- Dry-run prompt and executor preview mode before any real agent launch
-- Context7 bundle selection, caching, and prompt injection
-- Multi-executor support for Codex, Claude Code, OpenCode, and a local smoke executor
-- Cross-runtime skill packs loaded from `skills/` and resolved by lane, role, runtime, deploy kind, and per-agent attachment
-- Human feedback routing, clarification triage, helper assignment, and cross-lane dependencies
-- Replayable trace bundles for regression and release verification
+- `One orchestrator, many runtimes.`
+  Planning, skills, evals, proof, and traces stay constant while the executor adapter changes.
+- `A blackboard-style multi-agent system.`
+  The coordination log is canonical shared state; the rolling board, shared summary, inboxes, ledger, and integration views are generated projections over that state.
+- `Completion is goal-driven and proof-bounded.`
+  Waves close only when deliverables, proof artifacts, eval targets, dependencies, and closure stewards agree.
+- `Context is compiled, not hand-maintained.`
+  Wave builds runtime context from repo state, project memory, skills, Context7, and generated overlays.
+- `The system is inspectable and replayable.`
+  Dry-run previews, logs, dashboards, ledgers, traces, and replay make the system debuggable instead of mysterious.
+
+## How The Architecture Works
+
+1. Define shared docs plus `docs/plans/waves/wave-<n>.md` files, or generate them with `wave draft`.
+2. Run `wave launch --dry-run` to validate the wave and materialize prompts, shared summaries, inboxes, dashboards, and executor previews before any live execution.
+3. During live execution, implementation agents write claims, evidence, requests, and decisions into the canonical coordination log instead of relying on ad hoc terminal narration.
+4. The launcher compiles blackboard projections from that state: rolling board, shared summary, per-agent inboxes, ledger, docs queue, dependency views, and integration summaries.
+5. Closure runs only when the integrated state is ready: optional `cont-EVAL` (`E0`), optional security review, integration (`A8`), documentation (`A9`), and `cont-QA` (`A0`).
+
+## Architecture Surfaces
+
+- `Wave contract`
+  Shared plan docs, wave markdown, deliverables, proof artifacts, and eval targets define the goal.
+- `Shared state`
+  The coordination log is the source of truth; the board is for humans, not the scheduler.
+- `Runtime abstraction`
+  Executor adapters preserve Codex, Claude, and OpenCode-specific launch features without changing the higher-level wave contract.
+- `Compiled context`
+  Project profile memory, shared summary, inboxes, skills, Context7, and runtime overlays are generated for the chosen executor.
+- `Proof and closure`
+  Exit contracts, proof artifacts, eval markers, and closure stewards stop waves from closing on narrative-only PASS.
+- `Replay and audit`
+  Traces capture the attempt so failures can be inspected and replayed instead of guessed from screenshots.
 
 ## Example Output
 
 Representative rolling message board output from a real wave run:
 
 <img src="./docs/image.png" alt="Example rolling message board output showing claims, evidence, requests, and cont-QA closure for a wave run" width="100%" />
+
+## Common MAS Failure Cases
+
+Recent multi-agent research keeps returning to the same failure modes:
+
+- `Cosmetic board, no canonical state`
+  Agents appear coordinated, but there is no machine-trustable source of truth underneath the conversation.
+- `Hidden evidence never gets pooled`
+  One agent has the critical fact, but it never reaches shared state before closure.
+- `Communication without global-state reconstruction`
+  Agents exchange information, but nobody reconstructs the correct cross-agent picture.
+- `Simultaneous coordination collapse`
+  A team that looks fine in serial work falls apart when multiple owners, blockers, or resources must move together.
+- `Expert signal gets averaged away`
+  The strongest specialist view is diluted into a weaker compromise.
+- `Contradictions get smoothed over`
+  Conflicts are narrated away instead of being turned into explicit repair work.
+- `Premature closure`
+  Agents say they are done before proof, evals, or integrated state actually support PASS.
+
+Wave is built to mitigate those failures with canonical shared state, generated blackboard projections, explicit ownership, goal-driven, proof-bounded closure, and replayable traces. For the research framing and the current gaps, see [docs/research/coordination-failure-review.md](./docs/research/coordination-failure-review.md).
 
 ## Quick Start
 
@@ -59,7 +102,7 @@ pnpm add -D @chllming/wave-orchestration
 pnpm exec wave init
 pnpm exec wave doctor
 pnpm exec wave launch --lane main --dry-run --no-dashboard
-pnpm exec wave coord show --lane main --wave 0 --dry-run
+pnpm exec wave coord show --lane main --wave 0 --dry-run --json
 ```
 
 If the repo already has Wave config, plans, or waves you want to keep:
@@ -99,14 +142,16 @@ node scripts/wave.mjs launch --lane main --dry-run --no-dashboard
 ## Learn More
 
 - [docs/README.md](./docs/README.md): docs map and suggested structure
-- [docs/concepts/what-is-a-wave.md](./docs/concepts/what-is-a-wave.md): wave anatomy, lifecycle, and closure model
+- [docs/concepts/what-is-a-wave.md](./docs/concepts/what-is-a-wave.md): wave anatomy, blackboard execution model, and proof-bounded closure
+- [docs/concepts/runtime-agnostic-orchestration.md](./docs/concepts/runtime-agnostic-orchestration.md): how one orchestration substrate spans Claude, Codex, OpenCode, and local execution
+- [docs/concepts/context7-vs-skills.md](./docs/concepts/context7-vs-skills.md): compiled context, external truth, and repo-owned operating knowledge
 - [docs/guides/planner.md](./docs/guides/planner.md): `wave project` and `wave draft` workflow
-- [docs/concepts/context7-vs-skills.md](./docs/concepts/context7-vs-skills.md): when to use external docs vs repo-owned skills
 - [docs/guides/terminal-surfaces.md](./docs/guides/terminal-surfaces.md): tmux, VS Code terminal registry, and dry-run surfaces
 - [docs/plans/wave-orchestrator.md](./docs/plans/wave-orchestrator.md): operator runbook
 - [docs/plans/context7-wave-orchestrator.md](./docs/plans/context7-wave-orchestrator.md): Context7 setup and bundle authoring
 - [docs/reference/runtime-config/README.md](./docs/reference/runtime-config/README.md): executor, runtime, and skill-projection configuration
 - [docs/reference/skills.md](./docs/reference/skills.md): skill bundle format, resolution order, and runtime projection
+- [docs/research/coordination-failure-review.md](./docs/research/coordination-failure-review.md): MAS failure modes from the research and how Wave responds
 - [CHANGELOG.md](./CHANGELOG.md): release history
 
 ## Research Sources

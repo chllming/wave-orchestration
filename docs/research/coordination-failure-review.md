@@ -17,7 +17,28 @@ The Wave orchestrator addresses several coordination failure modes constructivel
 
 That is materially stronger than the common "agents talk in a shared channel and we hope that was enough" pattern criticized by recent multi-agent papers.
 
-The main weakness is empirical, not architectural. The repo does not yet contain a benchmark family that proves the blackboard actually helps agents reconstruct distributed state under HiddenBench or Silo-Bench style pressure, or that it handles DPBench-style simultaneous coordination reliably.
+The main weakness is empirical, not architectural. The repo now carries coordination-oriented benchmark vocabulary, but it does not yet present enough hard evidence that the blackboard reconstructs distributed state under HiddenBench or Silo-Bench style pressure, or that it handles DPBench-style simultaneous coordination reliably.
+
+## Common MAS Failure Cases
+
+The research cited in this repo keeps returning to a fairly stable set of failure modes. In Wave language, the common ones are:
+
+- `Cosmetic board, no canonical state`
+  Agents appear coordinated because they share a board or chat, but there is no machine-trustable source of truth underneath. Wave responds with a canonical coordination log and treats the board as a projection.
+- `Hidden evidence never gets pooled`
+  One agent has the decision-changing fact, but it never reaches the shared state before closure. Wave responds with shared summaries, per-agent inboxes, and integration gating, but this still needs stronger empirical validation.
+- `Communication without global-state reconstruction`
+  Agents exchange information, yet nobody reconstructs the correct cross-agent picture. Wave responds with integration summaries and barrier-based closure so the final decision depends on integrated state rather than message volume.
+- `Simultaneous coordination collapse`
+  A team that looks competent in serial work falls apart when multiple owners, blockers, or resources must move together. Wave responds with helper assignments, dependency barriers, and staged closure, but still lacks a stronger contention benchmark story.
+- `Expert signal gets averaged away`
+  The strongest specialist view is diluted into a weaker compromise. Wave responds with explicit ownership, named stewards, and capability routing instead of free-form consensus, though expertise weighting is still shallow.
+- `Blackboard projection drift`
+  The raw shared state may be right, but summaries, inboxes, ledgers, or integration artifacts lose the important fact. Wave responds by compiling those surfaces from canonical state and by adding `blackboard-fidelity` to the eval vocabulary.
+- `Contradictions get smoothed over`
+  Conflicting claims look resolved in prose, but the system never turns them into bounded repair work. Wave responds with clarification flow, integration barriers, and contradiction-oriented eval vocabulary, though subtle semantic conflicts can still leak through.
+- `Premature closure`
+  Agents say they are done before proof, evals, or integrated state actually support PASS. Wave responds with structured proof markers, exit contracts, eval gates, closure stewards, and replay-visible traces.
 
 ## What The Papers Warn About
 
@@ -175,23 +196,26 @@ That alignment matters. In many MAS projects the docs promise a blackboard, but 
 
 ## What Is Still Missing To Make The Claim Credible
 
-### 1. No distributed-information benchmark family yet
+### 1. The benchmark vocabulary exists, but the empirical proof is still thin
 
-The biggest gap is in [docs/evals/benchmark-catalog.json](../evals/benchmark-catalog.json). The current families are:
+[docs/evals/benchmark-catalog.json](../evals/benchmark-catalog.json) and [docs/evals/README.md](../evals/README.md) now define coordination-oriented benchmark families such as:
 
-- `service-output`
-- `latency`
-- `quality-regression`
+- `hidden-profile-pooling`
+- `silo-escape`
+- `simultaneous-coordination`
+- `expertise-leverage`
+- `blackboard-fidelity`
+- `contradiction-recovery`
 
-There is nothing yet for:
+That is a real improvement because the repo now has a vocabulary for the exact MAS failures the research highlights.
 
-- hidden-profile reconstruction
-- silo escape under partial information
-- blackboard consistency across raw log, summary, inboxes, ledger, and integration state
-- contradiction injection and recovery
-- simultaneous coordination under contention
+The remaining gap is not the absence of categories. The gap is still empirical proof:
 
-So the repo can reasonably claim "we built mechanisms intended to mitigate these failures," but it cannot yet claim "we demonstrated that these mechanisms overcome the failures highlighted by HiddenBench, Silo-Bench, or DPBench."
+- not enough published results showing those families are exercised systematically
+- not enough evidence that the blackboard actually improves hidden-state reconstruction
+- not enough stress data showing simultaneous coordination remains reliable under contention
+
+So the repo can reasonably claim "we built mechanisms and eval categories intended to mitigate these failures," but it still cannot claim "we demonstrated that those mechanisms consistently overcome the failures highlighted by HiddenBench, Silo-Bench, or DPBench."
 
 ### 2. Information integration is supported, but not measured directly
 
