@@ -21,6 +21,10 @@ import {
   DEFAULT_CODEX_SANDBOX_MODE,
   normalizeCodexSandboxMode,
 } from "./launcher.mjs";
+import {
+  maybeAnnouncePackageUpdate,
+  WAVE_SUPPRESS_UPDATE_NOTICE_ENV,
+} from "./package-update-notice.mjs";
 import { readRunState } from "./wave-files.mjs";
 import { readDependencyTickets } from "./coordination-store.mjs";
 import { readWaveLedger } from "./ledger.mjs";
@@ -155,21 +159,30 @@ export function nextIncompleteWave(allWaves, completed) {
   return null;
 }
 
-function runCommand(args) {
+function runCommand(args, envOverrides = {}) {
   const result = spawnSync("node", args, {
     cwd: REPO_ROOT,
     stdio: "inherit",
-    env: process.env,
+    env: {
+      ...process.env,
+      ...envOverrides,
+    },
   });
   return Number.isInteger(result.status) ? result.status : 1;
 }
 
 function reconcile(lane) {
-  return runCommand([path.join(PACKAGE_ROOT, "scripts", "wave-launcher.mjs"), "--lane", lane, "--reconcile-status"]);
+  return runCommand(
+    [path.join(PACKAGE_ROOT, "scripts", "wave-launcher.mjs"), "--lane", lane, "--reconcile-status"],
+    { [WAVE_SUPPRESS_UPDATE_NOTICE_ENV]: "1" },
+  );
 }
 
 function dryRun(lane) {
-  return runCommand([path.join(PACKAGE_ROOT, "scripts", "wave-launcher.mjs"), "--lane", lane, "--dry-run", "--no-dashboard"]);
+  return runCommand(
+    [path.join(PACKAGE_ROOT, "scripts", "wave-launcher.mjs"), "--lane", lane, "--dry-run", "--no-dashboard"],
+    { [WAVE_SUPPRESS_UPDATE_NOTICE_ENV]: "1" },
+  );
 }
 
 function listPendingFeedback(lane) {
@@ -215,7 +228,7 @@ function launchSingleWave(params) {
   if (params.keepTerminals) {
     args.push("--keep-terminals");
   }
-  return runCommand(args);
+  return runCommand(args, { [WAVE_SUPPRESS_UPDATE_NOTICE_ENV]: "1" });
 }
 
 function requiredInboundDependenciesOpen(lanePaths, lane) {
@@ -291,12 +304,13 @@ export function readAutonomousBarrier(lanePaths, lane, wave = null) {
   return null;
 }
 
-export function runAutonomousCli(argv) {
+export async function runAutonomousCli(argv) {
   const parsed = parseArgs(argv);
   if (parsed.help) {
     printUsage();
     return;
   }
+  await maybeAnnouncePackageUpdate();
   const options = parsed.options;
   const allWaves = getWaveNumbers(options.lane);
   console.log(`[autonomous] lane=${options.lane} orchestrator=${options.orchestratorId}`);

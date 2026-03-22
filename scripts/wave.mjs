@@ -12,6 +12,7 @@ function printHelp() {
   console.log(`Usage:
   wave init [options]
   wave upgrade [options]
+  wave self-update
   wave changelog [options]
   wave doctor [options]
   wave project setup [options]
@@ -25,6 +26,7 @@ function printHelp() {
   wave local [local executor options]
   wave coord [coordination options]
   wave dep [dependency options]
+  wave benchmark [benchmark options]
 
 Global options:
   --repo-root <path>   Run the command against a target workspace root
@@ -36,7 +38,7 @@ if (!subcommand || subcommand === "--help" || subcommand === "-h" || subcommand 
   process.exit(0);
 }
 
-if (["init", "upgrade", "changelog", "doctor"].includes(subcommand)) {
+if (["init", "upgrade", "self-update", "changelog", "doctor"].includes(subcommand)) {
   try {
     const { runInstallCli } = await import("./wave-orchestrator/install.mjs");
     await runInstallCli([subcommand, ...rest]);
@@ -71,7 +73,7 @@ if (["init", "upgrade", "changelog", "doctor"].includes(subcommand)) {
 } else if (subcommand === "autonomous") {
   const { runAutonomousCli } = await import("./wave-orchestrator/autonomous.mjs");
   try {
-    runAutonomousCli(rest);
+    await runAutonomousCli(rest);
   } catch (error) {
     console.error(`[wave] ${error instanceof Error ? error.message : String(error)}`);
     process.exit(1);
@@ -112,6 +114,14 @@ if (["init", "upgrade", "changelog", "doctor"].includes(subcommand)) {
   try {
     const { runDependencyCli } = await import("./wave-orchestrator/dep-cli.mjs");
     await runDependencyCli(rest);
+  } catch (error) {
+    console.error(`[wave] ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  }
+} else if (subcommand === "benchmark") {
+  try {
+    const { runBenchmarkCli } = await import("./wave-orchestrator/benchmark.mjs");
+    await runBenchmarkCli(rest);
   } catch (error) {
     console.error(`[wave] ${error instanceof Error ? error.message : String(error)}`);
     process.exit(1);

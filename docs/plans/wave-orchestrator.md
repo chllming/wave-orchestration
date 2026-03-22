@@ -54,6 +54,7 @@ This runbook is the operational view of the architecture:
 - `pnpm exec wave dep show --lane main --wave 0 --json`
 - `pnpm exec wave dep post --owner-lane main --requester-lane release --owner-wave 0 --requester-wave 2 --agent launcher --summary "Need shared-plan reconciliation" --target capability:docs-shared-plan --required`
 - `pnpm exec wave upgrade`
+- `pnpm exec wave self-update`
 
 ## Configuration
 
@@ -150,6 +151,16 @@ Clarification flow is orchestrator-first:
 Required inbound dependencies block autonomous next-wave start and lane finalization. Required outbound dependencies are surfaced in the per-wave dependency snapshot and keep the requester wave from closing while they remain part of that wave's exit conditions.
 
 ## Upgrade Flow
+
+Fast path:
+
+```bash
+pnpm exec wave self-update
+```
+
+That command updates the dependency through the workspace package manager, prints the changelog delta since the recorded install, and then runs `wave upgrade` to record the new install-state and upgrade report.
+
+Manual path:
 
 1. Upgrade the package version:
 

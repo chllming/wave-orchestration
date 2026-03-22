@@ -98,6 +98,7 @@ import {
   commandForExecutor,
   isExecutorCommandAvailable,
 } from "./executors.mjs";
+import { maybeAnnouncePackageUpdate } from "./package-update-notice.mjs";
 import {
   agentRequiresProofCentricValidation,
   buildRunStateEvidence,
@@ -2971,6 +2972,9 @@ export async function runLauncherCli(argv) {
     return;
   }
   const { lanePaths, options } = parsed;
+  if (!options.reconcileStatus) {
+    await maybeAnnouncePackageUpdate();
+  }
   let lockHeld = false;
   let globalDashboard = null;
   let globalDashboardTerminalEntry = null;

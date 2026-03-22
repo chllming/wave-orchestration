@@ -8,6 +8,10 @@ import {
   buildDefaultProjectProfile,
   readProjectProfile,
 } from "./project-profile.mjs";
+import {
+  maybeAnnouncePackageUpdate,
+  WAVE_SUPPRESS_UPDATE_NOTICE_ENV,
+} from "./package-update-notice.mjs";
 import { runLauncherCli } from "./launcher.mjs";
 import { renderWaveMarkdown } from "./planner.mjs";
 import {
@@ -185,6 +189,20 @@ function buildAdhocRunId() {
   const stamp = new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14);
   const random = crypto.randomBytes(3).toString("hex");
   return sanitizeAdhocRunId(`adhoc-${stamp}-${random}`);
+}
+
+async function withSuppressedNestedUpdateNotice(fn) {
+  const previousValue = process.env[WAVE_SUPPRESS_UPDATE_NOTICE_ENV];
+  process.env[WAVE_SUPPRESS_UPDATE_NOTICE_ENV] = "1";
+  try {
+    return await fn();
+  } finally {
+    if (previousValue === undefined) {
+      delete process.env[WAVE_SUPPRESS_UPDATE_NOTICE_ENV];
+    } else {
+      process.env[WAVE_SUPPRESS_UPDATE_NOTICE_ENV] = previousValue;
+    }
+  }
 }
 
 function readEffectiveProjectProfile(config) {
@@ -1135,6 +1153,7 @@ export async function runAdhocCli(argv) {
     if (options.tasks.length === 0) {
       throw new Error("At least one --task is required for `wave adhoc run`.");
     }
+    await maybeAnnouncePackageUpdate();
     const stored = createStoredRun({ config, options });
     const summary = summarizePlan(stored.spec, stored.lanePaths);
     if (options.json) {
@@ -1157,17 +1176,19 @@ export async function runAdhocCli(argv) {
     writeJsonAtomic(stored.lanePaths.adhocResultPath, runningResult);
     upsertAdhocIndexEntry(stored.lanePaths.adhocIndexPath, runningResult);
     try {
-      await runLauncherCli([
-        "--lane",
-        stored.lanePaths.lane,
-        "--adhoc-run",
-        stored.lanePaths.runId,
-        "--start-wave",
-        String(ADHOC_WAVE_NUMBER),
-        "--end-wave",
-        String(ADHOC_WAVE_NUMBER),
-        ...options.launcherArgs,
-      ]);
+      await withSuppressedNestedUpdateNotice(() =>
+        runLauncherCli([
+          "--lane",
+          stored.lanePaths.lane,
+          "--adhoc-run",
+          stored.lanePaths.runId,
+          "--start-wave",
+          String(ADHOC_WAVE_NUMBER),
+          "--end-wave",
+          String(ADHOC_WAVE_NUMBER),
+          ...options.launcherArgs,
+        ]),
+      );
       const completedResult = buildResultRecord(
         stored.lanePaths,
         stored.request,
