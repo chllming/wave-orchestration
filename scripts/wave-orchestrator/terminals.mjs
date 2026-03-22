@@ -12,6 +12,22 @@ import {
   writeJsonAtomic,
 } from "./shared.mjs";
 
+export const TERMINAL_SURFACES = ["vscode", "tmux", "none"];
+
+export function normalizeTerminalSurface(value, label = "terminal surface") {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
+  if (!TERMINAL_SURFACES.includes(normalized)) {
+    throw new Error(`${label} must be one of: ${TERMINAL_SURFACES.join(", ")}`);
+  }
+  return normalized;
+}
+
+export function terminalSurfaceUsesTerminalRegistry(surface) {
+  return normalizeTerminalSurface(surface) === "vscode";
+}
+
 function defaultTerminalsConfig() {
   return {
     terminals: [],

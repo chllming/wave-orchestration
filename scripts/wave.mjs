@@ -14,6 +14,9 @@ function printHelp() {
   wave upgrade [options]
   wave changelog [options]
   wave doctor [options]
+  wave project setup [options]
+  wave project show [options]
+  wave draft [draft options]
   wave launch [launcher options]
   wave autonomous [autonomous options]
   wave feedback [feedback options]
@@ -36,6 +39,14 @@ if (["init", "upgrade", "changelog", "doctor"].includes(subcommand)) {
   try {
     const { runInstallCli } = await import("./wave-orchestrator/install.mjs");
     await runInstallCli([subcommand, ...rest]);
+  } catch (error) {
+    console.error(`[wave] ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(Number.isInteger(error?.exitCode) ? error.exitCode : 1);
+  }
+} else if (subcommand === "project" || subcommand === "draft") {
+  try {
+    const { runPlannerCli } = await import("./wave-orchestrator/planner.mjs");
+    await runPlannerCli([subcommand, ...rest]);
   } catch (error) {
     console.error(`[wave] ${error instanceof Error ? error.message : String(error)}`);
     process.exit(Number.isInteger(error?.exitCode) ? error.exitCode : 1);

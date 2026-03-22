@@ -30,6 +30,7 @@ import {
 } from "./shared.mjs";
 import { normalizeContext7Config, hashAgentPromptFingerprint } from "./context7.mjs";
 import {
+  isOpenCoordinationStatus,
   openClarificationLinkedRequests,
   readMaterializedCoordinationState,
 } from "./coordination-store.mjs";
@@ -42,6 +43,7 @@ import {
   validateIntegrationSummary,
   validateImplementationSummary,
 } from "./agent-state.mjs";
+import { normalizeSkillId, resolveAgentSkills } from "./skills.mjs";
 
 export const WAVE_EVALUATOR_ROLE_PROMPT_PATH = DEFAULT_EVALUATOR_ROLE_PROMPT_PATH;
 export const WAVE_INTEGRATION_ROLE_PROMPT_PATH = DEFAULT_INTEGRATION_ROLE_PROMPT_PATH;
@@ -201,6 +203,76 @@ function parsePathList(blockText, filePath, label) {
   return paths;
 }
 
+function parseSkillsList(blockText, filePath, label) {
+  if (!blockText) {
+    return [];
+  }
+  const skills = [];
+  const seen = new Set();
+  for (const line of String(blockText || "").split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const bulletMatch = trimmed.match(/^-\s+(.+?)\s*$/);
+    if (!bulletMatch) {
+      throw new Error(`Malformed skill entry "${trimmed}" in ${label} (${filePath})`);
+    }
+    const skillId = normalizeSkillId(
+      bulletMatch[1].replace(/[`"']/g, "").trim(),
+      `${label} (${filePath})`,
+    );
+    if (seen.has(skillId)) {
+      throw new Error(`Duplicate skill "${skillId}" in ${label} (${filePath})`);
+    }
+    seen.add(skillId);
+    skills.push(skillId);
+  }
+  return skills;
+}
+
+function parseDeployEnvironments(blockText, filePath) {
+  if (!blockText) {
+    return [];
+  }
+  const environments = [];
+  const seen = new Set();
+  for (const line of String(blockText || "").split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const match = trimmed.match(
+      /^-\s+`?([a-z0-9][a-z0-9._-]*)`?\s*:\s*`?([a-z0-9][a-z0-9._-]*)`?\s*(default)?(?:\s+\((.*)\))?$/i,
+    );
+    if (!match) {
+      throw new Error(`Malformed deploy environment "${trimmed}" in ${filePath}`);
+    }
+    const id = String(match[1] || "").trim().toLowerCase();
+    const kind = String(match[2] || "").trim().toLowerCase();
+    if (seen.has(id)) {
+      throw new Error(`Duplicate deploy environment "${id}" in ${filePath}`);
+    }
+    seen.add(id);
+    environments.push({
+      id,
+      kind,
+      isDefault: cleanBooleanToken(match[3]),
+      notes: String(match[4] || "").trim() || null,
+    });
+  }
+  if (!environments.some((environment) => environment.isDefault) && environments.length > 0) {
+    environments[0].isDefault = true;
+  }
+  return environments;
+}
+
+function cleanBooleanToken(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase() === "default";
+}
+
 function normalizeRepoRelativePath(relPath) {
   return String(relPath || "")
     .replaceAll("\\", "/")
@@ -257,6 +329,13 @@ function extractFencedBlock(blockText, messagePrefix) {
 export function extractPromptFromSection(sectionText, filePath, agentId) {
   const promptBlock = extractSectionBody(sectionText, "Prompt", filePath, agentId);
   return extractFencedBlock(promptBlock, `Agent ${agentId} in ${filePath}`);
+}
+
+function extractAgentSkillsFromSection(sectionText, filePath, agentId) {
+  const skillsBlock = extractSectionBody(sectionText, "Skills", filePath, agentId, {
+    required: false,
+  });
+  return parseSkillsList(skillsBlock, filePath, `agent ${agentId} skills`);
 }
 
 function parseContext7Settings(blockText, filePath, label) {
@@ -1280,6 +1359,7 @@ export function parseWaveContent(content, filePath, options = {}) {
     const executorConfig = extractExecutorConfigFromSection(sectionText, filePath, current.agentId);
     const components = extractAgentComponentsFromSection(sectionText, filePath, current.agentId);
     const capabilities = extractAgentCapabilitiesFromSection(sectionText, filePath, current.agentId);
+    const skills = extractAgentSkillsFromSection(sectionText, filePath, current.agentId);
     const deliverables = extractAgentDeliverablesFromSection(
       sectionText,
       filePath,
@@ -1309,6 +1389,7 @@ export function parseWaveContent(content, filePath, options = {}) {
       executorConfig,
       components,
       capabilities,
+      skills,
       deliverables,
       ownedPaths,
     });
@@ -1329,6 +1410,12 @@ export function parseWaveContent(content, filePath, options = {}) {
     wave: waveNumber,
     file: path.relative(REPO_ROOT, filePath),
     commitMessage: commitMessageMatch ? commitMessageMatch[1] : null,
+    deployEnvironments: parseDeployEnvironments(
+      extractTopLevelSectionBody(content, "Deploy environments", filePath, {
+        required: false,
+      }),
+      filePath,
+    ),
     context7Defaults: extractWaveContext7Defaults(content, filePath),
     componentPromotions,
     agents: agentsWithComponentTargets,
@@ -1608,11 +1695,19 @@ export function resolveAgentExecutor(agent, options = {}) {
 }
 
 export function applyExecutorSelectionsToWave(wave, options = {}) {
-  return {
+  const laneProfile = resolveLaneProfileForOptions(options);
+  const withExecutors = {
     ...wave,
     agents: wave.agents.map((agent) => ({
       ...agent,
-      executorResolved: resolveAgentExecutor(agent, options),
+      executorResolved: resolveAgentExecutor(agent, { ...options, laneProfile }),
+    })),
+  };
+  return {
+    ...withExecutors,
+    agents: withExecutors.agents.map((agent) => ({
+      ...agent,
+      skillsResolved: resolveAgentSkills(agent, withExecutors, { laneProfile }),
     })),
   };
 }
@@ -1878,7 +1973,21 @@ export function readWaveEvaluatorArtifacts(wave, { logsDir, evaluatorAgentId } =
   };
 }
 
-export function completedWavesFromStatusFiles(allWaves, statusDir, options = {}) {
+function pushWaveCompletionReason(reasons, code, detail) {
+  const normalizedCode = String(code || "").trim();
+  const normalizedDetail = String(detail || "").trim();
+  if (!normalizedCode || !normalizedDetail) {
+    return;
+  }
+  if (
+    reasons.some((reason) => reason.code === normalizedCode && reason.detail === normalizedDetail)
+  ) {
+    return;
+  }
+  reasons.push({ code: normalizedCode, detail: normalizedDetail });
+}
+
+function analyzeWaveCompletionFromStatusFiles(wave, statusDir, options = {}) {
   const logsDir = options.logsDir || path.join(path.resolve(statusDir, ".."), "logs");
   const coordinationDir =
     options.coordinationDir || path.join(path.resolve(statusDir, ".."), "coordination");
@@ -1893,96 +2002,195 @@ export function completedWavesFromStatusFiles(allWaves, statusDir, options = {})
   const componentThreshold =
     options.requireComponentPromotionsFromWave ??
     laneProfile.validation.requireComponentPromotionsFromWave;
+
+  const reasons = [];
+  const summariesByAgentId = {};
+  const missingStatusAgents = [];
+  let statusesReady = wave.agents.length > 0;
+
+  for (const agent of wave.agents) {
+    const statusPath = path.join(statusDir, `wave-${wave.wave}-${agent.slug}.status`);
+    const statusRecord = readStatusRecordIfPresent(statusPath);
+    if (!statusRecord) {
+      missingStatusAgents.push(agent.agentId);
+      statusesReady = false;
+      continue;
+    }
+    const expectedPromptHash = hashAgentPromptFingerprint(agent);
+    if (statusRecord.code !== 0) {
+      pushWaveCompletionReason(
+        reasons,
+        "nonzero-status",
+        `${agent.agentId} exited ${statusRecord.code} in ${path.relative(REPO_ROOT, statusPath)}.`,
+      );
+      statusesReady = false;
+      continue;
+    }
+    if (statusRecord.promptHash !== expectedPromptHash) {
+      pushWaveCompletionReason(
+        reasons,
+        "prompt-hash-mismatch",
+        `${agent.agentId} status in ${path.relative(REPO_ROOT, statusPath)} does not match the current prompt fingerprint.`,
+      );
+      statusesReady = false;
+      continue;
+    }
+    const summary = readAgentExecutionSummary(statusPath);
+    summariesByAgentId[agent.agentId] = summary;
+    if (agent.agentId === evaluatorAgentId) {
+      if (summary) {
+        const validation = validateEvaluatorSummary(agent, summary);
+        if (!validation.ok) {
+          pushWaveCompletionReason(
+            reasons,
+            "invalid-evaluator-summary",
+            `${agent.agentId}: ${validation.statusCode}: ${validation.detail}`,
+          );
+          statusesReady = false;
+        }
+      }
+      continue;
+    }
+    if (
+      agent.agentId === integrationAgentId &&
+      integrationThreshold !== null &&
+      wave.wave >= integrationThreshold
+    ) {
+      const validation = validateIntegrationSummary(agent, summary);
+      if (!validation.ok) {
+        pushWaveCompletionReason(
+          reasons,
+          "invalid-integration-summary",
+          `${agent.agentId}: ${validation.statusCode}: ${validation.detail}`,
+        );
+        statusesReady = false;
+      }
+      continue;
+    }
+    if (agent.agentId === documentationAgentId) {
+      const validation = validateDocumentationClosureSummary(agent, summary);
+      if (!validation.ok) {
+        pushWaveCompletionReason(
+          reasons,
+          "invalid-documentation-summary",
+          `${agent.agentId}: ${validation.statusCode}: ${validation.detail}`,
+        );
+        statusesReady = false;
+      }
+      continue;
+    }
+    const validation = validateImplementationSummary(agent, summary);
+    if (!validation.ok) {
+      pushWaveCompletionReason(
+        reasons,
+        "invalid-implementation-summary",
+        `${agent.agentId}: ${validation.statusCode}: ${validation.detail}`,
+      );
+      statusesReady = false;
+    }
+  }
+
+  if (missingStatusAgents.length > 0) {
+    pushWaveCompletionReason(
+      reasons,
+      "missing-status",
+      `Missing status files for ${missingStatusAgents.join(", ")}.`,
+    );
+  }
+
+  if (
+    statusesReady &&
+    componentThreshold !== null &&
+    wave.wave >= componentThreshold
+  ) {
+    const promotionsValidation = validateWaveComponentPromotions(wave, summariesByAgentId, options);
+    if (!promotionsValidation.ok) {
+      pushWaveCompletionReason(
+        reasons,
+        "component-promotions-invalid",
+        promotionsValidation.detail,
+      );
+      statusesReady = false;
+    }
+    const matrixValidation = validateWaveComponentMatrixCurrentLevels(wave, {
+      ...options,
+      laneProfile,
+    });
+    if (!matrixValidation.ok) {
+      pushWaveCompletionReason(
+        reasons,
+        "component-matrix-invalid",
+        matrixValidation.detail,
+      );
+      statusesReady = false;
+    }
+  }
+
+  if (statusesReady) {
+    const evaluatorArtifacts = readWaveEvaluatorArtifacts(wave, {
+      logsDir,
+      evaluatorAgentId,
+    });
+    if (!evaluatorArtifacts.ok) {
+      pushWaveCompletionReason(reasons, evaluatorArtifacts.statusCode, evaluatorArtifacts.detail);
+      statusesReady = false;
+    }
+  }
+
+  const coordinationState = readMaterializedCoordinationState(
+    path.join(coordinationDir, `wave-${wave.wave}.jsonl`),
+  );
+  const openClarificationIds = coordinationState.clarifications
+    .filter((record) => isOpenCoordinationStatus(record.status))
+    .map((record) => record.id);
+  if (openClarificationIds.length > 0) {
+    pushWaveCompletionReason(
+      reasons,
+      "open-clarification",
+      `Open clarification records: ${openClarificationIds.join(", ")}.`,
+    );
+  }
+  const openClarificationRequestIds = openClarificationLinkedRequests(coordinationState).map(
+    (record) => record.id,
+  );
+  if (openClarificationRequestIds.length > 0) {
+    pushWaveCompletionReason(
+      reasons,
+      "open-clarification-request",
+      `Open clarification-linked requests: ${openClarificationRequestIds.join(", ")}.`,
+    );
+  }
+  const openHumanEscalationIds = coordinationState.humanEscalations
+    .filter((record) => isOpenCoordinationStatus(record.status))
+    .map((record) => record.id);
+  if (openHumanEscalationIds.length > 0) {
+    pushWaveCompletionReason(
+      reasons,
+      "open-human-escalation",
+      `Open human escalation records: ${openHumanEscalationIds.join(", ")}.`,
+    );
+  }
+  const openHumanFeedbackIds = coordinationState.humanFeedback
+    .filter((record) => isOpenCoordinationStatus(record.status))
+    .map((record) => record.id);
+  if (openHumanFeedbackIds.length > 0) {
+    pushWaveCompletionReason(
+      reasons,
+      "open-human-feedback",
+      `Open human feedback records: ${openHumanFeedbackIds.join(", ")}.`,
+    );
+  }
+
+  return {
+    ok: reasons.length === 0,
+    reasons,
+  };
+}
+
+export function completedWavesFromStatusFiles(allWaves, statusDir, options = {}) {
   const completed = [];
   for (const wave of allWaves) {
-    let waveIsComplete = wave.agents.length > 0;
-    const summariesByAgentId = {};
-    for (const agent of wave.agents) {
-      const statusPath = path.join(statusDir, `wave-${wave.wave}-${agent.slug}.status`);
-      const statusRecord = readStatusRecordIfPresent(statusPath);
-      if (!statusRecord) {
-        waveIsComplete = false;
-        break;
-      }
-      const expectedPromptHash = hashAgentPromptFingerprint(agent);
-      if (statusRecord.code !== 0 || statusRecord.promptHash !== expectedPromptHash) {
-        waveIsComplete = false;
-        break;
-      }
-      const summary = readAgentExecutionSummary(statusPath);
-      summariesByAgentId[agent.agentId] = summary;
-      if (agent.agentId === evaluatorAgentId && summary) {
-        if (!validateEvaluatorSummary(agent, summary).ok) {
-          waveIsComplete = false;
-          break;
-        }
-        continue;
-      }
-      if (
-        agent.agentId === integrationAgentId &&
-        integrationThreshold !== null &&
-        wave.wave >= integrationThreshold
-      ) {
-        if (!validateIntegrationSummary(agent, summary).ok) {
-          waveIsComplete = false;
-          break;
-        }
-        continue;
-      }
-      if (agent.agentId === documentationAgentId) {
-        if (!validateDocumentationClosureSummary(agent, summary).ok) {
-          waveIsComplete = false;
-          break;
-        }
-        continue;
-      }
-      if (!validateImplementationSummary(agent, summary).ok) {
-        waveIsComplete = false;
-        break;
-      }
-    }
-    if (
-      waveIsComplete &&
-      componentThreshold !== null &&
-      wave.wave >= componentThreshold &&
-      !validateWaveComponentPromotions(wave, summariesByAgentId, options).ok
-    ) {
-      waveIsComplete = false;
-    }
-    if (
-      waveIsComplete &&
-      componentThreshold !== null &&
-      wave.wave >= componentThreshold &&
-      !validateWaveComponentMatrixCurrentLevels(wave, { ...options, laneProfile }).ok
-    ) {
-      waveIsComplete = false;
-    }
-    if (
-      waveIsComplete &&
-      !readWaveEvaluatorArtifacts(wave, { logsDir, evaluatorAgentId }).ok
-    ) {
-      waveIsComplete = false;
-    }
-    if (waveIsComplete) {
-      const coordinationState = readMaterializedCoordinationState(
-        path.join(coordinationDir, `wave-${wave.wave}.jsonl`),
-      );
-      if (
-        coordinationState.clarifications.some((record) =>
-          ["open", "acknowledged", "in_progress"].includes(record.status),
-        ) ||
-        openClarificationLinkedRequests(coordinationState).length > 0 ||
-        coordinationState.humanEscalations.some((record) =>
-          ["open", "acknowledged", "in_progress"].includes(record.status),
-        ) ||
-        coordinationState.humanFeedback.some((record) =>
-          ["open", "acknowledged", "in_progress"].includes(record.status),
-        )
-      ) {
-        waveIsComplete = false;
-      }
-    }
-    if (waveIsComplete) {
+    if (analyzeWaveCompletionFromStatusFiles(wave, statusDir, options).ok) {
       completed.push(wave.wave);
     }
   }
@@ -1990,7 +2198,13 @@ export function completedWavesFromStatusFiles(allWaves, statusDir, options = {})
 }
 
 export function reconcileRunStateFromStatusFiles(allWaves, runStatePath, statusDir, options = {}) {
-  const completedFromStatus = completedWavesFromStatusFiles(allWaves, statusDir, options);
+  const diagnostics = allWaves.map((wave) => ({
+    wave: wave.wave,
+    ...analyzeWaveCompletionFromStatusFiles(wave, statusDir, options),
+  }));
+  const completedFromStatus = diagnostics
+    .filter((diagnostic) => diagnostic.ok)
+    .map((diagnostic) => diagnostic.wave);
   const before = readRunState(runStatePath);
   const firstMerge = normalizeCompletedWaves([...before.completedWaves, ...completedFromStatus]);
   const latest = readRunState(runStatePath);
@@ -2003,6 +2217,7 @@ export function reconcileRunStateFromStatusFiles(allWaves, runStatePath, statusD
     completedFromStatus,
     addedFromBefore: firstMerge.filter((waveNumber) => !before.completedWaves.includes(waveNumber)),
     addedFromLatest: merged.filter((waveNumber) => !latest.completedWaves.includes(waveNumber)),
+    blockedFromStatus: diagnostics.filter((diagnostic) => !diagnostic.ok),
     state,
   };
 }

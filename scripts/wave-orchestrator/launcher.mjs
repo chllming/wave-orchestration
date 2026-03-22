@@ -87,9 +87,12 @@ import {
   createGlobalDashboardTerminalEntry,
   createTemporaryTerminalEntries,
   killTmuxSessionIfExists,
+  normalizeTerminalSurface,
   pruneOrphanLaneTemporaryTerminalEntries,
   removeLaneTemporaryTerminalEntries,
   removeTerminalEntries,
+  terminalSurfaceUsesTerminalRegistry,
+  TERMINAL_SURFACES,
 } from "./terminals.mjs";
 import {
   buildCodexExecInvocation,
@@ -124,6 +127,12 @@ import { buildDocsQueue, readDocsQueue, writeDocsQueue } from "./docs-queue.mjs"
 import { deriveWaveLedger, readWaveLedger, writeWaveLedger } from "./ledger.mjs";
 import { buildQualityMetrics, writeTraceBundle } from "./traces.mjs";
 import { triageClarificationRequests } from "./clarification-triage.mjs";
+import { readProjectProfile, resolveDefaultTerminalSurface } from "./project-profile.mjs";
+import {
+  resolveAgentSkills,
+  summarizeResolvedSkills,
+  writeResolvedSkillArtifacts,
+} from "./skills.mjs";
 import {
   buildDependencySnapshot,
   buildRequestAssignments,
@@ -133,7 +142,22 @@ import {
 } from "./routing-state.mjs";
 export { CODEX_SANDBOX_MODES, DEFAULT_CODEX_SANDBOX_MODE, normalizeCodexSandboxMode, buildCodexExecInvocation };
 
-function printUsage(lanePaths) {
+export function formatReconcileBlockedWaveLine(blockedWave) {
+  const parts = Array.isArray(blockedWave?.reasons)
+    ? blockedWave.reasons
+        .map((reason) => {
+          const code = compactSingleLine(reason?.code || "", 80);
+          const detail = compactSingleLine(reason?.detail || "", 240);
+          return code && detail ? `${code}=${detail}` : "";
+        })
+        .filter(Boolean)
+    : [];
+  return `[reconcile] wave ${blockedWave?.wave ?? "unknown"} not reconstructable: ${
+    parts.join("; ") || "unknown reason"
+  }`;
+}
+
+function printUsage(lanePaths, terminalSurface) {
   console.log(`Usage: pnpm exec wave launch [options]
 
 Options:
@@ -158,6 +182,8 @@ Options:
   --codex-sandbox <mode> Codex sandbox mode: ${CODEX_SANDBOX_MODES.join(" | ")} (default: ${DEFAULT_CODEX_SANDBOX_MODE})
   --manifest-out <path>  Write parsed wave manifest JSON (default: ${path.relative(REPO_ROOT, lanePaths.defaultManifestPath)})
   --dry-run              Parse waves and update manifest only
+  --terminal-surface <mode>
+                        Terminal surface: ${TERMINAL_SURFACES.join(" | ")} (default: ${terminalSurface})
   --no-dashboard         Disable per-wave tmux dashboard session
   --cleanup-sessions     Kill lane tmux sessions after each wave (default: on)
   --keep-sessions        Keep lane tmux sessions after each wave
@@ -176,6 +202,7 @@ Options:
 
 function parseArgs(argv) {
   let lanePaths = buildLanePaths(DEFAULT_WAVE_LANE);
+  const projectProfile = readProjectProfile();
   const options = {
     lane: DEFAULT_WAVE_LANE,
     startWave: 0,
@@ -193,6 +220,7 @@ function parseArgs(argv) {
     codexSandboxMode: DEFAULT_CODEX_SANDBOX_MODE,
     manifestOut: lanePaths.defaultManifestPath,
     dryRun: false,
+    terminalSurface: resolveDefaultTerminalSurface(projectProfile),
     dashboard: true,
     cleanupSessions: true,
     keepTerminals: false,
@@ -216,6 +244,8 @@ function parseArgs(argv) {
     }
     if (arg === "--dry-run") {
       options.dryRun = true;
+    } else if (arg === "--terminal-surface") {
+      options.terminalSurface = normalizeTerminalSurface(argv[++i], "--terminal-surface");
     } else if (arg === "--no-dashboard") {
       options.dashboard = false;
     } else if (arg === "--cleanup-sessions") {
@@ -304,6 +334,9 @@ function parseArgs(argv) {
   }
   if (!options.autoNext && options.endWave !== null && options.endWave < options.startWave) {
     throw new Error("--end-wave must be >= --start-wave");
+  }
+  if (!options.dryRun && options.terminalSurface === "none") {
+    throw new Error("--terminal-surface none is only supported with --dry-run");
   }
   return { help: false, lanePaths, options };
 }
@@ -1336,6 +1369,7 @@ export async function runClosureSweepPhase({
     flushDashboards();
     const launchResult = await launchAgentSessionFn(lanePaths, {
       wave: wave.wave,
+      waveDefinition: wave,
       agent: runInfo.agent,
       sessionName: runInfo.sessionName,
       promptPath: runInfo.promptPath,
@@ -1359,6 +1393,7 @@ export async function runClosureSweepPhase({
     runInfo.lastPromptHash = launchResult?.promptHash || null;
     runInfo.lastContext7 = launchResult?.context7 || null;
     runInfo.lastExecutorId = launchResult?.executorId || runInfo.agent.executorResolved?.id || null;
+    runInfo.lastSkillProjection = launchResult?.skills || summarizeResolvedSkills(runInfo.agent.skillsResolved);
     setWaveDashboardAgent(dashboardState, runInfo.agent.agentId, {
       state: "running",
       detail: `Closure sweep launched${launchResult?.context7?.mode ? ` (${launchResult.context7.mode})` : ""}`,
@@ -1573,7 +1608,7 @@ function removeOrphanWaveDashboards(lanePaths, activeSessionNames) {
   return removedDashboardPaths;
 }
 
-export function reconcileStaleLauncherArtifacts(lanePaths) {
+export function reconcileStaleLauncherArtifacts(lanePaths, options = {}) {
   const outcome = {
     removedLock: false,
     removedSessions: [],
@@ -1597,12 +1632,14 @@ export function reconcileStaleLauncherArtifacts(lanePaths) {
 
   outcome.removedSessions = cleanupLaneTmuxSessions(lanePaths);
   const activeSessionNames = new Set(listLaneTmuxSessionNames(lanePaths));
-  const terminalCleanup = pruneOrphanLaneTemporaryTerminalEntries(
-    lanePaths.terminalsPath,
-    lanePaths,
-    activeSessionNames,
-  );
-  outcome.removedTerminalNames = terminalCleanup.removedNames;
+  if (terminalSurfaceUsesTerminalRegistry(options.terminalSurface || "vscode")) {
+    const terminalCleanup = pruneOrphanLaneTemporaryTerminalEntries(
+      lanePaths.terminalsPath,
+      lanePaths,
+      activeSessionNames,
+    );
+    outcome.removedTerminalNames = terminalCleanup.removedNames;
+  }
 
   const globalDashboard = readJsonOrNull(lanePaths.globalDashboardPath);
   if (globalDashboard && typeof globalDashboard === "object" && Array.isArray(globalDashboard.waves)) {
@@ -1740,9 +1777,19 @@ function launchWaveDashboardSession(lanePaths, { sessionName, dashboardPath, mes
   );
 }
 
+function refreshResolvedSkillsForRun(runInfo, waveDefinition, lanePaths) {
+  runInfo.agent.skillsResolved = resolveAgentSkills(
+    runInfo.agent,
+    waveDefinition || { deployEnvironments: [] },
+    { laneProfile: lanePaths.laneProfile },
+  );
+  return runInfo.agent.skillsResolved;
+}
+
 async function launchAgentSession(lanePaths, params) {
   const {
     wave,
+    waveDefinition = null,
     agent,
     sessionName,
     promptPath,
@@ -1770,6 +1817,20 @@ async function launchAgentSession(lanePaths, params) {
     cacheDir: lanePaths.context7CacheDir,
     disabled: !context7Enabled,
   });
+  const overlayDir = path.join(lanePaths.executorOverlaysDir, `wave-${wave}`, agent.slug);
+  ensureDirectory(overlayDir);
+  const skillsResolved =
+    agent.skillsResolved || resolveAgentSkills(agent, waveDefinition || { deployEnvironments: [] }, {
+      laneProfile: lanePaths.laneProfile,
+    });
+  agent.skillsResolved = skillsResolved;
+  const skillArtifacts = writeResolvedSkillArtifacts(overlayDir, skillsResolved);
+  if (skillArtifacts) {
+    agent.skillsResolved = {
+      ...skillsResolved,
+      artifacts: skillArtifacts,
+    };
+  }
   const prompt = buildExecutionPrompt({
     lane: lanePaths.lane,
     wave,
@@ -1790,12 +1851,12 @@ async function launchAgentSession(lanePaths, params) {
   });
   const promptHash = hashAgentPromptFingerprint(agent);
   fs.writeFileSync(promptPath, `${prompt}\n`, "utf8");
-  const overlayDir = path.join(lanePaths.executorOverlaysDir, `wave-${wave}`, agent.slug);
   const launchSpec = buildExecutorLaunchSpec({
     agent,
     promptPath,
     logPath,
     overlayDir,
+    skillProjection: agent.skillsResolved,
   });
   const resolvedExecutorMode = launchSpec.executorId || agent.executorResolved?.id || "codex";
   if (dryRun) {
@@ -1805,8 +1866,16 @@ async function launchAgentSession(lanePaths, params) {
       env: launchSpec.env || {},
       useRateLimitRetries: launchSpec.useRateLimitRetries === true,
       invocationLines: launchSpec.invocationLines,
+      skills: summarizeResolvedSkills(agent.skillsResolved),
     });
-    return { promptHash, context7, executorId: resolvedExecutorMode, launchSpec, dryRun: true };
+    return {
+      promptHash,
+      context7,
+      executorId: resolvedExecutorMode,
+      launchSpec,
+      dryRun: true,
+      skills: summarizeResolvedSkills(agent.skillsResolved),
+    };
   }
   killTmuxSessionIfExists(lanePaths.tmuxSocketName, sessionName);
 
@@ -1881,7 +1950,12 @@ async function launchAgentSession(lanePaths, params) {
     ["new-session", "-d", "-s", sessionName, `bash -lc ${shellQuote(command)}`],
     `launch session ${sessionName}`,
   );
-  return { promptHash, context7, executorId: resolvedExecutorMode };
+  return {
+    promptHash,
+    context7,
+    executorId: resolvedExecutorMode,
+    skills: summarizeResolvedSkills(agent.skillsResolved),
+  };
 }
 
 async function waitForWaveCompletion(lanePaths, agentRuns, timeoutMinutes, onProgress = null) {
@@ -2198,7 +2272,7 @@ function buildFallbackExecutorState(executorState, executorId, attempt, reason) 
   };
 }
 
-function applyRetryFallbacks(agentRuns, failures, lanePaths, attemptNumber) {
+function applyRetryFallbacks(agentRuns, failures, lanePaths, attemptNumber, waveDefinition = null) {
   const failedAgentIds = new Set(failures.map((failure) => failure.agentId));
   let changed = false;
   const outcomes = new Map();
@@ -2264,6 +2338,7 @@ function applyRetryFallbacks(agentRuns, failures, lanePaths, attemptNumber) {
         continue;
       }
       run.agent.executorResolved = nextState;
+      refreshResolvedSkillsForRun(run, waveDefinition, lanePaths);
       changed = true;
       outcomes.set(run.agent.agentId, {
         applied: true,
@@ -2485,7 +2560,7 @@ export function buildGateSnapshot({
   };
 }
 
-export function resolveRelaunchRuns(agentRuns, failures, derivedState, lanePaths) {
+export function resolveRelaunchRuns(agentRuns, failures, derivedState, lanePaths, waveDefinition = null) {
   const runsByAgentId = new Map(agentRuns.map((run) => [run.agent.agentId, run]));
   const pendingFeedback = (derivedState?.coordinationState?.humanFeedback || []).filter((record) =>
     isOpenCoordinationStatus(record.status),
@@ -2502,6 +2577,7 @@ export function resolveRelaunchRuns(agentRuns, failures, derivedState, lanePaths
     failures,
     lanePaths,
     nextAttemptNumber,
+    waveDefinition,
   );
   const retryBarrier = retryBarrierFromOutcomes(fallbackResolution.outcomes, failures);
   if (retryBarrier) {
@@ -2671,7 +2747,7 @@ function preflightWavesForExecutorAvailability(waves, lanePaths) {
 export async function runLauncherCli(argv) {
   const parsed = parseArgs(argv);
   if (parsed.help) {
-    printUsage(parsed.lanePaths);
+    printUsage(parsed.lanePaths, parsed.options.terminalSurface);
     return;
   }
   const { lanePaths, options } = parsed;
@@ -2743,7 +2819,9 @@ export async function runLauncherCli(argv) {
   }
 
   try {
-    const staleArtifactCleanup = reconcileStaleLauncherArtifacts(lanePaths);
+    const staleArtifactCleanup = reconcileStaleLauncherArtifacts(lanePaths, {
+      terminalSurface: options.terminalSurface,
+    });
     const context7BundleIndex = loadContext7BundleIndex(lanePaths.context7BundleIndexPath);
     const allWaves = parseWaveFiles(lanePaths.wavesDir, { laneProfile: lanePaths.laneProfile })
       .map((wave) =>
@@ -2820,6 +2898,9 @@ export async function runLauncherCli(argv) {
           ? reconciliation.state.completedWaves.join(", ")
           : "none";
       console.log(`[reconcile] added from status files: ${addedSummary}`);
+      for (const blockedWave of reconciliation.blockedFromStatus || []) {
+        console.log(formatReconcileBlockedWaveLine(blockedWave));
+      }
       console.log(`[reconcile] completed waves now: ${completedSummary}`);
       return;
     }
@@ -2896,6 +2977,7 @@ export async function runLauncherCli(argv) {
         for (const runInfo of agentRuns) {
           await launchAgentSession(lanePaths, {
             wave: wave.wave,
+            waveDefinition: wave,
             agent: runInfo.agent,
             sessionName: runInfo.sessionName,
             promptPath: runInfo.promptPath,
@@ -2925,6 +3007,9 @@ export async function runLauncherCli(argv) {
     }
 
     preflightWavesForExecutorAvailability(filteredWaves, lanePaths);
+    const terminalRegistryEnabled = terminalSurfaceUsesTerminalRegistry(
+      options.terminalSurface,
+    );
 
     globalDashboard = buildGlobalDashboardState({
       lane: lanePaths.lane,
@@ -2936,7 +3021,7 @@ export async function runLauncherCli(argv) {
     });
     writeGlobalDashboard(lanePaths.globalDashboardPath, globalDashboard);
 
-    if (!options.keepTerminals) {
+    if (terminalRegistryEnabled && !options.keepTerminals) {
       const removed = removeLaneTemporaryTerminalEntries(lanePaths.terminalsPath, lanePaths);
       if (removed > 0) {
         recordGlobalDashboardEvent(globalDashboard, {
@@ -2960,8 +3045,10 @@ export async function runLauncherCli(argv) {
         lanePaths,
         globalDashboard.runId || "global",
       );
-      appendTerminalEntries(lanePaths.terminalsPath, [globalDashboardTerminalEntry]);
-      globalDashboardTerminalAppended = true;
+      if (terminalRegistryEnabled) {
+        appendTerminalEntries(lanePaths.terminalsPath, [globalDashboardTerminalEntry]);
+        globalDashboardTerminalAppended = true;
+      }
       launchWaveDashboardSession(lanePaths, {
         sessionName: globalDashboardTerminalEntry.sessionName,
         dashboardPath: lanePaths.globalDashboardPath,
@@ -3040,8 +3127,10 @@ export async function runLauncherCli(argv) {
           runTag,
           options.dashboard,
         );
-        appendTerminalEntries(lanePaths.terminalsPath, terminalEntries);
-        terminalsAppended = true;
+        if (terminalRegistryEnabled) {
+          appendTerminalEntries(lanePaths.terminalsPath, terminalEntries);
+          terminalsAppended = true;
+        }
 
         const agentRuns = wave.agents.map((agent) => {
           const safeName = `wave-${wave.wave}-${agent.slug}`;
@@ -3229,6 +3318,7 @@ export async function runLauncherCli(argv) {
               flushDashboards();
               const launchResult = await launchAgentSession(lanePaths, {
                 wave: wave.wave,
+                waveDefinition: wave,
                 agent: runInfo.agent,
                 sessionName: runInfo.sessionName,
                 promptPath: runInfo.promptPath,
@@ -3252,6 +3342,8 @@ export async function runLauncherCli(argv) {
               runInfo.lastPromptHash = launchResult?.promptHash || null;
               runInfo.lastContext7 = launchResult?.context7 || null;
               runInfo.lastExecutorId = launchResult?.executorId || runInfo.agent.executorResolved?.id || null;
+              runInfo.lastSkillProjection =
+                launchResult?.skills || summarizeResolvedSkills(runInfo.agent.skillsResolved);
               setWaveDashboardAgent(dashboardState, runInfo.agent.agentId, {
                 state: "running",
                 detail: "Session launched",
@@ -3780,6 +3872,7 @@ export async function runLauncherCli(argv) {
             failures,
             derivedState,
             lanePaths,
+            wave,
           );
           if (relaunchResolution.barrier) {
             for (const failure of relaunchResolution.barrier.failures) {

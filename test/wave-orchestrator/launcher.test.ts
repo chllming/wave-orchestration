@@ -8,6 +8,7 @@ import {
   buildCodexExecInvocation,
   collectUnexpectedSessionFailures,
   DEFAULT_CODEX_SANDBOX_MODE,
+  formatReconcileBlockedWaveLine,
   hasReusableSuccessStatus,
   markLauncherFailed,
   readWaveComponentGate,
@@ -597,6 +598,14 @@ describe("resolveRelaunchRuns", () => {
         agent: {
           agentId: "A1",
           capabilities: ["runtime"],
+          skillsResolved: {
+            ids: ["runtime-codex"],
+            role: "implementation",
+            runtime: "codex",
+            deployKind: null,
+            promptHash: "codex-skill-hash",
+            bundles: [],
+          },
           executorResolved: {
             id: "codex",
             initialExecutorId: "codex",
@@ -658,6 +667,16 @@ describe("resolveRelaunchRuns", () => {
         evaluatorAgentId: "A0",
         integrationAgentId: "A8",
         laneProfile: {
+          skills: {
+            dir: "skills",
+            base: [],
+            byRole: {},
+            byRuntime: {
+              codex: ["runtime-codex"],
+              claude: ["runtime-claude"],
+            },
+            byDeployKind: {},
+          },
           runtimePolicy: {
             runtimeMixTargets: {
               claude: 1,
@@ -665,6 +684,9 @@ describe("resolveRelaunchRuns", () => {
           },
         },
         capabilityRouting: { preferredAgents: {} },
+      },
+      {
+        deployEnvironments: [],
       },
     );
 
@@ -676,6 +698,10 @@ describe("resolveRelaunchRuns", () => {
       fallbackReason: "retry:127",
       initialExecutorId: "codex",
     });
+    expect(agentRuns[0].agent.skillsResolved).toMatchObject({
+      runtime: "claude",
+    });
+    expect(agentRuns[0].agent.skillsResolved.ids).toContain("runtime-claude");
   });
 
   it("blocks retry when a configured fallback would violate runtime mix targets", () => {
@@ -1294,5 +1320,27 @@ describe("collectUnexpectedSessionFailures", () => {
         statusCode: "session-missing",
       },
     ]);
+  });
+});
+
+describe("formatReconcileBlockedWaveLine", () => {
+  it("renders blocked reconciliation reasons in a single operator-facing line", () => {
+    expect(
+      formatReconcileBlockedWaveLine({
+        wave: 200,
+        reasons: [
+          {
+            code: "missing-status",
+            detail: "Missing status files for A0, A9.",
+          },
+          {
+            code: "open-human-escalation",
+            detail: "Open human escalation records: escalation-1.",
+          },
+        ],
+      }),
+    ).toBe(
+      "[reconcile] wave 200 not reconstructable: missing-status=Missing status files for A0, A9.; open-human-escalation=Open human escalation records: escalation-1.",
+    );
   });
 });
