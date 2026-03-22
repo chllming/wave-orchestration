@@ -7,7 +7,7 @@ Wave Orchestration is a repository harness for running multi-agent work in bound
 1. Write shared docs and one or more `docs/plans/waves/wave-<n>.md` files.
 2. Run `wave launch --dry-run` to validate the wave and materialize prompts, inboxes, dashboards, and executor previews.
 3. A real launch runs implementation agents first. Agents post claims, evidence, requests, and decisions into the coordination log and rolling message board.
-4. When implementation gates pass, closure runs in order: integration (`A8`), documentation (`A9`), evaluator (`A0`).
+4. When implementation gates pass, closure runs in order: optional `cont-EVAL` (`E0`), integration (`A8`), documentation (`A9`), and `cont-QA` (`A0`).
 5. Operators use the generated ledgers, inboxes, feedback queue, dependency views, and traces instead of guessing from raw terminal output.
 
 ## Features
@@ -26,9 +26,23 @@ Wave Orchestration is a repository harness for running multi-agent work in bound
 
 Representative rolling message board output from a real wave run:
 
-<img src="./docs/image.png" alt="Example rolling message board output showing claims, evidence, requests, and evaluator closure for a wave run" width="100%" />
+<img src="./docs/image.png" alt="Example rolling message board output showing claims, evidence, requests, and cont-QA closure for a wave run" width="100%" />
 
 ## Quick Start
+
+Current release:
+
+- `@chllming/wave-orchestration@0.6.0`
+- Release tag: [`v0.6.0`](https://github.com/chllming/wave-orchestration/releases/tag/v0.6.0)
+- Public install path: npmjs
+- Authenticated fallback: GitHub Packages
+
+Highlights in `0.6.0`:
+
+- `cont-EVAL` (`E0`) is now a first-class optional eval stage before integration, separate from final `cont-QA` closure.
+- Optional security review now has a dedicated role, report path, and `[wave-security]` closure marker.
+- `wave adhoc plan|run|show|promote` now supports transient operator requests on the same launcher substrate.
+- Starter docs and skills now cover the current `0.6.0` closure, benchmark, security, and provider surfaces.
 
 Requirements:
 
@@ -54,7 +68,7 @@ If the repo already has Wave config, plans, or waves you want to keep:
 pnpm exec wave init --adopt-existing
 ```
 
-Fresh init also seeds a starter `skills/` library. The launcher projects those skill bundles into Codex, Claude, OpenCode, and local executor overlays after the final runtime for each agent is resolved.
+Fresh init also seeds a starter `skills/` library plus `docs/evals/benchmark-catalog.json`. The launcher projects those skill bundles into Codex, Claude, OpenCode, and local executor overlays after the final runtime for each agent is resolved, and waves that include `cont-EVAL` can declare `## Eval targets` against that catalog.
 
 ## Common Commands
 
@@ -100,16 +114,30 @@ node scripts/wave.mjs launch --lane main --dry-run --no-dashboard
 Canonical source index:
 - [docs/research/agent-context-sources.md](./docs/research/agent-context-sources.md)
 
-Key external sources:
+The implementation is based on the following research:
+
+**Harness and Runtime Surfaces**
 - [Effective harnesses for long-running agents](https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents)
 - [Harness engineering: leveraging Codex in an agent-first world](https://openai.com/index/harness-engineering/)
 - [Unlocking the Codex harness: how we built the App Server](https://openai.com/index/unlocking-the-codex-harness/)
 - [Building Effective AI Coding Agents for the Terminal: Scaffolding, Harness, Context Engineering, and Lessons Learned](https://arxiv.org/abs/2603.05344)
 - [VeRO: An Evaluation Harness for Agents to Optimize Agents](https://arxiv.org/abs/2602.22480)
 - [EvoClaw: Evaluating AI Agents on Continuous Software Evolution](https://arxiv.org/abs/2603.13428)
+- [Verified Multi-Agent Orchestration: A Plan-Execute-Verify-Replan Framework for Complex Query Resolution](https://arxiv.org/abs/2603.11445)
+- [Agentic Context Engineering: Evolving Contexts for Self-Improving Language Models](https://arxiv.org/abs/2510.04618)
+
+**Shared Coordination and Closure**
 - [LLM-Based Multi-Agent Blackboard System for Information Discovery in Data Science](https://arxiv.org/abs/2510.01285)
 - [Exploring Advanced LLM Multi-Agent Systems Based on Blackboard Architecture](https://arxiv.org/abs/2507.01701)
 - [DOVA: Deliberation-First Multi-Agent Orchestration for Autonomous Research Automation](https://arxiv.org/abs/2603.13327)
+- [Why Do Multi-Agent LLM Systems Fail?](https://arxiv.org/abs/2503.13657)
 - [Silo-Bench: A Scalable Environment for Evaluating Distributed Coordination in Multi-Agent LLM Systems](https://arxiv.org/abs/2603.01045)
-- [SYMPHONY: Synergistic Multi-agent Planning with Heterogeneous Language Model Assembly](https://arxiv.org/abs/2601.22623)
 - [An Open Agent Architecture](https://cdn.aaai.org/Symposia/Spring/1994/SS-94-03/SS94-03-001.pdf)
+
+**Skills, Repo Context, and Reusable Operating Knowledge**
+- [SoK: Agentic Skills -- Beyond Tool Use in LLM Agents](https://arxiv.org/abs/2602.20867)
+- [Agent Skills for Large Language Models: Architecture, Acquisition, Security, and the Path Forward](https://arxiv.org/abs/2602.12430)
+- [SkillsBench: Benchmarking How Well Agent Skills Work Across Diverse Tasks](https://arxiv.org/abs/2602.12670)
+- [Agent Workflow Memory](https://arxiv.org/abs/2409.07429)
+- [Agent READMEs: An Empirical Study of Context Files for Agentic Coding](https://arxiv.org/abs/2511.12884)
+- [Context Engineering for AI Agents in Open-Source Software](https://arxiv.org/abs/2510.21413)

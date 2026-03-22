@@ -3,12 +3,15 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   DEFAULT_CODEX_SANDBOX_MODE,
+  DEFAULT_CONT_EVAL_AGENT_ID,
+  DEFAULT_CONT_EVAL_ROLE_PROMPT_PATH,
+  DEFAULT_CONT_QA_AGENT_ID,
+  DEFAULT_CONT_QA_ROLE_PROMPT_PATH,
   DEFAULT_DOCUMENTATION_AGENT_ID,
   DEFAULT_DOCUMENTATION_ROLE_PROMPT_PATH,
-  DEFAULT_EVALUATOR_AGENT_ID,
-  DEFAULT_EVALUATOR_ROLE_PROMPT_PATH,
   DEFAULT_INTEGRATION_AGENT_ID,
   DEFAULT_INTEGRATION_ROLE_PROMPT_PATH,
+  DEFAULT_SECURITY_ROLE_PROMPT_PATH,
   DEFAULT_WAVE_LANE,
   loadWaveConfig,
   normalizeCodexSandboxMode,
@@ -26,6 +29,7 @@ import {
   REPORT_VERDICT_REGEX,
   WAVE_VERDICT_REGEX,
   walkFiles,
+  toIsoTimestamp,
   writeJsonAtomic,
 } from "./shared.mjs";
 import { normalizeContext7Config, hashAgentPromptFingerprint } from "./context7.mjs";
@@ -35,19 +39,43 @@ import {
   readMaterializedCoordinationState,
 } from "./coordination-store.mjs";
 import {
+  agentSummaryPathFromStatusPath,
+  buildAgentExecutionSummary,
   normalizeExitContract,
   readAgentExecutionSummary,
+  validateContEvalSummary,
+  validateContQaSummary,
   validateDocumentationClosureSummary,
-  validateEvaluatorSummary,
   validateExitContractShape,
   validateIntegrationSummary,
   validateImplementationSummary,
+  validateSecuritySummary,
+  writeAgentExecutionSummary,
 } from "./agent-state.mjs";
+import { parseEvalTargets, validateEvalTargets } from "./evals.mjs";
 import { normalizeSkillId, resolveAgentSkills } from "./skills.mjs";
+import {
+  isContEvalImplementationOwningAgent,
+  isContEvalReportOnlyAgent,
+  isContEvalReportPath,
+  isContQaReportPath,
+  isSecurityRolePromptPath,
+  isSecurityReviewAgent,
+  resolveSecurityReviewReportPath,
+} from "./role-helpers.mjs";
+import {
+  RUN_STATE_KIND,
+  RUN_STATE_SCHEMA_VERSION,
+  normalizeManifest,
+  readAssignmentSnapshot,
+  readDependencySnapshot,
+} from "./artifact-schemas.mjs";
 
-export const WAVE_EVALUATOR_ROLE_PROMPT_PATH = DEFAULT_EVALUATOR_ROLE_PROMPT_PATH;
+export const WAVE_CONT_QA_ROLE_PROMPT_PATH = DEFAULT_CONT_QA_ROLE_PROMPT_PATH;
+export const WAVE_CONT_EVAL_ROLE_PROMPT_PATH = DEFAULT_CONT_EVAL_ROLE_PROMPT_PATH;
 export const WAVE_INTEGRATION_ROLE_PROMPT_PATH = DEFAULT_INTEGRATION_ROLE_PROMPT_PATH;
 export const WAVE_DOCUMENTATION_ROLE_PROMPT_PATH = DEFAULT_DOCUMENTATION_ROLE_PROMPT_PATH;
+export const WAVE_SECURITY_ROLE_PROMPT_PATH = DEFAULT_SECURITY_ROLE_PROMPT_PATH;
 export const SHARED_PLAN_DOC_PATHS = [
   "docs/plans/current-state.md",
   "docs/plans/master-plan.md",
@@ -55,6 +83,22 @@ export const SHARED_PLAN_DOC_PATHS = [
 ];
 
 const COMPONENT_ID_REGEX = /^[a-z0-9][a-z0-9._-]*$/;
+const COMPONENT_MATURITY_LEVELS = [
+  "inventoried",
+  "contract-frozen",
+  "repo-landed",
+  "baseline-proved",
+  "pilot-live",
+  "qa-proved",
+  "fleet-ready",
+  "cutover-ready",
+  "deprecation-ready",
+];
+const COMPONENT_MATURITY_ORDER = Object.fromEntries(
+  COMPONENT_MATURITY_LEVELS.map((level, index) => [level, index]),
+);
+const PROOF_CENTRIC_COMPONENT_LEVEL = "pilot-live";
+const RETRY_POLICY_VALUES = new Set(["sticky", "fallback-allowed"]);
 
 function resolveLaneProfileForOptions(options = {}) {
   if (options.laneProfile) {
@@ -62,6 +106,26 @@ function resolveLaneProfileForOptions(options = {}) {
   }
   const config = options.config || loadWaveConfig();
   return resolveLaneProfile(config, options.lane || config.defaultLane || DEFAULT_WAVE_LANE);
+}
+
+function resolveSecurityRolePromptPath(laneProfile) {
+  return laneProfile?.roles?.securityRolePromptPath || DEFAULT_SECURITY_ROLE_PROMPT_PATH;
+}
+
+function normalizeSecurityCapabilities(capabilities, rolePromptPaths, securityRolePromptPath) {
+  const normalized = Array.isArray(capabilities) ? [...capabilities] : [];
+  const hasSecurityRolePrompt = Array.isArray(rolePromptPaths)
+    ? rolePromptPaths.some((rolePromptPath) =>
+        isSecurityRolePromptPath(rolePromptPath, securityRolePromptPath),
+      )
+    : false;
+  if (
+    hasSecurityRolePrompt &&
+    !normalized.some((capability) => String(capability || "").trim().toLowerCase() === "security-review")
+  ) {
+    normalized.push("security-review");
+  }
+  return normalized;
 }
 
 export function waveNumberFromFileName(fileName) {
@@ -316,6 +380,147 @@ function validateAgentDeliverables(deliverables, ownedPaths, filePath, agentId) 
   }
 }
 
+function normalizeMaturityLevel(value, label, filePath) {
+  const normalized = String(value || "").trim();
+  if (!COMPONENT_MATURITY_ORDER.hasOwnProperty(normalized)) {
+    throw new Error(`Invalid maturity level "${value}" in ${label} (${filePath})`);
+  }
+  return normalized;
+}
+
+function proofCentricLevelReached(level) {
+  return (
+    COMPONENT_MATURITY_ORDER[String(level || "").trim()] >=
+    COMPONENT_MATURITY_ORDER[PROOF_CENTRIC_COMPONENT_LEVEL]
+  );
+}
+
+export function waveRequiresProofCentricValidation(wave) {
+  return Array.isArray(wave?.componentPromotions)
+    ? wave.componentPromotions.some((promotion) => proofCentricLevelReached(promotion?.targetLevel))
+    : false;
+}
+
+function agentHighestComponentTargetLevel(agent) {
+  const levels = Array.isArray(agent?.components)
+    ? agent.components
+        .map((componentId) => agent?.componentTargets?.[componentId] || null)
+        .filter(Boolean)
+    : [];
+  if (levels.length === 0) {
+    return null;
+  }
+  return levels.sort((left, right) => COMPONENT_MATURITY_ORDER[right] - COMPONENT_MATURITY_ORDER[left])[0];
+}
+
+export function agentRequiresProofCentricValidation(agent) {
+  const highestTarget = agentHighestComponentTargetLevel(agent);
+  if (highestTarget && proofCentricLevelReached(highestTarget)) {
+    return true;
+  }
+  return Array.isArray(agent?.proofArtifacts) && agent.proofArtifacts.some((artifact) => {
+    if (!Array.isArray(artifact?.requiredFor) || artifact.requiredFor.length === 0) {
+      return true;
+    }
+    return artifact.requiredFor.some((level) => proofCentricLevelReached(level));
+  });
+}
+
+function parseProofArtifacts(blockText, filePath, label) {
+  if (!blockText) {
+    return [];
+  }
+  const artifacts = [];
+  const seenPaths = new Set();
+  for (const line of String(blockText || "").split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const bulletMatch = trimmed.match(/^-\s+(.+?)\s*$/);
+    if (!bulletMatch) {
+      throw new Error(`Malformed proof artifact entry "${trimmed}" in ${label} (${filePath})`);
+    }
+    const rawEntry = bulletMatch[1].trim();
+    let artifact = null;
+    if (!rawEntry.includes("|") && !/^path\s*:/i.test(rawEntry)) {
+      const relPath = rawEntry.replace(/[`"']/g, "").trim();
+      if (!isRepoContainedPath(relPath)) {
+        throw new Error(`Path "${relPath}" in ${label} (${filePath}) must stay within the repo root`);
+      }
+      artifact = {
+        path: relPath,
+        kind: null,
+        requiredFor: [],
+      };
+    } else {
+      const fields = {};
+      for (const segment of rawEntry.split("|")) {
+        const pair = segment.trim();
+        if (!pair) {
+          continue;
+        }
+        const separatorIndex = pair.indexOf(":");
+        if (separatorIndex <= 0) {
+          throw new Error(`Malformed proof artifact field "${pair}" in ${label} (${filePath})`);
+        }
+        const key = pair.slice(0, separatorIndex).trim().toLowerCase();
+        const value = pair
+          .slice(separatorIndex + 1)
+          .trim()
+          .replace(/^["'`]|["'`]$/g, "");
+        if (!key || !value) {
+          throw new Error(`Malformed proof artifact field "${pair}" in ${label} (${filePath})`);
+        }
+        fields[key] = value;
+      }
+      const relPath = String(fields.path || "").trim();
+      if (!relPath) {
+        throw new Error(`Proof artifact entry in ${label} (${filePath}) must include path`);
+      }
+      if (!isRepoContainedPath(relPath)) {
+        throw new Error(`Path "${relPath}" in ${label} (${filePath}) must stay within the repo root`);
+      }
+      const requiredFor = String(fields["required-for"] || "")
+        .split(",")
+        .map((entry) => entry.trim())
+        .filter(Boolean)
+        .map((entry) => normalizeMaturityLevel(entry, label, filePath));
+      artifact = {
+        path: relPath,
+        kind: String(fields.kind || "").trim() || null,
+        requiredFor,
+      };
+    }
+    if (normalizeRepoRelativePath(artifact.path).endsWith("/")) {
+      throw new Error(
+        `Proof artifact "${artifact.path}" in ${label} (${filePath}) must be a file path, not a directory path`,
+      );
+    }
+    if (seenPaths.has(artifact.path)) {
+      throw new Error(`Duplicate proof artifact "${artifact.path}" in ${label} (${filePath})`);
+    }
+    seenPaths.add(artifact.path);
+    artifacts.push(artifact);
+  }
+  return artifacts;
+}
+
+function validateAgentProofArtifacts(proofArtifacts, ownedPaths, filePath, agentId) {
+  if (!Array.isArray(proofArtifacts) || proofArtifacts.length === 0) {
+    return;
+  }
+  const owned = Array.isArray(ownedPaths) ? ownedPaths : [];
+  for (const artifact of proofArtifacts) {
+    const normalized = normalizeRepoRelativePath(artifact?.path);
+    if (!owned.some((ownedPath) => deliverableIsOwned(normalized, ownedPath))) {
+      throw new Error(
+        `Proof artifact "${artifact?.path}" for agent ${agentId} in ${filePath} must stay within the agent's declared file ownership`,
+      );
+    }
+  }
+}
+
 function extractFencedBlock(blockText, messagePrefix) {
   const fencedBlockMatch = String(blockText || "").match(
     /```(?:[a-zA-Z0-9_-]+)?\r?\n([\s\S]*?)\r?\n```/,
@@ -466,6 +671,8 @@ export function normalizeAgentExecutorConfig(rawSettings, filePath, label) {
     fallbacks: [],
     tags: [],
     budget: null,
+    retryPolicy: null,
+    allowFallbackOnRetry: null,
     codex: null,
     claude: null,
     opencode: null,
@@ -476,6 +683,8 @@ export function normalizeAgentExecutorConfig(rawSettings, filePath, label) {
     "model",
     "fallbacks",
     "tags",
+    "retry-policy",
+    "allow-fallback-on-retry",
     "budget.turns",
     "budget.minutes",
     "codex.command",
@@ -530,6 +739,20 @@ export function normalizeAgentExecutorConfig(rawSettings, filePath, label) {
       );
     } else if (key === "tags") {
       executorConfig.tags = parseExecutorStringList(value);
+    } else if (key === "retry-policy") {
+      const normalizedPolicy = value.toLowerCase();
+      if (!RETRY_POLICY_VALUES.has(normalizedPolicy)) {
+        throw new Error(
+          `Invalid ${label}.retry-policy "${value}" in ${filePath}; expected sticky or fallback-allowed`,
+        );
+      }
+      executorConfig.retryPolicy = normalizedPolicy;
+    } else if (key === "allow-fallback-on-retry") {
+      executorConfig.allowFallbackOnRetry = parseExecutorBoolean(
+        value,
+        `${label}.allow-fallback-on-retry`,
+        filePath,
+      );
     } else if (key === "budget.turns" || key === "budget.minutes") {
       executorConfig.budget = {
         ...(executorConfig.budget || { turns: null, minutes: null }),
@@ -793,6 +1016,13 @@ export function extractAgentDeliverablesFromSection(sectionText, filePath, agent
   return parsePathList(block, filePath, `agent ${agentId} deliverables`);
 }
 
+export function extractAgentProofArtifactsFromSection(sectionText, filePath, agentId) {
+  const block = extractSectionBody(sectionText, "Proof artifacts", filePath, agentId, {
+    required: false,
+  });
+  return parseProofArtifacts(block, filePath, `agent ${agentId} proof artifacts`);
+}
+
 export function slugify(value) {
   return value
     .toLowerCase()
@@ -890,19 +1120,100 @@ export function composeResolvedPrompt(rolePromptPaths, localPrompt, filePath, ag
     .join("\n\n");
 }
 
-export function resolveEvaluatorReportPath(wave, options = {}) {
-  const evaluatorAgentId = options.evaluatorAgentId || DEFAULT_EVALUATOR_AGENT_ID;
-  const evaluator = wave?.agents?.find((agent) => agent.agentId === evaluatorAgentId);
-  if (!evaluator) {
+function resolveAgentReportPath(wave, agentId, pattern) {
+  const agent = wave?.agents?.find((entry) => entry.agentId === agentId);
+  if (!agent) {
     return null;
   }
   return (
-    evaluator.ownedPaths.find((ownedPath) =>
-      /(?:^|\/)(?:reviews?|.*evaluator).*\.(?:md|txt)$/i.test(ownedPath),
+    agent.ownedPaths.find((ownedPath) =>
+      pattern.test(ownedPath),
     ) ??
-    evaluator.ownedPaths[0] ??
+    agent.ownedPaths[0] ??
     null
   );
+}
+
+export function resolveContQaReportPath(wave, options = {}) {
+  const contQaAgentId = options.contQaAgentId || DEFAULT_CONT_QA_AGENT_ID;
+  return resolveAgentReportPath(
+    wave,
+    contQaAgentId,
+    { test: isContQaReportPath },
+  );
+}
+
+export function resolveContEvalReportPath(wave, options = {}) {
+  const contEvalAgentId = options.contEvalAgentId || DEFAULT_CONT_EVAL_AGENT_ID;
+  return resolveAgentReportPath(
+    wave,
+    contEvalAgentId,
+    { test: isContEvalReportPath },
+  );
+}
+
+function isImplementationOwningWaveAgent(
+  agent,
+  {
+    contQaAgentId,
+    contEvalAgentId,
+    integrationAgentId,
+    documentationAgentId,
+    securityRolePromptPath,
+  },
+) {
+  return (
+    ![contQaAgentId, integrationAgentId, documentationAgentId].includes(agent.agentId) &&
+    !isContEvalReportOnlyAgent(agent, { contEvalAgentId }) &&
+    !isSecurityReviewAgent(agent, { securityRolePromptPath })
+  );
+}
+
+function resolveAgentSummaryReportPath(wave, agentId, { contQaAgentId, contEvalAgentId } = {}) {
+  if (agentId === contQaAgentId && wave.contQaReportPath) {
+    return path.resolve(REPO_ROOT, wave.contQaReportPath);
+  }
+  if (agentId === contEvalAgentId && wave.contEvalReportPath) {
+    return path.resolve(REPO_ROOT, wave.contEvalReportPath);
+  }
+  const agent = wave?.agents?.find((entry) => entry.agentId === agentId);
+  if (isSecurityReviewAgent(agent)) {
+    const securityReportPath = resolveSecurityReviewReportPath(agent);
+    if (securityReportPath) {
+      return path.resolve(REPO_ROOT, securityReportPath);
+    }
+  }
+  return null;
+}
+
+function materializeLiveExecutionSummaryIfMissing({
+  wave,
+  agent,
+  statusPath,
+  statusRecord,
+  logsDir,
+  contQaAgentId,
+  contEvalAgentId,
+}) {
+  const existing = readAgentExecutionSummary(statusPath);
+  if (existing) {
+    return existing;
+  }
+  const logPath = logsDir ? path.join(logsDir, `wave-${wave.wave}-${agent.slug}.log`) : null;
+  if (!statusRecord || !logPath || !fs.existsSync(logPath)) {
+    return null;
+  }
+  const summary = buildAgentExecutionSummary({
+    agent,
+    statusRecord,
+    logPath,
+    reportPath: resolveAgentSummaryReportPath(wave, agent.agentId, {
+      contQaAgentId,
+      contEvalAgentId,
+    }),
+  });
+  writeAgentExecutionSummary(statusPath, summary);
+  return summary;
 }
 
 function normalizeMatrixStringArray(values, label, filePath) {
@@ -1049,11 +1360,13 @@ export function requiredDocumentationStewardPathsForWave(waveNumber, options = {
 export function validateWaveDefinition(wave, options = {}) {
   const laneProfile = resolveLaneProfileForOptions(options);
   const lane = laneProfile.lane;
-  const evaluatorAgentId = laneProfile.roles.evaluatorAgentId || DEFAULT_EVALUATOR_AGENT_ID;
+  const contQaAgentId = laneProfile.roles.contQaAgentId || DEFAULT_CONT_QA_AGENT_ID;
+  const contEvalAgentId = laneProfile.roles.contEvalAgentId || DEFAULT_CONT_EVAL_AGENT_ID;
   const integrationAgentId =
     laneProfile.roles.integrationAgentId || DEFAULT_INTEGRATION_AGENT_ID;
   const documentationAgentId =
     laneProfile.roles.documentationAgentId || DEFAULT_DOCUMENTATION_AGENT_ID;
+  const securityRolePromptPath = resolveSecurityRolePromptPath(laneProfile);
   const documentationThreshold = laneProfile.validation.requireDocumentationStewardFromWave;
   const context7Threshold = laneProfile.validation.requireContext7DeclarationsFromWave;
   const exitContractThreshold = laneProfile.validation.requireExitContractsFromWave;
@@ -1094,10 +1407,27 @@ export function validateWaveDefinition(wave, options = {}) {
   if (duplicateAgentIds.length > 0) {
     errors.push(`must not repeat agent ids (${Array.from(new Set(duplicateAgentIds)).join(", ")})`);
   }
-  if (!wave.agents.some((agent) => agent.agentId === evaluatorAgentId)) {
-    errors.push(`must include Agent ${evaluatorAgentId} as the running evaluator`);
+  const contEvalAgent = wave.agents.find((agent) => agent.agentId === contEvalAgentId) || null;
+  const contEvalImplementationOwning = contEvalAgent
+    ? isContEvalImplementationOwningAgent(contEvalAgent, { contEvalAgentId })
+    : false;
+  const implementationOwningAgents = wave.agents.filter((agent) =>
+    isImplementationOwningWaveAgent(agent, {
+      contQaAgentId,
+      contEvalAgentId,
+      integrationAgentId,
+      documentationAgentId,
+      securityRolePromptPath,
+    }),
+  );
+  if (!wave.agents.some((agent) => agent.agentId === contQaAgentId)) {
+    errors.push(`must include Agent ${contQaAgentId} as the cont-QA closure role`);
   }
-  if (componentPromotionRuleActive && promotedComponents.size === 0) {
+  if (
+    componentPromotionRuleActive &&
+    promotedComponents.size === 0 &&
+    implementationOwningAgents.length > 0
+  ) {
     errors.push(
       `Wave ${wave.wave} must declare a ## Component promotions section in waves ${componentPromotionThreshold} and later`,
     );
@@ -1203,7 +1533,11 @@ export function validateWaveDefinition(wave, options = {}) {
         );
       }
     }
-    if ([evaluatorAgentId, integrationAgentId, documentationAgentId].includes(agent.agentId)) {
+    if (
+      [contQaAgentId, integrationAgentId, documentationAgentId].includes(agent.agentId) ||
+      isContEvalReportOnlyAgent(agent, { contEvalAgentId }) ||
+      isSecurityReviewAgent(agent, { securityRolePromptPath })
+    ) {
       if (Array.isArray(agent.components) && agent.components.length > 0) {
         errors.push(`Agent ${agent.agentId} must not declare a ### Components section`);
       }
@@ -1230,7 +1564,11 @@ export function validateWaveDefinition(wave, options = {}) {
       }
     }
     if (exitContractThreshold !== null && wave.wave >= exitContractThreshold) {
-      if (![evaluatorAgentId, integrationAgentId, documentationAgentId].includes(agent.agentId)) {
+      if (
+        ![contQaAgentId, integrationAgentId, documentationAgentId].includes(agent.agentId) &&
+        !isContEvalReportOnlyAgent(agent, { contEvalAgentId }) &&
+        !isSecurityReviewAgent(agent, { securityRolePromptPath })
+      ) {
         if (!agent.exitContract) {
           errors.push(
             `Agent ${agent.agentId} must declare a ### Exit contract section in waves ${exitContractThreshold} and later`,
@@ -1245,22 +1583,77 @@ export function validateWaveDefinition(wave, options = {}) {
         }
       }
     }
+    if (
+      agentRequiresProofCentricValidation(agent) &&
+      (!Array.isArray(agent.proofArtifacts) || agent.proofArtifacts.length === 0) &&
+      ![contQaAgentId, integrationAgentId, documentationAgentId].includes(agent.agentId) &&
+      !isContEvalReportOnlyAgent(agent, { contEvalAgentId }) &&
+      !isSecurityReviewAgent(agent, { securityRolePromptPath })
+    ) {
+      errors.push(
+        `Agent ${agent.agentId} must declare a ### Proof artifacts section when it targets ${PROOF_CENTRIC_COMPONENT_LEVEL} or above`,
+      );
+    }
+    if (
+      agentRequiresProofCentricValidation(agent) &&
+      (agent.executorConfig?.id === "local" || agent.executorResolved?.id === "local")
+    ) {
+      errors.push(
+        `Agent ${agent.agentId} must not use executor=local when it carries proof-centric validation artifacts`,
+      );
+    }
   }
   for (const agent of wave.agents) {
-    for (const requiredRef of laneProfile.validation.requiredPromptReferences) {
+    for (const requiredRef of laneProfile.validation.requiredPromptReferences || []) {
       if (!agent.prompt.includes(requiredRef)) {
         errors.push(`Agent ${agent.agentId} must reference ${requiredRef}`);
       }
     }
   }
-  const evaluator = wave.agents.find((agent) => agent.agentId === evaluatorAgentId);
-  if (!evaluator?.rolePromptPaths?.includes(laneProfile.roles.evaluatorRolePromptPath)) {
+  const contQaAgent = wave.agents.find((agent) => agent.agentId === contQaAgentId);
+  if (!contQaAgent?.rolePromptPaths?.includes(laneProfile.roles.contQaRolePromptPath)) {
     errors.push(
-      `Agent ${evaluatorAgentId} must import ${laneProfile.roles.evaluatorRolePromptPath}`,
+      `Agent ${contQaAgentId} must import ${laneProfile.roles.contQaRolePromptPath}`,
     );
   }
-  if (!resolveEvaluatorReportPath(wave, { evaluatorAgentId })) {
-    errors.push(`Agent ${evaluatorAgentId} must own an evaluator report path`);
+  if (!resolveContQaReportPath(wave, { contQaAgentId })) {
+    errors.push(`Agent ${contQaAgentId} must own a cont-QA report path`);
+  }
+  if (contEvalAgent) {
+    if (!contEvalAgent.rolePromptPaths?.includes(laneProfile.roles.contEvalRolePromptPath)) {
+      errors.push(
+        `Agent ${contEvalAgentId} must import ${laneProfile.roles.contEvalRolePromptPath}`,
+      );
+    }
+    if (!resolveContEvalReportPath(wave, { contEvalAgentId })) {
+      errors.push(`Agent ${contEvalAgentId} must own a cont-EVAL report path`);
+    }
+    if (!Array.isArray(wave.evalTargets) || wave.evalTargets.length === 0) {
+      errors.push(`Wave ${wave.wave} must declare a ## Eval targets section when ${contEvalAgentId} is present`);
+    } else {
+      try {
+        validateEvalTargets(wave.evalTargets, {
+          benchmarkCatalogPath: laneProfile.paths.benchmarkCatalogPath,
+        });
+      } catch (error) {
+        errors.push(error.message);
+      }
+    }
+  } else if (Array.isArray(wave.evalTargets) && wave.evalTargets.length > 0) {
+    errors.push(`Wave ${wave.wave} declares ## Eval targets but does not include Agent ${contEvalAgentId}`);
+  }
+  const securityReviewers = wave.agents.filter((agent) =>
+    isSecurityReviewAgent(agent, { securityRolePromptPath }),
+  );
+  for (const securityReviewer of securityReviewers) {
+    if (!securityReviewer.rolePromptPaths?.includes(securityRolePromptPath)) {
+      errors.push(
+        `Security reviewer ${securityReviewer.agentId} must import ${securityRolePromptPath}`,
+      );
+    }
+    if (!resolveSecurityReviewReportPath(securityReviewer)) {
+      errors.push(`Security reviewer ${securityReviewer.agentId} must own a security review report path`);
+    }
   }
   if (integrationRuleActive) {
     const integrationStewards = wave.agents.filter((agent) =>
@@ -1317,8 +1710,13 @@ export function validateWaveDefinition(wave, options = {}) {
   }
   for (const [componentId, owners] of componentOwners.entries()) {
     if (owners.size === 0) {
+      const requiredOwnerIds = [
+        contQaAgentId,
+        ...(contEvalImplementationOwning ? [] : [contEvalAgentId]),
+        documentationAgentId,
+      ];
       errors.push(
-        `Wave ${wave.wave} must assign promoted component "${componentId}" to at least one non-${evaluatorAgentId}/${documentationAgentId} agent`,
+        `Wave ${wave.wave} must assign promoted component "${componentId}" to at least one non-${requiredOwnerIds.join("/")} agent`,
       );
     }
   }
@@ -1330,6 +1728,7 @@ export function validateWaveDefinition(wave, options = {}) {
 
 export function parseWaveContent(content, filePath, options = {}) {
   const laneProfile = resolveLaneProfileForOptions(options);
+  const securityRolePromptPath = resolveSecurityRolePromptPath(laneProfile);
   const fileName = path.basename(filePath);
   const waveNumber = waveNumberFromFileName(fileName);
   const commitMessageMatch = content.match(/\*\*Commit message\*\*:\s*`([^`]+)`/);
@@ -1358,9 +1757,18 @@ export function parseWaveContent(content, filePath, options = {}) {
     const exitContract = extractExitContractFromSection(sectionText, filePath, current.agentId);
     const executorConfig = extractExecutorConfigFromSection(sectionText, filePath, current.agentId);
     const components = extractAgentComponentsFromSection(sectionText, filePath, current.agentId);
-    const capabilities = extractAgentCapabilitiesFromSection(sectionText, filePath, current.agentId);
+    const capabilities = normalizeSecurityCapabilities(
+      extractAgentCapabilitiesFromSection(sectionText, filePath, current.agentId),
+      rolePromptPaths,
+      securityRolePromptPath,
+    );
     const skills = extractAgentSkillsFromSection(sectionText, filePath, current.agentId);
     const deliverables = extractAgentDeliverablesFromSection(
+      sectionText,
+      filePath,
+      current.agentId,
+    );
+    const proofArtifacts = extractAgentProofArtifactsFromSection(
       sectionText,
       filePath,
       current.agentId,
@@ -1377,6 +1785,7 @@ export function parseWaveContent(content, filePath, options = {}) {
     );
     const ownedPaths = extractOwnedPaths(promptOverlay);
     validateAgentDeliverables(deliverables, ownedPaths, filePath, current.agentId);
+    validateAgentProofArtifacts(proofArtifacts, ownedPaths, filePath, current.agentId);
     agents.push({
       agentId: current.agentId,
       title: current.title,
@@ -1391,6 +1800,7 @@ export function parseWaveContent(content, filePath, options = {}) {
       capabilities,
       skills,
       deliverables,
+      proofArtifacts,
       ownedPaths,
     });
   }
@@ -1416,12 +1826,22 @@ export function parseWaveContent(content, filePath, options = {}) {
       }),
       filePath,
     ),
+    evalTargets: parseEvalTargets(
+      extractTopLevelSectionBody(content, "Eval targets", filePath, {
+        required: false,
+      }),
+      filePath,
+    ),
     context7Defaults: extractWaveContext7Defaults(content, filePath),
     componentPromotions,
     agents: agentsWithComponentTargets,
-    evaluatorReportPath: resolveEvaluatorReportPath(
+    contQaReportPath: resolveContQaReportPath(
       { agents: agentsWithComponentTargets },
-      { evaluatorAgentId: laneProfile.roles.evaluatorAgentId },
+      { contQaAgentId: laneProfile.roles.contQaAgentId },
+    ),
+    contEvalReportPath: resolveContEvalReportPath(
+      { agents: agentsWithComponentTargets },
+      { contEvalAgentId: laneProfile.roles.contEvalAgentId },
     ),
   };
 }
@@ -1459,14 +1879,20 @@ function mergeExecutorSections(baseSection, profileSection, inlineSection, array
 }
 
 function inferAgentRuntimeRole(agent, laneProfile) {
-  if (agent?.agentId === laneProfile.roles.evaluatorAgentId) {
-    return "evaluator";
+  if (agent?.agentId === laneProfile.roles.contQaAgentId) {
+    return "cont-qa";
+  }
+  if (agent?.agentId === laneProfile.roles.contEvalAgentId) {
+    return "cont-eval";
   }
   if (agent?.agentId === laneProfile.roles.integrationAgentId) {
     return "integration";
   }
   if (agent?.agentId === laneProfile.roles.documentationAgentId) {
     return "documentation";
+  }
+  if (isSecurityReviewAgent(agent)) {
+    return "security";
   }
   const capabilities = Array.isArray(agent?.capabilities)
     ? agent.capabilities.map((entry) => String(entry || "").trim().toLowerCase())
@@ -1535,6 +1961,8 @@ export function resolveAgentExecutor(agent, options = {}) {
   const laneProfile = resolveLaneProfileForOptions(options);
   const executorConfig = agent?.executorConfig || null;
   const role = inferAgentRuntimeRole(agent, laneProfile);
+  const proofCentricAgent =
+    agentRequiresProofCentricValidation(agent) || waveRequiresProofCentricValidation(options.wave);
   const profileName = executorConfig?.profile || null;
   if (profileName && !laneProfile.executors.profiles?.[profileName]) {
     throw new Error(
@@ -1574,12 +2002,31 @@ export function resolveAgentExecutor(agent, options = {}) {
     profile?.fallbacks,
     executorConfig?.fallbacks,
   );
+  const explicitAllowFallback =
+    executorConfig?.allowFallbackOnRetry ??
+    profile?.allowFallbackOnRetry ??
+    null;
+  const explicitRetryPolicy =
+    executorConfig?.retryPolicy ||
+    profile?.retryPolicy ||
+    null;
+  const allowFallbackOnRetry =
+    explicitAllowFallback !== null
+      ? explicitAllowFallback
+      : explicitRetryPolicy
+        ? explicitRetryPolicy !== "sticky"
+        : !proofCentricAgent;
+  const retryPolicy =
+    explicitRetryPolicy ||
+    (allowFallbackOnRetry ? "fallback-allowed" : "sticky");
   const runtimeFallbacks =
-    fallbacks.length > 0
+    allowFallbackOnRetry && fallbacks.length > 0
       ? fallbacks
-      : (laneProfile.runtimePolicy?.fallbackExecutorOrder || []).filter(
+      : allowFallbackOnRetry
+        ? (laneProfile.runtimePolicy?.fallbackExecutorOrder || []).filter(
           (candidate) => candidate !== executorId,
-        );
+        )
+        : [];
   const runtimeTags = mergeUniqueStringArrays(profile?.tags, executorConfig?.tags);
   const runtimeBudget = {
     turns:
@@ -1600,6 +2047,8 @@ export function resolveAgentExecutor(agent, options = {}) {
     selectedBy,
     fallbacks: runtimeFallbacks,
     tags: runtimeTags,
+    retryPolicy,
+    allowFallbackOnRetry,
     budget:
       runtimeBudget.turns !== null || runtimeBudget.minutes !== null ? runtimeBudget : null,
     fallbackUsed: false,
@@ -1742,12 +2191,12 @@ export function buildManifest(lanePaths, waves) {
     })
     .toSorted((a, b) => a.path.localeCompare(b.path));
 
-  return {
+  return normalizeManifest({
     generatedAt: new Date().toISOString(),
     source: `${path.relative(REPO_ROOT, lanePaths.docsDir).replaceAll(path.sep, "/")}/**/*`,
     waves,
     docs,
-  };
+  });
 }
 
 export function validateWaveComponentPromotions(wave, summariesByAgentId = {}, options = {}) {
@@ -1762,21 +2211,43 @@ export function validateWaveComponentPromotions(wave, summariesByAgentId = {}, o
     };
   }
   const promotions = Array.isArray(wave.componentPromotions) ? wave.componentPromotions : [];
+  const roles = laneProfile.roles || {};
+  const contQaAgentId = roles.contQaAgentId || DEFAULT_CONT_QA_AGENT_ID;
+  const contEvalAgentId = roles.contEvalAgentId || DEFAULT_CONT_EVAL_AGENT_ID;
+  const integrationAgentId = roles.integrationAgentId || DEFAULT_INTEGRATION_AGENT_ID;
+  const documentationAgentId =
+    roles.documentationAgentId || DEFAULT_DOCUMENTATION_AGENT_ID;
+  const securityRolePromptPath = resolveSecurityRolePromptPath(laneProfile);
+  const implementationOwningAgents = (wave.agents || []).filter((agent) =>
+    isImplementationOwningWaveAgent(agent, {
+      contQaAgentId,
+      contEvalAgentId,
+      integrationAgentId,
+      documentationAgentId,
+      securityRolePromptPath,
+    }),
+  );
   if (promotions.length === 0) {
     return {
-      ok: false,
-      statusCode: "missing-component-promotions",
-      detail: `Wave ${wave.wave} is missing component promotions.`,
+      ok: implementationOwningAgents.length === 0,
+      statusCode:
+        implementationOwningAgents.length === 0 ? "pass" : "missing-component-promotions",
+      detail:
+        implementationOwningAgents.length === 0
+          ? `Wave ${wave.wave} has no implementation-owned component promotions to prove.`
+          : `Wave ${wave.wave} is missing component promotions.`,
       componentId: null,
     };
   }
-  const roles = laneProfile.roles || {};
-  const evaluatorAgentId = roles.evaluatorAgentId || DEFAULT_EVALUATOR_AGENT_ID;
-  const documentationAgentId =
-    roles.documentationAgentId || DEFAULT_DOCUMENTATION_AGENT_ID;
   const satisfied = new Set();
   for (const agent of wave.agents) {
-    if ([evaluatorAgentId, documentationAgentId].includes(agent.agentId)) {
+    if (!isImplementationOwningWaveAgent(agent, {
+      contQaAgentId,
+      contEvalAgentId,
+      integrationAgentId,
+      documentationAgentId,
+      securityRolePromptPath,
+    })) {
       continue;
     }
     const summary = summariesByAgentId[agent.agentId] || null;
@@ -1815,14 +2286,33 @@ export function validateWaveComponentMatrixCurrentLevels(wave, options = {}) {
   const laneProfile = resolveLaneProfileForOptions(options);
   const componentThreshold = laneProfile.validation.requireComponentPromotionsFromWave;
   const promotions = Array.isArray(wave.componentPromotions) ? wave.componentPromotions : [];
+  const roles = laneProfile.roles || {};
+  const contQaAgentId = roles.contQaAgentId || DEFAULT_CONT_QA_AGENT_ID;
+  const contEvalAgentId = roles.contEvalAgentId || DEFAULT_CONT_EVAL_AGENT_ID;
+  const integrationAgentId = roles.integrationAgentId || DEFAULT_INTEGRATION_AGENT_ID;
+  const documentationAgentId = roles.documentationAgentId || DEFAULT_DOCUMENTATION_AGENT_ID;
+  const securityRolePromptPath = resolveSecurityRolePromptPath(laneProfile);
+  const implementationOwningAgents = (wave.agents || []).filter((agent) =>
+    isImplementationOwningWaveAgent(agent, {
+      contQaAgentId,
+      contEvalAgentId,
+      integrationAgentId,
+      documentationAgentId,
+      securityRolePromptPath,
+    }),
+  );
   if (
     promotions.length === 0 &&
-    (componentThreshold === null || wave.wave < componentThreshold)
+    ((componentThreshold === null || wave.wave < componentThreshold) ||
+      implementationOwningAgents.length === 0)
   ) {
     return {
       ok: true,
       statusCode: "pass",
-      detail: "Component current-level gate is not active for this wave.",
+      detail:
+        implementationOwningAgents.length === 0
+          ? `Wave ${wave.wave} has no implementation-owned component promotions to reconcile.`
+          : "Component current-level gate is not active for this wave.",
       componentId: null,
     };
   }
@@ -1861,7 +2351,7 @@ export function validateWaveComponentMatrixCurrentLevels(wave, options = {}) {
 }
 
 export function writeManifest(manifestPath, manifest) {
-  writeJsonAtomic(manifestPath, manifest);
+  writeJsonAtomic(manifestPath, normalizeManifest(manifest));
 }
 
 export function normalizeCompletedWaves(values) {
@@ -1877,28 +2367,253 @@ export function normalizeCompletedWaves(values) {
   ).toSorted((a, b) => a - b);
 }
 
-export function readRunState(runStatePath) {
-  const payload = readJsonOrNull(runStatePath);
+function fileHashOrNull(filePath) {
+  if (!filePath || !fs.existsSync(filePath)) {
+    return null;
+  }
+  return hashText(fs.readFileSync(filePath, "utf8"));
+}
+
+function relativeRepoPathOrNull(filePath) {
+  return filePath ? path.relative(REPO_ROOT, filePath) : null;
+}
+
+function normalizeRunStateWaveEntry(rawEntry, waveNumber) {
+  const source = rawEntry && typeof rawEntry === "object" && !Array.isArray(rawEntry) ? rawEntry : {};
+  const normalizedWave = normalizeCompletedWaves([waveNumber])[0] ?? normalizeCompletedWaves([source.wave])[0] ?? null;
   return {
-    completedWaves: normalizeCompletedWaves(payload?.completedWaves),
-    lastUpdatedAt: typeof payload?.lastUpdatedAt === "string" ? payload.lastUpdatedAt : undefined,
+    wave: normalizedWave,
+    currentState: String(source.currentState || "completed").trim().toLowerCase() || "completed",
+    lastTransitionAt:
+      typeof source.lastTransitionAt === "string"
+        ? source.lastTransitionAt
+        : typeof source.updatedAt === "string"
+          ? source.updatedAt
+          : typeof source.completedAt === "string"
+            ? source.completedAt
+            : null,
+    lastSource: typeof source.lastSource === "string" ? source.lastSource : null,
+    lastReasonCode: typeof source.lastReasonCode === "string" ? source.lastReasonCode : null,
+    lastDetail: typeof source.lastDetail === "string" ? source.lastDetail : "",
+    lastEvidence:
+      source.lastEvidence && typeof source.lastEvidence === "object" && !Array.isArray(source.lastEvidence)
+        ? source.lastEvidence
+        : null,
   };
+}
+
+function normalizeRunStateHistoryEntry(rawEntry, seqFallback) {
+  const source = rawEntry && typeof rawEntry === "object" && !Array.isArray(rawEntry) ? rawEntry : {};
+  return {
+    seq: normalizeCompletedWaves([source.seq])[0] ?? seqFallback,
+    at: typeof source.at === "string" ? source.at : toIsoTimestamp(),
+    wave: normalizeCompletedWaves([source.wave])[0] ?? null,
+    fromState: typeof source.fromState === "string" ? source.fromState : null,
+    toState: typeof source.toState === "string" ? source.toState : null,
+    source: typeof source.source === "string" ? source.source : null,
+    reasonCode: typeof source.reasonCode === "string" ? source.reasonCode : null,
+    detail: typeof source.detail === "string" ? source.detail : "",
+    evidence:
+      source.evidence && typeof source.evidence === "object" && !Array.isArray(source.evidence)
+        ? source.evidence
+        : null,
+  };
+}
+
+function completedWavesFromStateEntries(waves) {
+  return normalizeCompletedWaves(
+    Object.values(waves || {})
+      .filter((entry) => entry?.currentState === "completed")
+      .map((entry) => entry.wave),
+  );
+}
+
+function normalizeRunStateWaves(rawWaves, completedWaves, lastUpdatedAt) {
+  const normalized = {};
+  for (const waveNumber of completedWaves) {
+    normalized[String(waveNumber)] = {
+      wave: waveNumber,
+      currentState: "completed",
+      lastTransitionAt: lastUpdatedAt,
+      lastSource: "legacy-run-state",
+      lastReasonCode: "legacy-completed-wave",
+      lastDetail: "Imported from legacy completedWaves state.",
+      lastEvidence: null,
+    };
+  }
+  if (!rawWaves || typeof rawWaves !== "object" || Array.isArray(rawWaves)) {
+    return normalized;
+  }
+  for (const [waveKey, rawEntry] of Object.entries(rawWaves)) {
+    const waveNumber = normalizeCompletedWaves([waveKey])[0];
+    if (waveNumber === undefined) {
+      continue;
+    }
+    normalized[String(waveNumber)] = normalizeRunStateWaveEntry(rawEntry, waveNumber);
+  }
+  return normalized;
+}
+
+function normalizeRunStateInternal(payload) {
+  const source = payload && typeof payload === "object" && !Array.isArray(payload) ? payload : {};
+  const completedWaves = normalizeCompletedWaves(source.completedWaves);
+  const lastUpdatedAt = typeof source.lastUpdatedAt === "string" ? source.lastUpdatedAt : undefined;
+  const waves = normalizeRunStateWaves(source.waves, completedWaves, lastUpdatedAt);
+  const history = Array.isArray(source.history)
+    ? source.history
+        .map((entry, index) => normalizeRunStateHistoryEntry(entry, index + 1))
+        .filter((entry) => Number.isFinite(entry.seq) && entry.wave !== null)
+    : [];
+  return {
+    schemaVersion: RUN_STATE_SCHEMA_VERSION,
+    kind: RUN_STATE_KIND,
+    completedWaves: completedWavesFromStateEntries(waves),
+    lastUpdatedAt,
+    waves,
+    history,
+  };
+}
+
+export function readRunState(runStatePath) {
+  return normalizeRunStateInternal(readJsonOrNull(runStatePath));
 }
 
 export function writeRunState(runStatePath, state) {
   ensureDirectory(path.dirname(runStatePath));
+  const normalized = normalizeRunStateInternal(state);
   const payload = {
-    completedWaves: normalizeCompletedWaves(state.completedWaves),
+    ...normalized,
+    completedWaves: completedWavesFromStateEntries(normalized.waves),
     lastUpdatedAt: new Date().toISOString(),
   };
   writeJsonAtomic(runStatePath, payload);
   return payload;
 }
 
-export function markWaveCompleted(runStatePath, waveNumber) {
+function nextRunStateSequence(history) {
+  return (history || []).reduce((max, entry) => Math.max(max, Number(entry?.seq) || 0), 0) + 1;
+}
+
+function appendRunStateTransition(state, {
+  waveNumber,
+  toState,
+  source,
+  reasonCode,
+  detail,
+  evidence = null,
+  at = toIsoTimestamp(),
+}) {
+  const nextState = normalizeRunStateInternal(state);
+  const waveKey = String(waveNumber);
+  const previousEntry = nextState.waves[waveKey] || null;
+  const currentState = previousEntry?.currentState || null;
+  const currentEvidence = previousEntry?.lastEvidence || null;
+  const effectiveDetail = String(detail || "").trim();
+  const effectiveEvidence =
+    evidence && typeof evidence === "object" && !Array.isArray(evidence) ? evidence : null;
+  if (
+    previousEntry &&
+    currentState === toState &&
+    previousEntry.lastSource === source &&
+    previousEntry.lastReasonCode === reasonCode &&
+    previousEntry.lastDetail === effectiveDetail &&
+    JSON.stringify(currentEvidence || null) === JSON.stringify(effectiveEvidence || null)
+  ) {
+    return nextState;
+  }
+  const historyEntry = {
+    seq: nextRunStateSequence(nextState.history),
+    at,
+    wave: waveNumber,
+    fromState: currentState,
+    toState,
+    source,
+    reasonCode,
+    detail: effectiveDetail,
+    evidence: effectiveEvidence,
+  };
+  nextState.waves[waveKey] = {
+    wave: waveNumber,
+    currentState: toState,
+    lastTransitionAt: at,
+    lastSource: source,
+    lastReasonCode: reasonCode,
+    lastDetail: effectiveDetail,
+    lastEvidence: effectiveEvidence,
+  };
+  nextState.history = [...nextState.history, historyEntry];
+  nextState.completedWaves = completedWavesFromStateEntries(nextState.waves);
+  return nextState;
+}
+
+export function buildRunStateEvidence({
+  wave,
+  agentRuns = [],
+  statusEntries = [],
+  coordinationLogPath = null,
+  assignmentsPath = null,
+  dependencySnapshotPath = null,
+  gateSnapshot = null,
+  traceDir = null,
+  blockedReasons = [],
+}) {
+  const observations =
+    statusEntries.length > 0
+      ? statusEntries
+      : agentRuns.map((run) => ({
+          agentId: run.agent?.agentId || null,
+          statusPath: run.statusPath,
+          summaryPath: agentSummaryPathFromStatusPath(run.statusPath),
+          statusRecord: readStatusRecordIfPresent(run.statusPath),
+        }));
+  return {
+    waveFileHash: wave?.file ? fileHashOrNull(path.resolve(REPO_ROOT, wave.file)) : null,
+    traceDir: relativeRepoPathOrNull(traceDir),
+    statusFiles: observations
+      .filter((entry) => entry?.statusPath)
+      .map((entry) => ({
+        agentId: entry.agentId || null,
+        path: relativeRepoPathOrNull(entry.statusPath),
+        promptHash: entry.statusRecord?.promptHash || null,
+        code:
+          entry.statusRecord && Number.isFinite(Number(entry.statusRecord.code))
+            ? Number(entry.statusRecord.code)
+            : null,
+        completedAt: entry.statusRecord?.completedAt || null,
+        sha256: fileHashOrNull(entry.statusPath),
+      })),
+    summaryFiles: observations
+      .filter((entry) => entry?.summaryPath && fs.existsSync(entry.summaryPath))
+      .map((entry) => ({
+        agentId: entry.agentId || null,
+        path: relativeRepoPathOrNull(entry.summaryPath),
+        sha256: fileHashOrNull(entry.summaryPath),
+      })),
+    coordinationLogSha256: fileHashOrNull(coordinationLogPath),
+    assignmentsSha256: fileHashOrNull(assignmentsPath),
+    dependencySnapshotSha256: fileHashOrNull(dependencySnapshotPath),
+    gateSnapshotSha256: gateSnapshot ? hashText(JSON.stringify(gateSnapshot)) : null,
+    blockedReasons: Array.isArray(blockedReasons)
+      ? blockedReasons.map((reason) => ({
+          code: String(reason?.code || "").trim(),
+          detail: String(reason?.detail || "").trim(),
+        }))
+      : [],
+  };
+}
+
+export function markWaveCompleted(runStatePath, waveNumber, options = {}) {
   const state = readRunState(runStatePath);
-  state.completedWaves = normalizeCompletedWaves([...state.completedWaves, waveNumber]);
-  return writeRunState(runStatePath, state);
+  const nextState = appendRunStateTransition(state, {
+    waveNumber,
+    toState: "completed",
+    source: options.source || "live-launcher",
+    reasonCode: options.reasonCode || "wave-complete",
+    detail: options.detail || `Wave ${waveNumber} completed.`,
+    evidence: options.evidence || null,
+    at: options.at || toIsoTimestamp(),
+  });
+  return writeRunState(runStatePath, nextState);
 }
 
 export function resolveAutoNextWaveStart(allWaves, runStatePath) {
@@ -1924,52 +2639,51 @@ export function arraysEqual(a, b) {
   return true;
 }
 
-export function readWaveEvaluatorArtifacts(wave, { logsDir, evaluatorAgentId } = {}) {
-  const resolvedEvaluatorAgentId = evaluatorAgentId || DEFAULT_EVALUATOR_AGENT_ID;
-  const evaluator =
-    wave.agents.find((agent) => agent.agentId === resolvedEvaluatorAgentId) ?? null;
-  if (!evaluator) {
+export function readWaveContQaArtifacts(wave, { logsDir, contQaAgentId } = {}) {
+  const resolvedContQaAgentId = contQaAgentId || DEFAULT_CONT_QA_AGENT_ID;
+  const contQa = wave.agents.find((agent) => agent.agentId === resolvedContQaAgentId) ?? null;
+  if (!contQa) {
     return {
       ok: false,
-      statusCode: "missing-evaluator",
-      detail: `Agent ${resolvedEvaluatorAgentId} is missing.`,
+      statusCode: "missing-cont-qa",
+      detail: `Agent ${resolvedContQaAgentId} is missing.`,
     };
   }
-  const evaluatorReportPath = wave.evaluatorReportPath
-    ? path.resolve(REPO_ROOT, wave.evaluatorReportPath)
+  const contQaReportPath = wave.contQaReportPath
+    ? path.resolve(REPO_ROOT, wave.contQaReportPath)
     : null;
   const reportText =
-    evaluatorReportPath && fs.existsSync(evaluatorReportPath)
-      ? fs.readFileSync(evaluatorReportPath, "utf8")
+    contQaReportPath && fs.existsSync(contQaReportPath)
+      ? fs.readFileSync(contQaReportPath, "utf8")
       : "";
   const reportVerdict = parseVerdictFromText(reportText, REPORT_VERDICT_REGEX);
   if (reportVerdict.verdict) {
     return {
       ok: reportVerdict.verdict === "pass",
-      statusCode: reportVerdict.verdict === "pass" ? "pass" : `evaluator-${reportVerdict.verdict}`,
-      detail: reportVerdict.detail || "Verdict read from evaluator report.",
+      statusCode: reportVerdict.verdict === "pass" ? "pass" : `cont-qa-${reportVerdict.verdict}`,
+      detail: reportVerdict.detail || "Verdict read from cont-QA report.",
     };
   }
-  const evaluatorLogPath = logsDir
-    ? path.join(logsDir, `wave-${wave.wave}-${evaluator.slug}.log`)
+  const contQaLogPath = logsDir
+    ? path.join(logsDir, `wave-${wave.wave}-${contQa.slug}.log`)
     : null;
   const logVerdict = parseVerdictFromText(
-    evaluatorLogPath ? readFileTail(evaluatorLogPath, 30000) : "",
+    contQaLogPath ? readFileTail(contQaLogPath, 30000) : "",
     WAVE_VERDICT_REGEX,
   );
   if (logVerdict.verdict) {
     return {
       ok: logVerdict.verdict === "pass",
-      statusCode: logVerdict.verdict === "pass" ? "pass" : `evaluator-${logVerdict.verdict}`,
-      detail: logVerdict.detail || "Verdict read from evaluator log marker.",
+      statusCode: logVerdict.verdict === "pass" ? "pass" : `cont-qa-${logVerdict.verdict}`,
+      detail: logVerdict.detail || "Verdict read from cont-QA log marker.",
     };
   }
   return {
     ok: false,
-    statusCode: "missing-evaluator-verdict",
-    detail: evaluatorReportPath
-      ? `Missing evaluator verdict in ${path.relative(REPO_ROOT, evaluatorReportPath)}.`
-      : "Missing evaluator report path and evaluator log verdict.",
+    statusCode: "missing-cont-qa-verdict",
+    detail: contQaReportPath
+      ? `Missing cont-QA verdict in ${path.relative(REPO_ROOT, contQaReportPath)}.`
+      : "Missing cont-QA report path and cont-QA log verdict.",
   };
 }
 
@@ -1991,7 +2705,12 @@ function analyzeWaveCompletionFromStatusFiles(wave, statusDir, options = {}) {
   const logsDir = options.logsDir || path.join(path.resolve(statusDir, ".."), "logs");
   const coordinationDir =
     options.coordinationDir || path.join(path.resolve(statusDir, ".."), "coordination");
-  const evaluatorAgentId = options.evaluatorAgentId || DEFAULT_EVALUATOR_AGENT_ID;
+  const assignmentsDir =
+    options.assignmentsDir || path.join(path.resolve(statusDir, ".."), "assignments");
+  const dependencySnapshotsDir =
+    options.dependencySnapshotsDir || path.join(path.resolve(statusDir, ".."), "dependencies");
+  const contQaAgentId = options.contQaAgentId || DEFAULT_CONT_QA_AGENT_ID;
+  const contEvalAgentId = options.contEvalAgentId || DEFAULT_CONT_EVAL_AGENT_ID;
   const integrationAgentId = options.integrationAgentId || DEFAULT_INTEGRATION_AGENT_ID;
   const documentationAgentId =
     options.documentationAgentId || DEFAULT_DOCUMENTATION_AGENT_ID;
@@ -2005,8 +2724,12 @@ function analyzeWaveCompletionFromStatusFiles(wave, statusDir, options = {}) {
 
   const reasons = [];
   const summariesByAgentId = {};
+  const statusEntries = [];
   const missingStatusAgents = [];
   let statusesReady = wave.agents.length > 0;
+  const coordinationLogPath = path.join(coordinationDir, `wave-${wave.wave}.jsonl`);
+  const assignmentsPath = path.join(assignmentsDir, `wave-${wave.wave}.json`);
+  const dependencySnapshotPath = path.join(dependencySnapshotsDir, `wave-${wave.wave}.json`);
 
   for (const agent of wave.agents) {
     const statusPath = path.join(statusDir, `wave-${wave.wave}-${agent.slug}.status`);
@@ -2016,6 +2739,13 @@ function analyzeWaveCompletionFromStatusFiles(wave, statusDir, options = {}) {
       statusesReady = false;
       continue;
     }
+    const summaryPath = agentSummaryPathFromStatusPath(statusPath);
+    statusEntries.push({
+      agentId: agent.agentId,
+      statusPath,
+      summaryPath,
+      statusRecord,
+    });
     const expectedPromptHash = hashAgentPromptFingerprint(agent);
     if (statusRecord.code !== 0) {
       pushWaveCompletionReason(
@@ -2035,19 +2765,64 @@ function analyzeWaveCompletionFromStatusFiles(wave, statusDir, options = {}) {
       statusesReady = false;
       continue;
     }
-    const summary = readAgentExecutionSummary(statusPath);
+    const summary = materializeLiveExecutionSummaryIfMissing({
+      wave,
+      agent,
+      statusPath,
+      statusRecord,
+      logsDir,
+      contQaAgentId,
+      contEvalAgentId,
+    });
     summariesByAgentId[agent.agentId] = summary;
-    if (agent.agentId === evaluatorAgentId) {
-      if (summary) {
-        const validation = validateEvaluatorSummary(agent, summary);
-        if (!validation.ok) {
+    if (agent.agentId === contQaAgentId) {
+      const validation = validateContQaSummary(agent, summary, { mode: "live" });
+      if (!validation.ok) {
+        pushWaveCompletionReason(
+          reasons,
+          "invalid-cont-qa-summary",
+          `${agent.agentId}: ${validation.statusCode}: ${validation.detail}`,
+        );
+        statusesReady = false;
+      }
+      continue;
+    }
+    if (agent.agentId === contEvalAgentId) {
+      const evalValidation = validateContEvalSummary(agent, summary, {
+        mode: "live",
+        evalTargets: wave.evalTargets,
+        benchmarkCatalogPath: laneProfile.paths.benchmarkCatalogPath,
+      });
+      if (!evalValidation.ok) {
+        pushWaveCompletionReason(
+          reasons,
+          "invalid-cont-eval-summary",
+          `${agent.agentId}: ${evalValidation.statusCode}: ${evalValidation.detail}`,
+        );
+        statusesReady = false;
+      }
+      if (isContEvalImplementationOwningAgent(agent, { contEvalAgentId })) {
+        const implementationValidation = validateImplementationSummary(agent, summary);
+        if (!implementationValidation.ok) {
           pushWaveCompletionReason(
             reasons,
-            "invalid-evaluator-summary",
-            `${agent.agentId}: ${validation.statusCode}: ${validation.detail}`,
+            "invalid-cont-eval-implementation-summary",
+            `${agent.agentId}: ${implementationValidation.statusCode}: ${implementationValidation.detail}`,
           );
           statusesReady = false;
         }
+      }
+      continue;
+    }
+    if (isSecurityReviewAgent(agent)) {
+      const validation = validateSecuritySummary(agent, summary);
+      if (!validation.ok) {
+        pushWaveCompletionReason(
+          reasons,
+          "invalid-security-summary",
+          `${agent.agentId}: ${validation.statusCode}: ${validation.detail}`,
+        );
+        statusesReady = false;
       }
       continue;
     }
@@ -2126,19 +2901,8 @@ function analyzeWaveCompletionFromStatusFiles(wave, statusDir, options = {}) {
     }
   }
 
-  if (statusesReady) {
-    const evaluatorArtifacts = readWaveEvaluatorArtifacts(wave, {
-      logsDir,
-      evaluatorAgentId,
-    });
-    if (!evaluatorArtifacts.ok) {
-      pushWaveCompletionReason(reasons, evaluatorArtifacts.statusCode, evaluatorArtifacts.detail);
-      statusesReady = false;
-    }
-  }
-
   const coordinationState = readMaterializedCoordinationState(
-    path.join(coordinationDir, `wave-${wave.wave}.jsonl`),
+    coordinationLogPath,
   );
   const openClarificationIds = coordinationState.clarifications
     .filter((record) => isOpenCoordinationStatus(record.status))
@@ -2180,10 +2944,66 @@ function analyzeWaveCompletionFromStatusFiles(wave, statusDir, options = {}) {
       `Open human feedback records: ${openHumanFeedbackIds.join(", ")}.`,
     );
   }
+  const capabilityAssignments = readAssignmentSnapshot(assignmentsPath, {
+    lane: options.lane || null,
+    wave: wave.wave,
+  });
+  const blockingAssignments = Array.isArray(capabilityAssignments?.assignments)
+    ? capabilityAssignments.assignments.filter((assignment) => assignment?.blocking)
+    : [];
+  const unresolvedAssignments = blockingAssignments.filter((assignment) => !assignment?.assignedAgentId);
+  if (unresolvedAssignments.length > 0) {
+    pushWaveCompletionReason(
+      reasons,
+      "helper-assignment-unresolved",
+      `Helper assignments remain unresolved (${unresolvedAssignments.map((assignment) => assignment.requestId || assignment.id).join(", ")}).`,
+    );
+  } else if (blockingAssignments.length > 0) {
+    pushWaveCompletionReason(
+      reasons,
+      "helper-assignment-open",
+      `Helper assignments remain open (${blockingAssignments.map((assignment) => assignment.requestId || assignment.id).join(", ")}).`,
+    );
+  }
+  const dependencySnapshot = readDependencySnapshot(dependencySnapshotPath, {
+    lane: options.lane || null,
+    wave: wave.wave,
+  });
+  const unresolvedInboundAssignments = Array.isArray(dependencySnapshot?.unresolvedInboundAssignments)
+    ? dependencySnapshot.unresolvedInboundAssignments
+    : [];
+  if (unresolvedInboundAssignments.length > 0) {
+    pushWaveCompletionReason(
+      reasons,
+      "dependency-assignment-unresolved",
+      `Required inbound dependencies are not assigned (${unresolvedInboundAssignments.map((record) => record.id || record).join(", ")}).`,
+    );
+  }
+  const requiredInbound = Array.isArray(dependencySnapshot?.requiredInbound)
+    ? dependencySnapshot.requiredInbound
+    : [];
+  const requiredOutbound = Array.isArray(dependencySnapshot?.requiredOutbound)
+    ? dependencySnapshot.requiredOutbound
+    : [];
+  if (requiredInbound.length > 0 || requiredOutbound.length > 0) {
+    pushWaveCompletionReason(
+      reasons,
+      "dependency-open",
+      `Open required dependencies remain (${[...requiredInbound, ...requiredOutbound].map((record) => record.id || record).join(", ")}).`,
+    );
+  }
 
   return {
     ok: reasons.length === 0,
     reasons,
+    evidence: buildRunStateEvidence({
+      wave,
+      statusEntries,
+      coordinationLogPath,
+      assignmentsPath,
+      dependencySnapshotPath,
+      blockedReasons: reasons,
+    }),
   };
 }
 
@@ -2206,13 +3026,39 @@ export function reconcileRunStateFromStatusFiles(allWaves, runStatePath, statusD
     .filter((diagnostic) => diagnostic.ok)
     .map((diagnostic) => diagnostic.wave);
   const before = readRunState(runStatePath);
-  const firstMerge = normalizeCompletedWaves([...before.completedWaves, ...completedFromStatus]);
+  const firstMerge = normalizeCompletedWaves(
+    diagnostics
+      .filter((diagnostic) => diagnostic.ok)
+      .map((diagnostic) => diagnostic.wave)
+      .concat(
+        before.completedWaves.filter((waveNumber) => {
+          const diagnostic = diagnostics.find((entry) => entry.wave === waveNumber);
+          return !diagnostic || diagnostic.ok;
+        }),
+      ),
+  );
   const latest = readRunState(runStatePath);
-  const merged = normalizeCompletedWaves([...latest.completedWaves, ...completedFromStatus]);
-  let state = latest;
-  if (!arraysEqual(merged, latest.completedWaves)) {
-    state = writeRunState(runStatePath, { completedWaves: merged });
+  let nextState = latest;
+  for (const diagnostic of diagnostics) {
+    const toState = diagnostic.ok ? "completed" : "blocked";
+    const reasonCode = diagnostic.ok
+      ? "status-reconcile-complete"
+      : diagnostic.reasons[0]?.code || "status-reconcile-blocked";
+    const detail = diagnostic.ok
+      ? `Wave ${diagnostic.wave} reconstructed as complete from status files.`
+      : diagnostic.reasons.map((reason) => reason.detail).filter(Boolean).join(" ");
+    nextState = appendRunStateTransition(nextState, {
+      waveNumber: diagnostic.wave,
+      toState,
+      source: "status-reconcile",
+      reasonCode,
+      detail,
+      evidence: diagnostic.evidence || null,
+      at: diagnostic.evidence?.statusFiles?.find((entry) => entry.completedAt)?.completedAt || toIsoTimestamp(),
+    });
   }
+  const state = writeRunState(runStatePath, nextState);
+  const merged = state.completedWaves;
   return {
     completedFromStatus,
     addedFromBefore: firstMerge.filter((waveNumber) => !before.completedWaves.includes(waveNumber)),

@@ -11,7 +11,6 @@ import {
 } from "./config.mjs";
 import {
   appendOrchestratorBoardEntry,
-  buildExecutionPrompt,
   ensureOrchestratorBoard,
   feedbackStateSignature,
   readWaveHumanFeedbackRequests,
@@ -34,7 +33,6 @@ import {
   describeContext7Libraries,
   hashAgentPromptFingerprint,
   loadContext7BundleIndex,
-  prefetchContext7ForSelection,
 } from "./context7.mjs";
 import {
   buildGlobalDashboardState,
@@ -58,7 +56,6 @@ import {
   DEFAULT_AGENT_RATE_LIMIT_RETRIES,
   DEFAULT_MAX_RETRIES_PER_WAVE,
   DEFAULT_TIMEOUT_MINUTES,
-  DEFAULT_WAIT_PROGRESS_INTERVAL_MS,
   DEFAULT_WAVE_LANE,
   compactSingleLine,
   parseVerdictFromText,
@@ -71,6 +68,7 @@ import {
   readFileTail,
   readJsonOrNull,
   REPORT_VERDICT_REGEX,
+  sanitizeAdhocRunId,
   sanitizeOrchestratorId,
   shellQuote,
   sleep,
@@ -96,11 +94,12 @@ import {
 } from "./terminals.mjs";
 import {
   buildCodexExecInvocation,
-  buildExecutorLaunchSpec,
   commandForExecutor,
   isExecutorCommandAvailable,
 } from "./executors.mjs";
 import {
+  agentRequiresProofCentricValidation,
+  buildRunStateEvidence,
   buildManifest,
   applyExecutorSelectionsToWave,
   markWaveCompleted,
@@ -111,16 +110,19 @@ import {
   validateWaveComponentMatrixCurrentLevels,
   validateWaveComponentPromotions,
   validateWaveDefinition,
+  waveRequiresProofCentricValidation,
   writeManifest,
 } from "./wave-files.mjs";
 import {
   agentSummaryPathFromStatusPath,
   buildAgentExecutionSummary,
   readAgentExecutionSummary,
+  validateContEvalSummary,
+  validateContQaSummary,
   validateDocumentationClosureSummary,
-  validateEvaluatorSummary,
   validateIntegrationSummary,
   validateImplementationSummary,
+  validateSecuritySummary,
   writeAgentExecutionSummary,
 } from "./agent-state.mjs";
 import { buildDocsQueue, readDocsQueue, writeDocsQueue } from "./docs-queue.mjs";
@@ -129,9 +131,13 @@ import { buildQualityMetrics, writeTraceBundle } from "./traces.mjs";
 import { triageClarificationRequests } from "./clarification-triage.mjs";
 import { readProjectProfile, resolveDefaultTerminalSurface } from "./project-profile.mjs";
 import {
-  resolveAgentSkills,
+  isContEvalImplementationOwningAgent,
+  isContEvalReportOnlyAgent,
+  isSecurityReviewAgent,
+  resolveSecurityReviewReportPath,
+} from "./role-helpers.mjs";
+import {
   summarizeResolvedSkills,
-  writeResolvedSkillArtifacts,
 } from "./skills.mjs";
 import {
   buildDependencySnapshot,
@@ -140,6 +146,22 @@ import {
   syncAssignmentRecords,
   writeDependencySnapshotMarkdown,
 } from "./routing-state.mjs";
+import {
+  readRelaunchPlan,
+  writeAssignmentSnapshot,
+  writeDependencySnapshot,
+  writeRelaunchPlan,
+} from "./artifact-schemas.mjs";
+import {
+  collectUnexpectedSessionFailures as collectUnexpectedSessionFailuresImpl,
+  launchAgentSession as launchAgentSessionImpl,
+  refreshResolvedSkillsForRun,
+  waitForWaveCompletion as waitForWaveCompletionImpl,
+} from "./launcher-runtime.mjs";
+import {
+  readWaveInfraGate as readWaveInfraGateImpl,
+  runClosureSweepPhase as runClosureSweepPhaseImpl,
+} from "./launcher-closure.mjs";
 export { CODEX_SANDBOX_MODES, DEFAULT_CODEX_SANDBOX_MODE, normalizeCodexSandboxMode, buildCodexExecInvocation };
 
 export function formatReconcileBlockedWaveLine(blockedWave) {
@@ -228,6 +250,7 @@ function parseArgs(argv) {
     orchestratorId: null,
     orchestratorBoardPath: null,
     coordinationNote: "",
+    adhocRunId: null,
   };
   let stateFileProvided = false;
   let manifestOutProvided = false;
@@ -265,7 +288,14 @@ function parseArgs(argv) {
       orchestratorBoardProvided = true;
     } else if (arg === "--lane") {
       options.lane = String(argv[++i] || "").trim();
-      lanePaths = buildLanePaths(options.lane);
+      lanePaths = buildLanePaths(options.lane, {
+        adhocRunId: options.adhocRunId,
+      });
+    } else if (arg === "--adhoc-run") {
+      options.adhocRunId = sanitizeAdhocRunId(argv[++i]);
+      lanePaths = buildLanePaths(options.lane, {
+        adhocRunId: options.adhocRunId,
+      });
     } else if (arg === "--orchestrator-id") {
       options.orchestratorId = sanitizeOrchestratorId(argv[++i]);
     } else if (arg === "--orchestrator-board") {
@@ -313,6 +343,7 @@ function parseArgs(argv) {
 
   lanePaths = buildLanePaths(options.lane, {
     runVariant: options.dryRun ? "dry-run" : undefined,
+    adhocRunId: options.adhocRunId,
   });
   if (!stateFileProvided) {
     options.runStatePath = lanePaths.defaultRunStatePath;
@@ -353,68 +384,118 @@ function isProcessAlive(pid) {
   }
 }
 
-export function readWaveEvaluatorGate(wave, agentRuns, options = {}) {
-  const evaluatorAgentId = options.evaluatorAgentId || wave.evaluatorAgentId || "A0";
-  const evaluatorRun =
-    agentRuns.find((run) => run.agent.agentId === evaluatorAgentId) ?? null;
-  if (!evaluatorRun) {
+export function readWaveContQaGate(wave, agentRuns, options = {}) {
+  const mode = String(options.mode || "compat").trim().toLowerCase();
+  const strict = mode === "live";
+  const contQaAgentId = options.contQaAgentId || wave.contQaAgentId || "A0";
+  const contQaRun =
+    agentRuns.find((run) => run.agent.agentId === contQaAgentId) ?? null;
+  if (!contQaRun) {
     return {
       ok: false,
-      agentId: evaluatorAgentId,
-      statusCode: "missing-evaluator",
-      detail: `Agent ${evaluatorAgentId} is missing.`,
+      agentId: contQaAgentId,
+      statusCode: "missing-cont-qa",
+      detail: `Agent ${contQaAgentId} is missing.`,
       logPath: null,
     };
   }
-  const summary = readRunExecutionSummary(evaluatorRun);
+  const summary = readRunExecutionSummary(contQaRun, strict ? wave : null);
   if (summary) {
-    const validation = validateEvaluatorSummary(evaluatorRun.agent, summary);
+    const validation = validateContQaSummary(contQaRun.agent, summary, { mode });
     return {
       ok: validation.ok,
-      agentId: evaluatorRun.agent.agentId,
+      agentId: contQaRun.agent.agentId,
       statusCode: validation.statusCode,
       detail: validation.detail,
-      logPath: summary.logPath || path.relative(REPO_ROOT, evaluatorRun.logPath),
+      logPath: summary.logPath || path.relative(REPO_ROOT, contQaRun.logPath),
     };
   }
-  const evaluatorReportPath = wave.evaluatorReportPath
-    ? path.resolve(REPO_ROOT, wave.evaluatorReportPath)
+  if (strict) {
+    return {
+      ok: false,
+      agentId: contQaRun.agent.agentId,
+      statusCode: "missing-wave-gate",
+      detail: `Missing structured cont-QA summary for ${contQaRun.agent.agentId}.`,
+      logPath: path.relative(REPO_ROOT, contQaRun.logPath),
+    };
+  }
+  const contQaReportPath = wave.contQaReportPath
+    ? path.resolve(REPO_ROOT, wave.contQaReportPath)
     : null;
   const reportText =
-    evaluatorReportPath && fs.existsSync(evaluatorReportPath)
-      ? fs.readFileSync(evaluatorReportPath, "utf8")
+    contQaReportPath && fs.existsSync(contQaReportPath)
+      ? fs.readFileSync(contQaReportPath, "utf8")
       : "";
   const reportVerdict = parseVerdictFromText(reportText, REPORT_VERDICT_REGEX);
   if (reportVerdict.verdict) {
     return {
       ok: reportVerdict.verdict === "pass",
-      agentId: evaluatorRun.agent.agentId,
-      statusCode: reportVerdict.verdict === "pass" ? "pass" : `evaluator-${reportVerdict.verdict}`,
-      detail: reportVerdict.detail || "Verdict read from evaluator report.",
-      logPath: path.relative(REPO_ROOT, evaluatorRun.logPath),
+      agentId: contQaRun.agent.agentId,
+      statusCode: reportVerdict.verdict === "pass" ? "pass" : `cont-qa-${reportVerdict.verdict}`,
+      detail: reportVerdict.detail || "Verdict read from cont-QA report.",
+      logPath: path.relative(REPO_ROOT, contQaRun.logPath),
     };
   }
   const logVerdict = parseVerdictFromText(
-    readFileTail(evaluatorRun.logPath, 30000),
+    readFileTail(contQaRun.logPath, 30000),
     WAVE_VERDICT_REGEX,
   );
   if (logVerdict.verdict) {
     return {
       ok: logVerdict.verdict === "pass",
-      agentId: evaluatorRun.agent.agentId,
-      statusCode: logVerdict.verdict === "pass" ? "pass" : `evaluator-${logVerdict.verdict}`,
-      detail: logVerdict.detail || "Verdict read from evaluator log marker.",
-      logPath: path.relative(REPO_ROOT, evaluatorRun.logPath),
+      agentId: contQaRun.agent.agentId,
+      statusCode: logVerdict.verdict === "pass" ? "pass" : `cont-qa-${logVerdict.verdict}`,
+      detail: logVerdict.detail || "Verdict read from cont-QA log marker.",
+      logPath: path.relative(REPO_ROOT, contQaRun.logPath),
     };
   }
   return {
     ok: false,
-    agentId: evaluatorRun.agent.agentId,
-    statusCode: "missing-evaluator-verdict",
-    detail: evaluatorReportPath
-      ? `Missing Verdict line in ${path.relative(REPO_ROOT, evaluatorReportPath)} and no [wave-verdict] marker in ${path.relative(REPO_ROOT, evaluatorRun.logPath)}.`
-      : `Missing evaluator report path and no [wave-verdict] marker in ${path.relative(REPO_ROOT, evaluatorRun.logPath)}.`,
-    logPath: path.relative(REPO_ROOT, evaluatorRun.logPath),
+    agentId: contQaRun.agent.agentId,
+    statusCode: "missing-cont-qa-verdict",
+    detail: contQaReportPath
+      ? `Missing Verdict line in ${path.relative(REPO_ROOT, contQaReportPath)} and no [wave-verdict] marker in ${path.relative(REPO_ROOT, contQaRun.logPath)}.`
+      : `Missing cont-QA report path and no [wave-verdict] marker in ${path.relative(REPO_ROOT, contQaRun.logPath)}.`,
+    logPath: path.relative(REPO_ROOT, contQaRun.logPath),
+  };
+}
+
+export function readWaveContEvalGate(wave, agentRuns, options = {}) {
+  const mode = String(options.mode || "compat").trim().toLowerCase();
+  const strict = mode === "live";
+  const contEvalAgentId = options.contEvalAgentId || wave.contEvalAgentId || "E0";
+  const contEvalRun =
+    agentRuns.find((run) => run.agent.agentId === contEvalAgentId) ?? null;
+  if (!contEvalRun) {
+    return {
+      ok: true,
+      agentId: null,
+      statusCode: "pass",
+      detail: "Wave does not include cont-EVAL.",
+      logPath: null,
+    };
+  }
+  const summary = readRunExecutionSummary(contEvalRun, strict ? wave : null);
+  if (summary) {
+    const validation = validateContEvalSummary(contEvalRun.agent, summary, {
+      mode,
+      evalTargets: options.evalTargets || wave.evalTargets,
+      benchmarkCatalogPath: options.benchmarkCatalogPath,
+    });
+    return {
+      ok: validation.ok,
+      agentId: contEvalRun.agent.agentId,
+      statusCode: validation.statusCode,
+      detail: validation.detail,
+      logPath: summary.logPath || path.relative(REPO_ROOT, contEvalRun.logPath),
+    };
+  }
+  return {
+    ok: false,
+    agentId: contEvalRun.agent.agentId,
+    statusCode: "missing-wave-eval",
+    detail: `Missing [wave-eval] marker for ${contEvalRun.agent.agentId}.`,
+    logPath: path.relative(REPO_ROOT, contEvalRun.logPath),
   };
 }
 
@@ -423,10 +504,19 @@ function materializeAgentExecutionSummaryForRun(wave, runInfo) {
   if (!statusRecord) {
     return null;
   }
-  const reportPath =
-    runInfo.agent.agentId === (wave.evaluatorAgentId || "A0") && wave.evaluatorReportPath
-      ? path.resolve(REPO_ROOT, wave.evaluatorReportPath)
-      : null;
+  const reportPath = (() => {
+    if (runInfo.agent.agentId === (wave.contQaAgentId || "A0") && wave.contQaReportPath) {
+      return path.resolve(REPO_ROOT, wave.contQaReportPath);
+    }
+    if (runInfo.agent.agentId === (wave.contEvalAgentId || "E0") && wave.contEvalReportPath) {
+      return path.resolve(REPO_ROOT, wave.contEvalReportPath);
+    }
+    if (isSecurityReviewAgent(runInfo.agent)) {
+      const securityReportPath = resolveSecurityReviewReportPath(runInfo.agent);
+      return securityReportPath ? path.resolve(REPO_ROOT, securityReportPath) : null;
+    }
+    return null;
+  })();
   const summary = buildAgentExecutionSummary({
     agent: runInfo.agent,
     statusRecord,
@@ -437,7 +527,7 @@ function materializeAgentExecutionSummaryForRun(wave, runInfo) {
   return summary;
 }
 
-function readRunExecutionSummary(runInfo) {
+function readRunExecutionSummary(runInfo, wave = null) {
   if (runInfo?.summary && typeof runInfo.summary === "object") {
     return runInfo.summary;
   }
@@ -447,7 +537,17 @@ function readRunExecutionSummary(runInfo) {
   if (runInfo?.statusPath && fs.existsSync(agentSummaryPathFromStatusPath(runInfo.statusPath))) {
     return readAgentExecutionSummary(runInfo.statusPath);
   }
+  if (wave && runInfo?.statusPath && runInfo?.logPath && fs.existsSync(runInfo.statusPath)) {
+    return materializeAgentExecutionSummaryForRun(wave, runInfo);
+  }
   return null;
+}
+
+export function readWaveEvaluatorGate(wave, agentRuns, options = {}) {
+  return readWaveContQaGate(wave, agentRuns, {
+    ...options,
+    contQaAgentId: options.evaluatorAgentId || options.contQaAgentId,
+  });
 }
 
 function materializeAgentExecutionSummaries(wave, agentRuns) {
@@ -490,6 +590,37 @@ function waveIntegrationPath(lanePaths, waveNumber) {
 
 function waveIntegrationMarkdownPath(lanePaths, waveNumber) {
   return path.join(lanePaths.integrationDir, `wave-${waveNumber}.md`);
+}
+
+function waveRelaunchPlanPath(lanePaths, waveNumber) {
+  return path.join(lanePaths.statusDir, `relaunch-plan-wave-${waveNumber}.json`);
+}
+
+function readWaveRelaunchPlan(lanePaths, waveNumber) {
+  return readRelaunchPlan(waveRelaunchPlanPath(lanePaths, waveNumber), { wave: waveNumber });
+}
+
+function writeWaveRelaunchPlan(lanePaths, waveNumber, payload) {
+  const filePath = waveRelaunchPlanPath(lanePaths, waveNumber);
+  writeRelaunchPlan(filePath, payload, { wave: waveNumber });
+  return filePath;
+}
+
+function clearWaveRelaunchPlan(lanePaths, waveNumber) {
+  const filePath = waveRelaunchPlanPath(lanePaths, waveNumber);
+  try {
+    fs.rmSync(filePath, { force: true });
+  } catch {
+    // no-op
+  }
+}
+
+function waveSecurityPath(lanePaths, waveNumber) {
+  return path.join(lanePaths.securityDir, `wave-${waveNumber}.json`);
+}
+
+function waveSecurityMarkdownPath(lanePaths, waveNumber) {
+  return path.join(lanePaths.securityDir, `wave-${waveNumber}.md`);
 }
 
 function uniqueStringEntries(values) {
@@ -607,6 +738,116 @@ function inferIntegrationRecommendation(evidence) {
   };
 }
 
+export function buildWaveSecuritySummary({
+  lanePaths,
+  wave,
+  attempt,
+  summariesByAgentId = {},
+}) {
+  const createdAt = toIsoTimestamp();
+  const securityAgents = (wave.agents || []).filter((agent) => isSecurityReviewAgent(agent));
+  if (securityAgents.length === 0) {
+    return {
+      wave: wave.wave,
+      lane: lanePaths.lane,
+      attempt,
+      overallState: "not-applicable",
+      totalFindings: 0,
+      totalApprovals: 0,
+      concernAgentIds: [],
+      blockedAgentIds: [],
+      detail: "No security reviewer declared for this wave.",
+      agents: [],
+      createdAt,
+      updatedAt: createdAt,
+    };
+  }
+  const agents = securityAgents.map((agent) => {
+    const summary = summariesByAgentId?.[agent.agentId] || null;
+    const validation = validateSecuritySummary(agent, summary);
+    const explicitState = summary?.security?.state || null;
+    return {
+      agentId: agent.agentId,
+      title: agent.title || agent.agentId,
+      state: validation.ok
+        ? explicitState || "clear"
+        : explicitState === "blocked"
+          ? "blocked"
+          : "pending",
+      findings: summary?.security?.findings || 0,
+      approvals: summary?.security?.approvals || 0,
+      detail: validation.ok
+        ? summary?.security?.detail || validation.detail || ""
+        : validation.detail,
+      reportPath: summary?.reportPath || resolveSecurityReviewReportPath(agent) || null,
+      statusCode: validation.statusCode,
+      ok: validation.ok,
+    };
+  });
+  const blockedAgentIds = agents
+    .filter((entry) => entry.state === "blocked")
+    .map((entry) => entry.agentId);
+  const concernAgentIds = agents
+    .filter((entry) => entry.state === "concerns")
+    .map((entry) => entry.agentId);
+  const pendingAgentIds = agents
+    .filter((entry) => entry.state === "pending")
+    .map((entry) => entry.agentId);
+  const overallState =
+    blockedAgentIds.length > 0
+      ? "blocked"
+      : pendingAgentIds.length > 0
+        ? "pending"
+        : concernAgentIds.length > 0
+          ? "concerns"
+          : "clear";
+  const totalFindings = agents.reduce((sum, entry) => sum + (entry.findings || 0), 0);
+  const totalApprovals = agents.reduce((sum, entry) => sum + (entry.approvals || 0), 0);
+  const detail =
+    overallState === "blocked"
+      ? `Security review blocked by ${blockedAgentIds.join(", ")}.`
+      : overallState === "pending"
+        ? `Security review output is incomplete for ${pendingAgentIds.join(", ")}.`
+        : overallState === "concerns"
+          ? `Security review reported advisory concerns from ${concernAgentIds.join(", ")}.`
+          : "Security review is clear.";
+  return {
+    wave: wave.wave,
+    lane: lanePaths.lane,
+    attempt,
+    overallState,
+    totalFindings,
+    totalApprovals,
+    concernAgentIds,
+    blockedAgentIds,
+    detail,
+    agents,
+    createdAt,
+    updatedAt: createdAt,
+  };
+}
+
+function renderWaveSecuritySummaryMarkdown(securitySummary) {
+  return [
+    `# Wave ${securitySummary.wave} Security Summary`,
+    "",
+    `- State: ${securitySummary.overallState || "unknown"}`,
+    `- Detail: ${securitySummary.detail || "n/a"}`,
+    `- Total findings: ${securitySummary.totalFindings || 0}`,
+    `- Total approvals: ${securitySummary.totalApprovals || 0}`,
+    `- Reviewers: ${(securitySummary.agents || []).length}`,
+    "",
+    "## Reviews",
+    ...((securitySummary.agents || []).length > 0
+      ? securitySummary.agents.map(
+          (entry) =>
+            `- ${entry.agentId}: state=${entry.state || "unknown"} findings=${entry.findings || 0} approvals=${entry.approvals || 0}${entry.reportPath ? ` report=${entry.reportPath}` : ""}${entry.detail ? ` detail=${entry.detail}` : ""}`,
+        )
+      : ["- None."]),
+    "",
+  ].join("\n");
+}
+
 function padReportedEntries(entries, minimumCount, label) {
   const padded = [...entries];
   for (let index = padded.length + 1; index <= minimumCount; index += 1) {
@@ -624,6 +865,7 @@ function buildIntegrationEvidence({
   agentRuns,
   dependencySnapshot = null,
   capabilityAssignments = [],
+  securitySummary = null,
 }) {
   const openClaims = (coordinationState?.claims || [])
     .filter((record) => isOpenCoordinationStatus(record.status))
@@ -677,14 +919,37 @@ function buildIntegrationEvidence({
     ? docsQueue.items.map((item) => summarizeDocsQueueItem(item))
     : [];
   const deployRiskEntries = [];
+  const securityFindingEntries = [];
+  const securityApprovalEntries = [];
   for (const agent of wave.agents || []) {
     const summary = summariesByAgentId?.[agent.agentId] || null;
+    const contEvalImplementationOwning =
+      agent.agentId === lanePaths.contEvalAgentId &&
+      isContEvalImplementationOwningAgent(agent, {
+        contEvalAgentId: lanePaths.contEvalAgentId,
+      });
+    if (isSecurityReviewAgent(agent)) {
+      continue;
+    }
+    if (agent.agentId === lanePaths.contEvalAgentId) {
+      const validation = validateContEvalSummary(agent, summary, {
+        mode: "live",
+        evalTargets: wave.evalTargets,
+        benchmarkCatalogPath: lanePaths.laneProfile?.paths?.benchmarkCatalogPath,
+      });
+      if (!validation.ok) {
+        proofGapEntries.push(
+          summarizeGap(agent.agentId, validation.detail, "cont-EVAL target is not yet satisfied."),
+        );
+      }
+    }
     if (
       ![
-        lanePaths.evaluatorAgentId,
+        lanePaths.contQaAgentId,
         lanePaths.integrationAgentId,
         lanePaths.documentationAgentId,
-      ].includes(agent.agentId)
+      ].includes(agent.agentId) &&
+      (agent.agentId !== lanePaths.contEvalAgentId || contEvalImplementationOwning)
     ) {
       const validation = validateImplementationSummary(agent, summary);
       if (!validation.ok) {
@@ -754,6 +1019,29 @@ function buildIntegrationEvidence({
         `${assignment.requestId}: ${assignment.target}${assignment.assignedAgentId ? ` -> ${assignment.assignedAgentId}` : " -> unresolved"} (${assignment.assignmentReason || "n/a"})`,
     );
 
+  for (const review of securitySummary?.agents || []) {
+    if (review.state === "blocked" || review.state === "concerns") {
+      securityFindingEntries.push(
+        summarizeGap(
+          review.agentId,
+          review.detail,
+          review.state === "blocked"
+            ? "Security review blocked the wave."
+            : "Security review reported advisory concerns.",
+        ),
+      );
+    }
+    if ((review.approvals || 0) > 0) {
+      securityApprovalEntries.push(
+        summarizeGap(
+          review.agentId,
+          review.detail,
+          `${review.approvals} security approval(s) remain open.`,
+        ),
+      );
+    }
+  }
+
   return {
     openClaims: uniqueStringEntries(openClaims),
     conflictingClaims: uniqueStringEntries(conflictingClaims),
@@ -766,6 +1054,9 @@ function buildIntegrationEvidence({
     inboundDependencies: uniqueStringEntries(inboundDependencies),
     outboundDependencies: uniqueStringEntries(outboundDependencies),
     helperAssignments: uniqueStringEntries(helperAssignments),
+    securityState: securitySummary?.overallState || "not-applicable",
+    securityFindings: uniqueStringEntries(securityFindingEntries),
+    securityApprovals: uniqueStringEntries(securityApprovalEntries),
   };
 }
 
@@ -780,6 +1071,7 @@ export function buildWaveIntegrationSummary({
   agentRuns,
   capabilityAssignments = [],
   dependencySnapshot = null,
+  securitySummary = null,
 }) {
   const explicitIntegration = summariesByAgentId[lanePaths.integrationAgentId]?.integration || null;
   const evidence = buildIntegrationEvidence({
@@ -791,6 +1083,7 @@ export function buildWaveIntegrationSummary({
     agentRuns,
     capabilityAssignments,
     dependencySnapshot,
+    securitySummary,
   });
   if (explicitIntegration) {
     return {
@@ -818,6 +1111,9 @@ export function buildWaveIntegrationSummary({
       proofGaps: evidence.proofGaps,
       docGaps: evidence.docGaps,
       deployRisks: evidence.deployRisks,
+      securityState: evidence.securityState,
+      securityFindings: evidence.securityFindings,
+      securityApprovals: evidence.securityApprovals,
       inboundDependencies: evidence.inboundDependencies,
       outboundDependencies: evidence.outboundDependencies,
       helperAssignments: evidence.helperAssignments,
@@ -865,6 +1161,9 @@ function renderIntegrationSummaryMarkdown(integrationSummary) {
     `- Proof gaps: ${(integrationSummary.proofGaps || []).length}`,
     `- Deploy risks: ${(integrationSummary.deployRisks || []).length}`,
     `- Documentation gaps: ${(integrationSummary.docGaps || []).length}`,
+    `- Security review: ${integrationSummary.securityState || "not-applicable"}`,
+    `- Security findings: ${(integrationSummary.securityFindings || []).length}`,
+    `- Security approvals: ${(integrationSummary.securityApprovals || []).length}`,
     `- Inbound dependencies: ${(integrationSummary.inboundDependencies || []).length}`,
     `- Outbound dependencies: ${(integrationSummary.outboundDependencies || []).length}`,
     `- Helper assignments: ${(integrationSummary.helperAssignments || []).length}`,
@@ -879,6 +1178,8 @@ function renderIntegrationSummaryMarkdown(integrationSummary) {
     ),
     ...renderIntegrationSection("## Proof Gaps", integrationSummary.proofGaps),
     ...renderIntegrationSection("## Deploy Risks", integrationSummary.deployRisks),
+    ...renderIntegrationSection("## Security Findings", integrationSummary.securityFindings),
+    ...renderIntegrationSection("## Security Approvals", integrationSummary.securityApprovals),
     ...renderIntegrationSection("## Inbound Dependencies", integrationSummary.inboundDependencies),
     ...renderIntegrationSection("## Outbound Dependencies", integrationSummary.outboundDependencies),
     ...renderIntegrationSection("## Helper Assignments", integrationSummary.helperAssignments),
@@ -913,7 +1214,8 @@ function writeWaveDerivedState({
     agents: wave.agents,
     componentPromotions: wave.componentPromotions,
     sharedPlanDocs: lanePaths.sharedPlanDocs,
-    evaluatorAgentId: lanePaths.evaluatorAgentId,
+    contQaAgentId: lanePaths.contQaAgentId,
+    contEvalAgentId: lanePaths.contEvalAgentId,
     integrationAgentId: lanePaths.integrationAgentId,
     documentationAgentId: lanePaths.documentationAgentId,
     feedbackRequests,
@@ -956,8 +1258,14 @@ function writeWaveDerivedState({
     ledger: existingLedger,
     capabilityRouting: lanePaths.capabilityRouting,
   });
-  writeJsonArtifact(waveAssignmentsPath(lanePaths, wave.wave), capabilityAssignments);
-  writeJsonArtifact(waveDependencySnapshotPath(lanePaths, wave.wave), dependencySnapshot);
+  writeAssignmentSnapshot(waveAssignmentsPath(lanePaths, wave.wave), capabilityAssignments, {
+    lane: lanePaths.lane,
+    wave: wave.wave,
+  });
+  writeDependencySnapshot(waveDependencySnapshotPath(lanePaths, wave.wave), dependencySnapshot, {
+    lane: lanePaths.lane,
+    wave: wave.wave,
+  });
   writeDependencySnapshotMarkdown(
     waveDependencySnapshotMarkdownPath(lanePaths, wave.wave),
     dependencySnapshot,
@@ -969,6 +1277,8 @@ function writeWaveDerivedState({
     executorId: agent.executorResolved?.id || null,
     profile: agent.executorResolved?.profile || null,
     selectedBy: agent.executorResolved?.selectedBy || null,
+    retryPolicy: agent.executorResolved?.retryPolicy || null,
+    allowFallbackOnRetry: agent.executorResolved?.allowFallbackOnRetry !== false,
     fallbacks: agent.executorResolved?.fallbacks || [],
     fallbackUsed: agent.executorResolved?.fallbackUsed === true,
     fallbackReason: agent.executorResolved?.fallbackReason || null,
@@ -983,6 +1293,17 @@ function writeWaveDerivedState({
     runtimeAssignments,
   });
   writeDocsQueue(waveDocsQueuePath(lanePaths, wave.wave), docsQueue);
+  const securitySummary = buildWaveSecuritySummary({
+    lanePaths,
+    wave,
+    attempt,
+    summariesByAgentId,
+  });
+  writeJsonArtifact(waveSecurityPath(lanePaths, wave.wave), securitySummary);
+  writeTextAtomic(
+    waveSecurityMarkdownPath(lanePaths, wave.wave),
+    `${renderWaveSecuritySummaryMarkdown(securitySummary)}\n`,
+  );
   const integrationSummary = buildWaveIntegrationSummary({
     lanePaths,
     wave,
@@ -994,6 +1315,7 @@ function writeWaveDerivedState({
     agentRuns,
     capabilityAssignments,
     dependencySnapshot,
+    securitySummary,
   });
   writeJsonArtifact(waveIntegrationPath(lanePaths, wave.wave), integrationSummary);
   writeTextAtomic(
@@ -1008,9 +1330,11 @@ function writeWaveDerivedState({
     integrationSummary,
     docsQueue,
     attempt,
-    evaluatorAgentId: lanePaths.evaluatorAgentId,
+    contQaAgentId: lanePaths.contQaAgentId,
+    contEvalAgentId: lanePaths.contEvalAgentId,
     integrationAgentId: lanePaths.integrationAgentId,
     documentationAgentId: lanePaths.documentationAgentId,
+    benchmarkCatalogPath: lanePaths.laneProfile?.paths?.benchmarkCatalogPath,
     capabilityAssignments,
     dependencySnapshot,
   });
@@ -1067,8 +1391,10 @@ function writeWaveDerivedState({
     docsQueue,
     capabilityAssignments,
     dependencySnapshot,
+    securitySummary,
     integrationSummary,
     integrationMarkdownPath: waveIntegrationMarkdownPath(lanePaths, wave.wave),
+    securityMarkdownPath: waveSecurityMarkdownPath(lanePaths, wave.wave),
     ledger,
     sharedSummaryPath,
     sharedSummaryText: sharedSummary.text,
@@ -1090,14 +1416,19 @@ function applyDerivedStateToDashboard(dashboardState, derivedState) {
 }
 
 export function readWaveImplementationGate(wave, agentRuns) {
-  const evaluatorAgentId = wave.evaluatorAgentId || "A0";
+  const contQaAgentId = wave.contQaAgentId || "A0";
+  const contEvalAgentId = wave.contEvalAgentId || "E0";
   const integrationAgentId = wave.integrationAgentId || "A8";
   const documentationAgentId = wave.documentationAgentId || "A9";
   for (const runInfo of agentRuns) {
-    if ([evaluatorAgentId, integrationAgentId, documentationAgentId].includes(runInfo.agent.agentId)) {
+    if (
+      [contQaAgentId, integrationAgentId, documentationAgentId].includes(runInfo.agent.agentId) ||
+      isContEvalReportOnlyAgent(runInfo.agent, { contEvalAgentId }) ||
+      isSecurityReviewAgent(runInfo.agent)
+    ) {
       continue;
     }
-    const summary = readRunExecutionSummary(runInfo);
+    const summary = readRunExecutionSummary(runInfo, wave);
     const validation = validateImplementationSummary(runInfo.agent, summary);
     if (!validation.ok) {
       return {
@@ -1120,7 +1451,7 @@ export function readWaveImplementationGate(wave, agentRuns) {
 
 export function readWaveComponentGate(wave, agentRuns, options = {}) {
   const summariesByAgentId = Object.fromEntries(
-    agentRuns.map((runInfo) => [runInfo.agent.agentId, readRunExecutionSummary(runInfo)]),
+    agentRuns.map((runInfo) => [runInfo.agent.agentId, readRunExecutionSummary(runInfo, wave)]),
   );
   const validation = validateWaveComponentPromotions(wave, summariesByAgentId, options);
   if (validation.ok) {
@@ -1184,7 +1515,7 @@ export function readWaveDocumentationGate(wave, agentRuns) {
       logPath: null,
     };
   }
-  const summary = readRunExecutionSummary(docRun);
+  const summary = readRunExecutionSummary(docRun, wave);
   const validation = validateDocumentationClosureSummary(docRun.agent, summary);
   return {
     ok: validation.ok,
@@ -1192,6 +1523,52 @@ export function readWaveDocumentationGate(wave, agentRuns) {
     statusCode: validation.statusCode,
     detail: validation.detail,
     logPath: summary?.logPath || path.relative(REPO_ROOT, docRun.logPath),
+  };
+}
+
+export function readWaveSecurityGate(wave, agentRuns) {
+  const securityRuns = (agentRuns || []).filter((run) => isSecurityReviewAgent(run.agent));
+  if (securityRuns.length === 0) {
+    return {
+      ok: true,
+      agentId: null,
+      statusCode: "pass",
+      detail: "No security reviewer declared for this wave.",
+      logPath: null,
+    };
+  }
+  const concernAgentIds = [];
+  for (const runInfo of securityRuns) {
+    const summary = readRunExecutionSummary(runInfo, wave);
+    const validation = validateSecuritySummary(runInfo.agent, summary);
+    if (!validation.ok) {
+      return {
+        ok: false,
+        agentId: runInfo.agent.agentId,
+        statusCode: validation.statusCode,
+        detail: validation.detail,
+        logPath: summary?.logPath || path.relative(REPO_ROOT, runInfo.logPath),
+      };
+    }
+    if (summary?.security?.state === "concerns") {
+      concernAgentIds.push(runInfo.agent.agentId);
+    }
+  }
+  if (concernAgentIds.length > 0) {
+    return {
+      ok: true,
+      agentId: null,
+      statusCode: "security-concerns",
+      detail: `Security review reported advisory concerns (${concernAgentIds.join(", ")}).`,
+      logPath: null,
+    };
+  }
+  return {
+    ok: true,
+    agentId: null,
+    statusCode: "pass",
+    detail: "Security review is clear.",
+    logPath: null,
   };
 }
 
@@ -1216,7 +1593,7 @@ export function readWaveIntegrationGate(wave, agentRuns, options = {}) {
       logPath: null,
     };
   }
-  const summary = readRunExecutionSummary(integrationRun);
+  const summary = readRunExecutionSummary(integrationRun, wave);
   const validation = validateIntegrationSummary(integrationRun.agent, summary);
   return {
     ok: validation.ok,
@@ -1256,45 +1633,6 @@ export function readWaveIntegrationBarrier(wave, agentRuns, derivedState, option
   return markerGate;
 }
 
-function failureResultFromGate(gate, fallbackLogPath) {
-  return {
-    failures: [
-      {
-        agentId: gate.agentId,
-        statusCode: gate.statusCode,
-        logPath: gate.logPath || fallbackLogPath,
-        detail: gate.detail,
-      },
-    ],
-    timedOut: false,
-  };
-}
-
-function recordClosureGateFailure({
-  wave,
-  lanePaths,
-  gate,
-  label,
-  recordCombinedEvent,
-  appendCoordination,
-  actionRequested,
-}) {
-  recordCombinedEvent({
-    level: "error",
-    agentId: gate.agentId,
-    message: `${label} blocked wave ${wave.wave}: ${gate.detail}`,
-  });
-  appendCoordination({
-    event: "wave_gate_blocked",
-    waves: [wave.wave],
-    status: "blocked",
-    details: `agent=${gate.agentId}; reason=${gate.statusCode}; ${gate.detail}`,
-    actionRequested:
-      actionRequested ||
-      `Lane ${lanePaths.lane} owners should resolve the ${label.toLowerCase()} before wave progression.`,
-  });
-}
-
 export async function runClosureSweepPhase({
   lanePaths,
   wave,
@@ -1310,180 +1648,33 @@ export async function runClosureSweepPhase({
   launchAgentSessionFn = launchAgentSession,
   waitForWaveCompletionFn = waitForWaveCompletion,
 }) {
-  const evaluatorAgentId = wave.evaluatorAgentId || "A0";
-  const integrationAgentId = wave.integrationAgentId || lanePaths.integrationAgentId || "A8";
-  const documentationAgentId = wave.documentationAgentId || "A9";
-  const stagedRuns = [
-    {
-      agentId: integrationAgentId,
-      label: "Integration gate",
-      runs: closureRuns.filter((run) => run.agent.agentId === integrationAgentId),
-      validate: () =>
-        readWaveIntegrationBarrier(wave, closureRuns, refreshDerivedState?.(dashboardState?.attempt || 0), {
-          integrationAgentId: lanePaths.integrationAgentId,
-          requireIntegrationStewardFromWave: lanePaths.requireIntegrationStewardFromWave,
-        }),
-      actionRequested:
-        `Lane ${lanePaths.lane} owners should resolve integration contradictions or blockers before doc/evaluator closure.`,
-    },
-    {
-      agentId: documentationAgentId,
-      label: "Documentation closure",
-      runs: closureRuns.filter((run) => run.agent.agentId === documentationAgentId),
-      validate: () => {
-        const documentationGate = readWaveDocumentationGate(wave, closureRuns);
-        if (!documentationGate.ok) {
-          return documentationGate;
-        }
-        return readWaveComponentMatrixGate(wave, closureRuns, {
-          laneProfile: lanePaths.laneProfile,
-          documentationAgentId: lanePaths.documentationAgentId,
-        });
-      },
-      actionRequested:
-        `Lane ${lanePaths.lane} owners should resolve the shared-plan or component-matrix closure state before evaluator progression.`,
-    },
-    {
-      agentId: evaluatorAgentId,
-      label: "Evaluator gate",
-      runs: closureRuns.filter((run) => run.agent.agentId === evaluatorAgentId),
-      validate: () => readWaveEvaluatorGate(wave, closureRuns),
-      actionRequested:
-        `Lane ${lanePaths.lane} owners should resolve the evaluator gate before wave progression.`,
-    },
-  ];
-  for (const stage of stagedRuns) {
-    if (stage.runs.length === 0) {
-      continue;
-    }
-    const runInfo = stage.runs[0];
-    const existing = dashboardState.agents.find((entry) => entry.agentId === runInfo.agent.agentId);
-    setWaveDashboardAgent(dashboardState, runInfo.agent.agentId, {
-      state: "launching",
-      attempts: (existing?.attempts || 0) + 1,
-      startedAt: existing?.startedAt || toIsoTimestamp(),
-      completedAt: null,
-      exitCode: null,
-      detail: "Launching closure sweep",
-    });
-    flushDashboards();
-    const launchResult = await launchAgentSessionFn(lanePaths, {
-      wave: wave.wave,
-      waveDefinition: wave,
-      agent: runInfo.agent,
-      sessionName: runInfo.sessionName,
-      promptPath: runInfo.promptPath,
-      logPath: runInfo.logPath,
-      statusPath: runInfo.statusPath,
-      messageBoardPath: runInfo.messageBoardPath,
-      messageBoardSnapshot: runInfo.messageBoardSnapshot || "",
-      sharedSummaryPath: runInfo.sharedSummaryPath,
-      sharedSummaryText: runInfo.sharedSummaryText,
-      inboxPath: runInfo.inboxPath,
-      inboxText: runInfo.inboxText,
-      orchestratorId: options.orchestratorId,
-      executorMode: options.executorMode,
-      codexSandboxMode: options.codexSandboxMode,
-      agentRateLimitRetries: options.agentRateLimitRetries,
-      agentRateLimitBaseDelaySeconds: options.agentRateLimitBaseDelaySeconds,
-      agentRateLimitMaxDelaySeconds: options.agentRateLimitMaxDelaySeconds,
-      context7Enabled: options.context7Enabled,
-    });
-    runInfo.lastLaunchAttempt = dashboardState?.attempt || null;
-    runInfo.lastPromptHash = launchResult?.promptHash || null;
-    runInfo.lastContext7 = launchResult?.context7 || null;
-    runInfo.lastExecutorId = launchResult?.executorId || runInfo.agent.executorResolved?.id || null;
-    runInfo.lastSkillProjection = launchResult?.skills || summarizeResolvedSkills(runInfo.agent.skillsResolved);
-    setWaveDashboardAgent(dashboardState, runInfo.agent.agentId, {
-      state: "running",
-      detail: `Closure sweep launched${launchResult?.context7?.mode ? ` (${launchResult.context7.mode})` : ""}`,
-    });
-    recordCombinedEvent({
-      agentId: runInfo.agent.agentId,
-      message: `Closure sweep launched in tmux session ${runInfo.sessionName}`,
-    });
-    flushDashboards();
-    const result = await waitForWaveCompletionFn(
-      lanePaths,
-      [runInfo],
-      options.timeoutMinutes,
-      ({ pendingAgentIds }) => {
-        refreshWaveDashboardAgentStates(dashboardState, [runInfo], pendingAgentIds, (event) =>
-          recordCombinedEvent(event),
-        );
-        monitorWaveHumanFeedback({
-          lanePaths,
-          waveNumber: wave.wave,
-          agentRuns: [runInfo],
-          orchestratorId: options.orchestratorId,
-          coordinationLogPath,
-          feedbackStateByRequestId,
-          recordCombinedEvent,
-          appendCoordination,
-        });
-        updateWaveDashboardMessageBoard(dashboardState, runInfo.messageBoardPath);
-        flushDashboards();
-      },
-    );
-    materializeAgentExecutionSummaryForRun(wave, runInfo);
-    refreshDerivedState?.(dashboardState?.attempt || 0);
-    if (result.failures.length > 0) {
-      return result;
-    }
-    const gate = stage.validate();
-    if (!gate.ok) {
-      recordClosureGateFailure({
-        wave,
-        lanePaths,
-        gate,
-        label: stage.label,
-        recordCombinedEvent,
-        appendCoordination,
-        actionRequested: stage.actionRequested,
-      });
-      return failureResultFromGate(gate, path.relative(REPO_ROOT, runInfo.logPath));
-    }
-  }
-  return { failures: [], timedOut: false };
+  return runClosureSweepPhaseImpl({
+    lanePaths,
+    wave,
+    closureRuns,
+    coordinationLogPath,
+    refreshDerivedState,
+    dashboardState,
+    recordCombinedEvent,
+    flushDashboards,
+    options,
+    feedbackStateByRequestId,
+    appendCoordination,
+    launchAgentSessionFn,
+    waitForWaveCompletionFn,
+    readWaveContEvalGateFn: readWaveContEvalGate,
+    readWaveSecurityGateFn: readWaveSecurityGate,
+    readWaveIntegrationBarrierFn: readWaveIntegrationBarrier,
+    readWaveDocumentationGateFn: readWaveDocumentationGate,
+    readWaveComponentMatrixGateFn: readWaveComponentMatrixGate,
+    readWaveContQaGateFn: readWaveContQaGate,
+    materializeAgentExecutionSummaryForRunFn: materializeAgentExecutionSummaryForRun,
+    monitorWaveHumanFeedbackFn: monitorWaveHumanFeedback,
+  });
 }
 
-const NON_BLOCKING_INFRA_SIGNAL_STATES = new Set([
-  "conformant",
-  "setup-required",
-  "setup-in-progress",
-  "action-required",
-  "action-approved",
-  "action-complete",
-]);
-
 export function readWaveInfraGate(agentRuns) {
-  for (const run of agentRuns) {
-    const signals = parseStructuredSignalsFromLog(run.logPath);
-    if (!signals?.infra) {
-      continue;
-    }
-    const infra = signals.infra;
-    const normalizedState = String(infra.state || "")
-      .trim()
-      .toLowerCase();
-    if (NON_BLOCKING_INFRA_SIGNAL_STATES.has(normalizedState)) {
-      continue;
-    }
-    return {
-      ok: false,
-      agentId: run.agent.agentId,
-      statusCode: `infra-${normalizedState || "blocked"}`,
-      detail: `Infra signal ${infra.kind || "unknown"} on ${infra.target || "unknown"} ended in state ${normalizedState || "unknown"}${infra.detail ? ` (${infra.detail})` : ""}.`,
-      logPath: path.relative(REPO_ROOT, run.logPath),
-    };
-  }
-  return {
-    ok: true,
-    agentId: null,
-    statusCode: "pass",
-    detail: "",
-    logPath: null,
-  };
+  return readWaveInfraGateImpl(agentRuns);
 }
 
 export function markLauncherFailed(
@@ -1739,23 +1930,9 @@ function cleanupLaneTmuxSessions(lanePaths, { excludeSessionNames = new Set() } 
 }
 
 export function collectUnexpectedSessionFailures(lanePaths, agentRuns, pendingAgentIds) {
-  const activeSessionNames = new Set(listLaneTmuxSessionNames(lanePaths));
-  const failures = [];
-  for (const run of agentRuns) {
-    if (!pendingAgentIds.has(run.agent.agentId) || fs.existsSync(run.statusPath)) {
-      continue;
-    }
-    if (activeSessionNames.has(run.sessionName)) {
-      continue;
-    }
-    failures.push({
-      agentId: run.agent.agentId,
-      statusCode: "session-missing",
-      logPath: path.relative(REPO_ROOT, run.logPath),
-      detail: `tmux session ${run.sessionName} disappeared before ${path.relative(REPO_ROOT, run.statusPath)} was written.`,
-    });
-  }
-  return failures;
+  return collectUnexpectedSessionFailuresImpl(lanePaths, agentRuns, pendingAgentIds, {
+    listLaneTmuxSessionNamesFn: listLaneTmuxSessionNames,
+  });
 }
 
 function launchWaveDashboardSession(lanePaths, { sessionName, dashboardPath, messageBoardPath }) {
@@ -1777,281 +1954,14 @@ function launchWaveDashboardSession(lanePaths, { sessionName, dashboardPath, mes
   );
 }
 
-function refreshResolvedSkillsForRun(runInfo, waveDefinition, lanePaths) {
-  runInfo.agent.skillsResolved = resolveAgentSkills(
-    runInfo.agent,
-    waveDefinition || { deployEnvironments: [] },
-    { laneProfile: lanePaths.laneProfile },
-  );
-  return runInfo.agent.skillsResolved;
-}
-
 async function launchAgentSession(lanePaths, params) {
-  const {
-    wave,
-    waveDefinition = null,
-    agent,
-    sessionName,
-    promptPath,
-    logPath,
-    statusPath,
-    messageBoardPath,
-    messageBoardSnapshot,
-    sharedSummaryPath,
-    sharedSummaryText,
-    inboxPath,
-    inboxText,
-    orchestratorId,
-    agentRateLimitRetries,
-    agentRateLimitBaseDelaySeconds,
-    agentRateLimitMaxDelaySeconds,
-    context7Enabled,
-    dryRun = false,
-  } = params;
-  ensureDirectory(path.dirname(promptPath));
-  ensureDirectory(path.dirname(logPath));
-  ensureDirectory(path.dirname(statusPath));
-  fs.rmSync(statusPath, { force: true });
-
-  const context7 = await prefetchContext7ForSelection(agent.context7Resolved, {
-    cacheDir: lanePaths.context7CacheDir,
-    disabled: !context7Enabled,
-  });
-  const overlayDir = path.join(lanePaths.executorOverlaysDir, `wave-${wave}`, agent.slug);
-  ensureDirectory(overlayDir);
-  const skillsResolved =
-    agent.skillsResolved || resolveAgentSkills(agent, waveDefinition || { deployEnvironments: [] }, {
-      laneProfile: lanePaths.laneProfile,
-    });
-  agent.skillsResolved = skillsResolved;
-  const skillArtifacts = writeResolvedSkillArtifacts(overlayDir, skillsResolved);
-  if (skillArtifacts) {
-    agent.skillsResolved = {
-      ...skillsResolved,
-      artifacts: skillArtifacts,
-    };
-  }
-  const prompt = buildExecutionPrompt({
-    lane: lanePaths.lane,
-    wave,
-    agent,
-    orchestratorId,
-    messageBoardPath,
-    messageBoardSnapshot,
-    sharedSummaryPath,
-    sharedSummaryText,
-    inboxPath,
-    inboxText,
-    context7,
-    componentPromotions: wave.componentPromotions,
-    sharedPlanDocs: lanePaths.sharedPlanDocs,
-    evaluatorAgentId: lanePaths.evaluatorAgentId,
-    integrationAgentId: lanePaths.integrationAgentId,
-    documentationAgentId: lanePaths.documentationAgentId,
-  });
-  const promptHash = hashAgentPromptFingerprint(agent);
-  fs.writeFileSync(promptPath, `${prompt}\n`, "utf8");
-  const launchSpec = buildExecutorLaunchSpec({
-    agent,
-    promptPath,
-    logPath,
-    overlayDir,
-    skillProjection: agent.skillsResolved,
-  });
-  const resolvedExecutorMode = launchSpec.executorId || agent.executorResolved?.id || "codex";
-  if (dryRun) {
-    writeJsonAtomic(path.join(overlayDir, "launch-preview.json"), {
-      executorId: resolvedExecutorMode,
-      command: launchSpec.command,
-      env: launchSpec.env || {},
-      useRateLimitRetries: launchSpec.useRateLimitRetries === true,
-      invocationLines: launchSpec.invocationLines,
-      skills: summarizeResolvedSkills(agent.skillsResolved),
-    });
-    return {
-      promptHash,
-      context7,
-      executorId: resolvedExecutorMode,
-      launchSpec,
-      dryRun: true,
-      skills: summarizeResolvedSkills(agent.skillsResolved),
-    };
-  }
-  killTmuxSessionIfExists(lanePaths.tmuxSocketName, sessionName);
-
-  const executionLines = [];
-  if (launchSpec.env) {
-    for (const [key, value] of Object.entries(launchSpec.env)) {
-      executionLines.push(`export ${key}=${shellQuote(value)}`);
-    }
-  }
-  if (!launchSpec.useRateLimitRetries) {
-    executionLines.push(...launchSpec.invocationLines);
-    executionLines.push("status=$?");
-  } else {
-    executionLines.push(`: > ${shellQuote(logPath)}`);
-    executionLines.push(
-      `max_rate_attempts=${Math.max(1, Number.parseInt(String(agentRateLimitRetries || 0), 10) + 1)}`,
-    );
-    executionLines.push(
-      `rate_delay_base=${Math.max(1, Number.parseInt(String(agentRateLimitBaseDelaySeconds || DEFAULT_AGENT_RATE_LIMIT_BASE_DELAY_SECONDS), 10))}`,
-    );
-    executionLines.push(
-      `rate_delay_max=${Math.max(1, Number.parseInt(String(agentRateLimitMaxDelaySeconds || DEFAULT_AGENT_RATE_LIMIT_MAX_DELAY_SECONDS), 10))}`,
-    );
-    executionLines.push("rate_attempt=1");
-    executionLines.push("status=1");
-    executionLines.push('while [ "$rate_attempt" -le "$max_rate_attempts" ]; do');
-    for (const line of launchSpec.invocationLines) {
-      executionLines.push(`  ${line}`);
-    }
-    executionLines.push("  status=$?");
-    executionLines.push('  if [ "$status" -eq 0 ]; then');
-    executionLines.push("    break");
-    executionLines.push("  fi");
-    executionLines.push('  if [ "$rate_attempt" -ge "$max_rate_attempts" ]; then');
-    executionLines.push("    break");
-    executionLines.push("  fi");
-    executionLines.push(
-      `  if tail -n 120 ${shellQuote(logPath)} | grep -Eqi '429 Too Many Requests|exceeded retry limit|last status: 429|rate limit'; then`,
-    );
-    executionLines.push("    sleep_seconds=$((rate_delay_base * (2 ** (rate_attempt - 1))))");
-    executionLines.push(
-      '    if [ "$sleep_seconds" -gt "$rate_delay_max" ]; then sleep_seconds=$rate_delay_max; fi',
-    );
-    executionLines.push("    jitter=$((RANDOM % 5))");
-    executionLines.push("    sleep_seconds=$((sleep_seconds + jitter))");
-    executionLines.push(
-      `    echo "[${lanePaths.lane}-wave-launcher] rate-limit detected for ${agent.agentId}; retry \${rate_attempt}/\${max_rate_attempts} after \${sleep_seconds}s" | tee -a ${shellQuote(logPath)}`,
-    );
-    executionLines.push('    sleep "$sleep_seconds"');
-    executionLines.push("    rate_attempt=$((rate_attempt + 1))");
-    executionLines.push("    continue");
-    executionLines.push("  fi");
-    executionLines.push("  break");
-    executionLines.push("done");
-  }
-
-  const command = [
-    `cd ${shellQuote(REPO_ROOT)}`,
-    "set -o pipefail",
-    `export WAVE_ORCHESTRATOR_ID=${shellQuote(orchestratorId || "")}`,
-    `export WAVE_EXECUTOR_MODE=${shellQuote(resolvedExecutorMode)}`,
-    ...executionLines,
-    `node -e ${shellQuote(
-      "const fs=require('node:fs'); const statusPath=process.argv[1]; const payload={code:Number(process.argv[2]),promptHash:process.argv[3]||null,orchestratorId:process.argv[4]||null,completedAt:new Date().toISOString()}; fs.writeFileSync(statusPath, JSON.stringify(payload, null, 2)+'\\n', 'utf8');",
-    )} ${shellQuote(statusPath)} "$status" ${shellQuote(promptHash)} ${shellQuote(orchestratorId || "")}`,
-    `echo "[${lanePaths.lane}-wave-launcher] ${sessionName} finished with code $status"`,
-    "exec bash -l",
-  ].join("\n");
-
-  runTmux(
-    lanePaths,
-    ["new-session", "-d", "-s", sessionName, `bash -lc ${shellQuote(command)}`],
-    `launch session ${sessionName}`,
-  );
-  return {
-    promptHash,
-    context7,
-    executorId: resolvedExecutorMode,
-    skills: summarizeResolvedSkills(agent.skillsResolved),
-  };
+  return launchAgentSessionImpl(lanePaths, params, { runTmuxFn: runTmux });
 }
 
 async function waitForWaveCompletion(lanePaths, agentRuns, timeoutMinutes, onProgress = null) {
-  const defaultTimeoutMs = timeoutMinutes * 60 * 1000;
-  const startedAt = Date.now();
-  const timeoutAtByAgentId = new Map(
-    agentRuns.map((run) => {
-      const budgetMinutes = Number(run.agent.executorResolved?.budget?.minutes || 0);
-      const effectiveBudgetMs =
-        Number.isFinite(budgetMinutes) && budgetMinutes > 0
-          ? Math.min(defaultTimeoutMs, budgetMinutes * 60 * 1000)
-          : defaultTimeoutMs;
-      return [run.agent.agentId, startedAt + effectiveBudgetMs];
-    }),
-  );
-  const pending = new Set(agentRuns.map((run) => run.agent.agentId));
-  const timedOutAgentIds = new Set();
-  let sessionFailures = [];
-
-  const refreshPending = () => {
-    for (const run of agentRuns) {
-      if (pending.has(run.agent.agentId) && fs.existsSync(run.statusPath)) {
-        pending.delete(run.agent.agentId);
-      }
-    }
-  };
-
-  await new Promise((resolve) => {
-    const interval = setInterval(() => {
-      refreshPending();
-      onProgress?.({ pendingAgentIds: new Set(pending), timedOut: false });
-      if (pending.size === 0) {
-        clearInterval(interval);
-        resolve();
-        return;
-      }
-      sessionFailures = collectUnexpectedSessionFailures(lanePaths, agentRuns, pending);
-      if (sessionFailures.length > 0) {
-        onProgress?.({
-          pendingAgentIds: new Set(pending),
-          timedOut: false,
-          failures: sessionFailures,
-        });
-        clearInterval(interval);
-        resolve();
-        return;
-      }
-      const now = Date.now();
-      for (const run of agentRuns) {
-        if (!pending.has(run.agent.agentId)) {
-          continue;
-        }
-        const deadline = timeoutAtByAgentId.get(run.agent.agentId) || startedAt + defaultTimeoutMs;
-        if (now <= deadline) {
-          continue;
-        }
-        timedOutAgentIds.add(run.agent.agentId);
-        pending.delete(run.agent.agentId);
-        killTmuxSessionIfExists(lanePaths.tmuxSocketName, run.sessionName);
-      }
-      if (pending.size === 0) {
-        clearInterval(interval);
-        resolve();
-      }
-    }, DEFAULT_WAIT_PROGRESS_INTERVAL_MS);
-    refreshPending();
-    onProgress?.({ pendingAgentIds: new Set(pending), timedOut: false });
+  return waitForWaveCompletionImpl(lanePaths, agentRuns, timeoutMinutes, onProgress, {
+    collectUnexpectedSessionFailuresFn: collectUnexpectedSessionFailures,
   });
-
-  if (sessionFailures.length > 0) {
-    onProgress?.({ pendingAgentIds: new Set(), timedOut: false, failures: sessionFailures });
-    return { failures: sessionFailures, timedOut: false };
-  }
-
-  const failures = [];
-  for (const run of agentRuns) {
-    const code = readStatusCodeIfPresent(run.statusPath);
-    if (code === 0) {
-      continue;
-    }
-    if (code === null || timedOutAgentIds.has(run.agent.agentId)) {
-      failures.push({
-        agentId: run.agent.agentId,
-        statusCode: timedOutAgentIds.has(run.agent.agentId) ? "timeout-no-status" : "missing-status",
-        logPath: path.relative(REPO_ROOT, run.logPath),
-      });
-      continue;
-    }
-    failures.push({
-      agentId: run.agent.agentId,
-      statusCode: String(code),
-      logPath: path.relative(REPO_ROOT, run.logPath),
-    });
-  }
-  onProgress?.({ pendingAgentIds: new Set(), timedOut: timedOutAgentIds.size > 0 });
-  return { failures, timedOut: timedOutAgentIds.size > 0 };
 }
 
 function monitorWaveHumanFeedback({
@@ -2192,24 +2102,107 @@ function monitorWaveHumanFeedback({
   }
 }
 
-export function hasReusableSuccessStatus(agent, statusPath) {
-  const statusRecord = readStatusRecordIfPresent(statusPath);
-  return Boolean(
-    statusRecord && statusRecord.code === 0 && statusRecord.promptHash === hashAgentPromptFingerprint(agent),
+function proofCentricReuseBlocked(derivedState) {
+  if (!derivedState) {
+    return false;
+  }
+  return (
+    readClarificationBarrier(derivedState).ok === false ||
+    readWaveAssignmentBarrier(derivedState).ok === false ||
+    readWaveDependencyBarrier(derivedState).ok === false
   );
 }
 
-function isClosureAgentId(agentId, lanePaths) {
+function applyPersistedRelaunchPlan(agentRuns, persistedPlan, lanePaths, waveDefinition) {
+  if (!persistedPlan || !Array.isArray(persistedPlan.selectedAgentIds)) {
+    return [];
+  }
+  const runsByAgentId = new Map(agentRuns.map((run) => [run.agent.agentId, run]));
+  for (const [agentId, executorState] of Object.entries(persistedPlan.executorStates || {})) {
+    const run = runsByAgentId.get(agentId);
+    if (!run || !executorState || typeof executorState !== "object") {
+      continue;
+    }
+    run.agent.executorResolved = executorState;
+    refreshResolvedSkillsForRun(run, waveDefinition, lanePaths);
+  }
+  return persistedPlan.selectedAgentIds
+    .map((agentId) => runsByAgentId.get(agentId))
+    .filter(Boolean);
+}
+
+function relaunchReasonBuckets(runs, failures, derivedState) {
+  const selectedAgentIds = new Set((runs || []).map((run) => run.agent.agentId));
+  return {
+    clarification: openClarificationLinkedRequests(derivedState?.coordinationState)
+      .flatMap((record) => record.targets || [])
+      .some((target) => {
+        const agentId = String(target || "").startsWith("agent:")
+          ? String(target).slice("agent:".length)
+          : String(target || "");
+        return selectedAgentIds.has(agentId);
+      }),
+    helperAssignment: (derivedState?.capabilityAssignments || []).some(
+      (assignment) => assignment.blocking && selectedAgentIds.has(assignment.assignedAgentId),
+    ),
+    dependency: ((derivedState?.dependencySnapshot?.openInbound || []).some((record) =>
+      selectedAgentIds.has(record.assignedAgentId),
+    )),
+    blocker: (derivedState?.coordinationState?.blockers || []).some(
+      (record) =>
+        isOpenCoordinationStatus(record.status) &&
+        (selectedAgentIds.has(record.agentId) ||
+          (record.targets || []).some((target) => {
+            const agentId = String(target || "").startsWith("agent:")
+              ? String(target).slice("agent:".length)
+              : String(target || "");
+            return selectedAgentIds.has(agentId);
+          })),
+    ),
+    closureGate: (failures || []).some(
+      (failure) => failure.agentId && selectedAgentIds.has(failure.agentId),
+    ),
+  };
+}
+
+export function hasReusableSuccessStatus(agent, statusPath, options = {}) {
+  const statusRecord = readStatusRecordIfPresent(statusPath);
+  const basicReuseOk = Boolean(
+    statusRecord && statusRecord.code === 0 && statusRecord.promptHash === hashAgentPromptFingerprint(agent),
+  );
+  if (!basicReuseOk) {
+    return false;
+  }
+  const proofCentric =
+    agentRequiresProofCentricValidation(agent) || waveRequiresProofCentricValidation(options.wave);
+  if (!proofCentric) {
+    return true;
+  }
+  const summary = readAgentExecutionSummary(statusPath);
+  if (!summary) {
+    return false;
+  }
+  if (!validateImplementationSummary(agent, summary).ok) {
+    return false;
+  }
+  if (proofCentricReuseBlocked(options.derivedState)) {
+    return false;
+  }
+  return true;
+}
+
+function isClosureAgentId(agent, lanePaths) {
   return [
-    lanePaths.integrationAgentId,
-    lanePaths.documentationAgentId,
-    lanePaths.evaluatorAgentId,
-  ].includes(agentId);
+    lanePaths.contEvalAgentId || "E0",
+    lanePaths.integrationAgentId || "A8",
+    lanePaths.documentationAgentId || "A9",
+    lanePaths.contQaAgentId || "A0",
+  ].includes(agent?.agentId) || isSecurityReviewAgent(agent);
 }
 
 export function selectInitialWaveRuns(agentRuns, lanePaths) {
   const implementationRuns = (agentRuns || []).filter(
-    (run) => !isClosureAgentId(run?.agent?.agentId, lanePaths),
+    (run) => !isClosureAgentId(run?.agent, lanePaths),
   );
   return implementationRuns.length > 0 ? implementationRuns : agentRuns;
 }
@@ -2244,6 +2237,12 @@ function nextExecutorModel(executorState, executorId) {
 }
 
 function executorFallbackChain(executorState) {
+  if (
+    executorState?.retryPolicy === "sticky" ||
+    executorState?.allowFallbackOnRetry === false
+  ) {
+    return [];
+  }
   return Array.isArray(executorState?.fallbacks)
     ? executorState.fallbacks.filter(Boolean)
     : [];
@@ -2490,6 +2489,7 @@ export function buildGateSnapshot({
   lanePaths,
   componentMatrixPayload,
   componentMatrixJsonPath,
+  validationMode = "compat",
 }) {
   const implementationGate = readWaveImplementationGate(wave, agentRuns);
   const componentGate = readWaveComponentGate(wave, agentRuns, {
@@ -2510,8 +2510,16 @@ export function buildGateSnapshot({
     componentMatrixPayload,
     componentMatrixJsonPath,
   });
-  const evaluatorGate = readWaveEvaluatorGate(wave, agentRuns, {
-    evaluatorAgentId: lanePaths?.evaluatorAgentId,
+  const contEvalGate = readWaveContEvalGate(wave, agentRuns, {
+    contEvalAgentId: lanePaths?.contEvalAgentId,
+    mode: validationMode,
+    evalTargets: wave.evalTargets,
+    benchmarkCatalogPath: lanePaths?.laneProfile?.paths?.benchmarkCatalogPath,
+  });
+  const securityGate = readWaveSecurityGate(wave, agentRuns);
+  const contQaGate = readWaveContQaGate(wave, agentRuns, {
+    contQaAgentId: lanePaths?.contQaAgentId,
+    mode: validationMode,
   });
   const infraGate = readWaveInfraGate(agentRuns);
   const clarificationBarrier = readClarificationBarrier(derivedState);
@@ -2522,10 +2530,12 @@ export function buildGateSnapshot({
     ["componentGate", componentGate],
     ["helperAssignmentBarrier", helperAssignmentBarrier],
     ["dependencyBarrier", dependencyBarrier],
+    ["contEvalGate", contEvalGate],
+    ["securityGate", securityGate],
     ["integrationBarrier", integrationBarrier],
     ["documentationGate", documentationGate],
     ["componentMatrixGate", componentMatrixGate],
-    ["evaluatorGate", evaluatorGate],
+    ["contQaGate", contQaGate],
     ["infraGate", infraGate],
     ["clarificationBarrier", clarificationBarrier],
   ];
@@ -2537,7 +2547,9 @@ export function buildGateSnapshot({
     integrationBarrier,
     documentationGate,
     componentMatrixGate,
-    evaluatorGate,
+    contEvalGate,
+    securityGate,
+    contQaGate,
     infraGate,
     clarificationBarrier,
     helperAssignmentBarrier,
@@ -2697,9 +2709,21 @@ export function resolveRelaunchRuns(agentRuns, failures, derivedState, lanePaths
       barrier: null,
     };
   }
-  if (derivedState?.ledger?.phase === "evaluator-closure") {
+  if (derivedState?.ledger?.phase === "security-review") {
     return {
-      runs: [runsByAgentId.get(lanePaths.evaluatorAgentId)].filter(Boolean),
+      runs: agentRuns.filter((run) => isSecurityReviewAgent(run.agent)),
+      barrier: null,
+    };
+  }
+  if (derivedState?.ledger?.phase === "cont-eval") {
+    return {
+      runs: [runsByAgentId.get(lanePaths.contEvalAgentId)].filter(Boolean),
+      barrier: null,
+    };
+  }
+  if (derivedState?.ledger?.phase === "cont-qa-closure") {
+    return {
+      runs: [runsByAgentId.get(lanePaths.contQaAgentId)].filter(Boolean),
       barrier: null,
     };
   }
@@ -2786,6 +2810,7 @@ export async function runLauncherCli(argv) {
   ensureDirectory(lanePaths.inboxesDir);
   ensureDirectory(lanePaths.ledgerDir);
   ensureDirectory(lanePaths.integrationDir);
+  ensureDirectory(lanePaths.securityDir);
   ensureDirectory(lanePaths.dependencySnapshotsDir);
   ensureDirectory(lanePaths.docsQueueDir);
   ensureDirectory(lanePaths.tracesDir);
@@ -2837,7 +2862,8 @@ export async function runLauncherCli(argv) {
             lane: lanePaths.lane,
             bundleIndex: context7BundleIndex,
           }),
-          evaluatorAgentId: lanePaths.evaluatorAgentId,
+          contQaAgentId: lanePaths.contQaAgentId,
+          contEvalAgentId: lanePaths.contEvalAgentId,
           integrationAgentId: lanePaths.integrationAgentId,
           documentationAgentId: lanePaths.documentationAgentId,
         }),
@@ -2850,7 +2876,8 @@ export async function runLauncherCli(argv) {
       {
         logsDir: lanePaths.logsDir,
         coordinationDir: lanePaths.coordinationDir,
-        evaluatorAgentId: lanePaths.evaluatorAgentId,
+        contQaAgentId: lanePaths.contQaAgentId,
+        contEvalAgentId: lanePaths.contEvalAgentId,
         integrationAgentId: lanePaths.integrationAgentId,
         documentationAgentId: lanePaths.documentationAgentId,
         requireExitContractsFromWave: lanePaths.requireExitContractsFromWave,
@@ -2945,7 +2972,7 @@ export async function runLauncherCli(argv) {
       event: "launcher_start",
       waves: selectedWavesForCoordination,
       status: options.dryRun ? "dry-run" : "running",
-      details: `pid=${process.pid}; range=${filteredWaves[0]?.wave ?? "?"}..${filteredWaves.at(-1)?.wave ?? "?"}; timeout_minutes=${options.timeoutMinutes}; retries=${options.maxRetriesPerWave}; ${options.coordinationNote ? `note=${options.coordinationNote}` : "note=n/a"}`,
+      details: `pid=${process.pid}; run_kind=${lanePaths.runKind}; run_id=${lanePaths.runId || "none"}; range=${filteredWaves[0]?.wave ?? "?"}..${filteredWaves.at(-1)?.wave ?? "?"}; timeout_minutes=${options.timeoutMinutes}; retries=${options.maxRetriesPerWave}; ${options.coordinationNote ? `note=${options.coordinationNote}` : "note=n/a"}`,
     });
 
     if (options.dryRun) {
@@ -3159,7 +3186,7 @@ export async function runLauncherCli(argv) {
         const refreshDerivedState = (attemptNumber = 0) => {
           const summariesByAgentId = Object.fromEntries(
             agentRuns
-              .map((run) => [run.agent.agentId, readRunExecutionSummary(run)])
+              .map((run) => [run.agent.agentId, readRunExecutionSummary(run, wave)])
               .filter(([, summary]) => summary),
           );
           const feedbackRequests = readWaveHumanFeedbackRequests({
@@ -3190,6 +3217,7 @@ export async function runLauncherCli(argv) {
         };
 
         refreshDerivedState(0);
+        const persistedRelaunchPlan = readWaveRelaunchPlan(lanePaths, wave.wave);
 
         dashboardState = buildWaveDashboardState({
           lane: lanePaths.lane,
@@ -3207,7 +3235,10 @@ export async function runLauncherCli(argv) {
             .filter(
               (run) =>
                 !isClosureAgentId(run.agent.agentId, lanePaths) &&
-                hasReusableSuccessStatus(run.agent, run.statusPath),
+                hasReusableSuccessStatus(run.agent, run.statusPath, {
+                  wave,
+                  derivedState,
+                }),
             )
             .map((run) => run.agent.agentId),
         );
@@ -3245,12 +3276,19 @@ export async function runLauncherCli(argv) {
           });
         }
 
-        let runsToLaunch = selectInitialWaveRuns(
-          agentRuns.filter((run) => !preCompletedAgentIds.has(run.agent.agentId)),
+        const availableRuns = agentRuns.filter((run) => !preCompletedAgentIds.has(run.agent.agentId));
+        const persistedRuns = applyPersistedRelaunchPlan(
+          availableRuns,
+          persistedRelaunchPlan,
           lanePaths,
+          wave,
         );
+        let runsToLaunch =
+          persistedRuns.length > 0 ? persistedRuns : selectInitialWaveRuns(availableRuns, lanePaths);
         let attempt = 1;
         const feedbackStateByRequestId = new Map();
+        let completionGateSnapshot = null;
+        let completionTraceDir = null;
 
         while (attempt <= options.maxRetriesPerWave + 1) {
           refreshDerivedState(attempt - 1);
@@ -3264,19 +3302,21 @@ export async function runLauncherCli(argv) {
           const launchedImplementationRuns = runsToLaunch.filter(
             (run) =>
               ![
-                lanePaths.evaluatorAgentId,
+                lanePaths.contEvalAgentId,
+                lanePaths.contQaAgentId,
                 lanePaths.integrationAgentId,
                 lanePaths.documentationAgentId,
               ].includes(
                 run.agent.agentId,
               ),
           );
-          const evaluatorOnlyRetry =
+          const closureOnlyRetry =
             runsToLaunch.length > 0 &&
             launchedImplementationRuns.length === 0 &&
             runsToLaunch.every((run) =>
               [
-                lanePaths.evaluatorAgentId,
+                lanePaths.contEvalAgentId,
+                lanePaths.contQaAgentId,
                 lanePaths.integrationAgentId,
                 lanePaths.documentationAgentId,
               ].includes(
@@ -3286,7 +3326,7 @@ export async function runLauncherCli(argv) {
 
           let failures = [];
           let timedOut = false;
-          if (evaluatorOnlyRetry) {
+          if (closureOnlyRetry) {
             const closureResult = await runClosureSweepPhase({
               lanePaths,
               wave,
@@ -3515,7 +3555,8 @@ export async function runLauncherCli(argv) {
                     wave,
                     closureRuns: agentRuns.filter((run) =>
                       [
-                        lanePaths.evaluatorAgentId,
+                        lanePaths.contEvalAgentId,
+                        lanePaths.contQaAgentId,
                         lanePaths.integrationAgentId,
                         lanePaths.documentationAgentId,
                       ].includes(
@@ -3595,6 +3636,36 @@ export async function runLauncherCli(argv) {
           }
 
           if (failures.length === 0) {
+            const contEvalGate = readWaveContEvalGate(wave, agentRuns, {
+              contEvalAgentId: lanePaths.contEvalAgentId,
+              mode: "live",
+              evalTargets: wave.evalTargets,
+              benchmarkCatalogPath: lanePaths.laneProfile?.paths?.benchmarkCatalogPath,
+            });
+            if (!contEvalGate.ok) {
+              failures = [
+                {
+                  agentId: contEvalGate.agentId,
+                  statusCode: contEvalGate.statusCode,
+                  logPath: contEvalGate.logPath || path.relative(REPO_ROOT, messageBoardPath),
+                },
+              ];
+              recordCombinedEvent({
+                level: "error",
+                agentId: contEvalGate.agentId,
+                message: `cont-EVAL blocked wave ${wave.wave}: ${contEvalGate.detail}`,
+              });
+              appendCoordination({
+                event: "wave_gate_blocked",
+                waves: [wave.wave],
+                status: "blocked",
+                details: `agent=${contEvalGate.agentId}; reason=${contEvalGate.statusCode}; ${contEvalGate.detail}`,
+                actionRequested: `Lane ${lanePaths.lane} owners should resolve cont-EVAL tuning gaps before integration closure.`,
+              });
+            }
+          }
+
+          if (failures.length === 0) {
             const integrationGate = readWaveIntegrationGate(wave, agentRuns, {
               integrationAgentId: lanePaths.integrationAgentId,
               requireIntegrationStewardFromWave: lanePaths.requireIntegrationStewardFromWave,
@@ -3617,7 +3688,7 @@ export async function runLauncherCli(argv) {
                 waves: [wave.wave],
                 status: "blocked",
                 details: `agent=${integrationGate.agentId}; reason=${integrationGate.statusCode}; ${integrationGate.detail}`,
-                actionRequested: `Lane ${lanePaths.lane} owners should resolve integration contradictions or blockers before doc/evaluator closure.`,
+                actionRequested: `Lane ${lanePaths.lane} owners should resolve integration contradictions or blockers before documentation and cont-QA closure.`,
               });
             }
           }
@@ -3677,38 +3748,38 @@ export async function runLauncherCli(argv) {
           }
 
           if (failures.length === 0) {
-            const evaluatorGate = readWaveEvaluatorGate(wave, agentRuns);
-            if (!evaluatorGate.ok) {
+            const contQaGate = readWaveContQaGate(wave, agentRuns, { mode: "live" });
+            if (!contQaGate.ok) {
               failures = [
                 {
-                  agentId: evaluatorGate.agentId,
-                  statusCode: evaluatorGate.statusCode,
-                  logPath: evaluatorGate.logPath || path.relative(REPO_ROOT, messageBoardPath),
+                  agentId: contQaGate.agentId,
+                  statusCode: contQaGate.statusCode,
+                  logPath: contQaGate.logPath || path.relative(REPO_ROOT, messageBoardPath),
                 },
               ];
               recordCombinedEvent({
                 level: "error",
-                agentId: evaluatorGate.agentId,
-                message: `Evaluator gate blocked wave ${wave.wave}: ${evaluatorGate.detail}`,
+                agentId: contQaGate.agentId,
+                message: `cont-QA gate blocked wave ${wave.wave}: ${contQaGate.detail}`,
               });
               appendCoordination({
                 event: "wave_gate_blocked",
                 waves: [wave.wave],
                 status: "blocked",
-                details: `agent=${evaluatorGate.agentId}; reason=${evaluatorGate.statusCode}; ${evaluatorGate.detail}`,
-                actionRequested: `Lane ${lanePaths.lane} owners should resolve the evaluator gate before wave progression.`,
+                details: `agent=${contQaGate.agentId}; reason=${contQaGate.statusCode}; ${contQaGate.detail}`,
+                actionRequested: `Lane ${lanePaths.lane} owners should resolve the cont-QA gate before wave progression.`,
               });
             } else {
-              setWaveDashboardAgent(dashboardState, evaluatorGate.agentId, {
-                detail: evaluatorGate.detail
-                  ? `Exit 0; evaluator PASS (${evaluatorGate.detail})`
-                  : "Exit 0; evaluator PASS",
+              setWaveDashboardAgent(dashboardState, contQaGate.agentId, {
+                detail: contQaGate.detail
+                  ? `Exit 0; cont-QA PASS (${contQaGate.detail})`
+                  : "Exit 0; cont-QA PASS",
               });
               recordCombinedEvent({
-                agentId: evaluatorGate.agentId,
-                message: evaluatorGate.detail
-                  ? `Evaluator verdict PASS: ${evaluatorGate.detail}`
-                  : "Evaluator verdict PASS.",
+                agentId: contQaGate.agentId,
+                message: contQaGate.detail
+                  ? `cont-QA verdict PASS: ${contQaGate.detail}`
+                  : "cont-QA verdict PASS.",
               });
             }
           }
@@ -3769,7 +3840,7 @@ export async function runLauncherCli(argv) {
           );
           const summariesByAgentId = Object.fromEntries(
             agentRuns
-              .map((run) => [run.agent.agentId, readRunExecutionSummary(run)])
+              .map((run) => [run.agent.agentId, readRunExecutionSummary(run, wave)])
               .filter(([, summary]) => summary),
           );
           const gateSnapshot = buildGateSnapshot({
@@ -3777,7 +3848,9 @@ export async function runLauncherCli(argv) {
             agentRuns,
             derivedState,
             lanePaths,
+            validationMode: "live",
           });
+          completionGateSnapshot = gateSnapshot;
           const traceDir = writeTraceBundle({
             tracesDir: lanePaths.tracesDir,
             lanePaths,
@@ -3791,6 +3864,7 @@ export async function runLauncherCli(argv) {
             docsQueue: derivedState.docsQueue,
             capabilityAssignments: derivedState.capabilityAssignments,
             dependencySnapshot: derivedState.dependencySnapshot,
+            securitySummary: derivedState.securitySummary,
             integrationSummary: derivedState.integrationSummary,
             integrationMarkdownPath: derivedState.integrationMarkdownPath,
             clarificationTriage: derivedState.clarificationTriage,
@@ -3813,6 +3887,7 @@ export async function runLauncherCli(argv) {
               coordinationLogPath: derivedState.coordinationLogPath,
             }),
           });
+          completionTraceDir = traceDir;
 
           if (failures.length === 0) {
             dashboardState.status = "completed";
@@ -3846,8 +3921,8 @@ export async function runLauncherCli(argv) {
             if (
               failures.every(
                 (failure) =>
-                  String(failure.statusCode).startsWith("evaluator-") ||
-                  String(failure.statusCode) === "missing-evaluator-verdict",
+                  String(failure.statusCode).startsWith("cont-qa-") ||
+                  String(failure.statusCode) === "missing-cont-qa-verdict",
               )
             ) {
               error.exitCode = 42;
@@ -3875,6 +3950,7 @@ export async function runLauncherCli(argv) {
             wave,
           );
           if (relaunchResolution.barrier) {
+            clearWaveRelaunchPlan(lanePaths, wave.wave);
             for (const failure of relaunchResolution.barrier.failures) {
               recordCombinedEvent({
                 level: "error",
@@ -3902,6 +3978,7 @@ export async function runLauncherCli(argv) {
           }
           runsToLaunch = relaunchResolution.runs;
           if (runsToLaunch.length === 0) {
+            clearWaveRelaunchPlan(lanePaths, wave.wave);
             const error = new Error(
               `Wave ${wave.wave} is waiting on human feedback or unresolved coordination state; no safe relaunch target is available.`,
             );
@@ -3914,11 +3991,42 @@ export async function runLauncherCli(argv) {
               detail: "Queued for retry",
             });
           }
+          writeWaveRelaunchPlan(lanePaths, wave.wave, {
+            wave: wave.wave,
+            attempt: attempt + 1,
+            phase: derivedState?.ledger?.phase || null,
+            selectedAgentIds: runsToLaunch.map((run) => run.agent.agentId),
+            reasonBuckets: relaunchReasonBuckets(runsToLaunch, failures, derivedState),
+            executorStates: Object.fromEntries(
+              runsToLaunch.map((run) => [run.agent.agentId, run.agent.executorResolved || null]),
+            ),
+            fallbackHistory: Object.fromEntries(
+              runsToLaunch.map((run) => [
+                run.agent.agentId,
+                run.agent.executorResolved?.executorHistory || [],
+              ]),
+            ),
+            createdAt: toIsoTimestamp(),
+          });
           flushDashboards();
           attempt += 1;
         }
 
-        const runState = markWaveCompleted(options.runStatePath, wave.wave);
+        clearWaveRelaunchPlan(lanePaths, wave.wave);
+        const runState = markWaveCompleted(options.runStatePath, wave.wave, {
+          source: "live-launcher",
+          reasonCode: "wave-complete",
+          detail: `Wave ${wave.wave} completed after ${dashboardState?.attempt || 1} attempt(s).`,
+          evidence: buildRunStateEvidence({
+            wave,
+            agentRuns,
+            coordinationLogPath: derivedState.coordinationLogPath,
+            assignmentsPath: waveAssignmentsPath(lanePaths, wave.wave),
+            dependencySnapshotPath: waveDependencySnapshotPath(lanePaths, wave.wave),
+            gateSnapshot: completionGateSnapshot,
+            traceDir: completionTraceDir,
+          }),
+        });
         console.log(
           `[state] completed waves (${path.relative(REPO_ROOT, options.runStatePath)}): ${runState.completedWaves.join(", ") || "none"}`,
         );

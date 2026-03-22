@@ -2,6 +2,8 @@
 
 The planner foundation is the first structured authoring layer on top of the existing wave runtime.
 
+If you want the full author-to-launch workflow, start with [author-and-run-waves.md](./author-and-run-waves.md). This page stays focused on planner-specific behavior.
+
 It reduces repeated setup questions, stores project defaults, and generates wave specs plus markdown that already fit the launcher.
 
 ## What Ships Today
@@ -103,6 +105,8 @@ So planner structure and skill resolution already reinforce each other.
 5. Run `pnpm exec wave launch --lane <lane> --start-wave <n> --end-wave <n> --dry-run --no-dashboard`.
 6. Only launch live once the dry-run artifacts look correct.
 
+If you want concrete authored examples after the planner baseline, see [docs/reference/sample-waves.md](../reference/sample-waves.md).
+
 ## Best Practices
 
 - Treat the generated draft as a strong starting point, not untouchable output.
@@ -111,3 +115,4 @@ So planner structure and skill resolution already reinforce each other.
 - Add explicit `### Skills` only when the lane, role, runtime, and deploy-kind defaults are not enough.
 - Use the component matrix as a planning contract, not just a reporting surface.
 - Prefer updating the project profile when the same answers recur across waves.
+- Use [docs/reference/sample-waves.md](../reference/sample-waves.md) when you want examples of denser human-authored waves that combine multiple modern surfaces such as `cont-EVAL`, delegated benchmark families, or proof-first live validation.

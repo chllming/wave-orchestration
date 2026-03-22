@@ -489,6 +489,9 @@ export function compileSharedSummary({
           `- Integration proof gaps: ${(integrationSummary.proofGaps || []).length}`,
           `- Integration deploy risks: ${(integrationSummary.deployRisks || []).length}`,
           `- Integration doc gaps: ${(integrationSummary.docGaps || []).length}`,
+          `- Security review: ${integrationSummary.securityState || "not-applicable"}`,
+          `- Security findings: ${(integrationSummary.securityFindings || []).length}`,
+          `- Security approvals: ${(integrationSummary.securityApprovals || []).length}`,
         ]
       : []),
     ...(ledger ? [`- Ledger phase: ${ledger.phase || "n/a"}`] : []),
@@ -544,6 +547,10 @@ export function compileSharedSummary({
           ...renderIntegrationItems("## Proof gaps", integrationSummary.proofGaps),
           "",
           ...renderIntegrationItems("## Deploy risks", integrationSummary.deployRisks),
+          "",
+          ...renderIntegrationItems("## Security findings", integrationSummary.securityFindings),
+          "",
+          ...renderIntegrationItems("## Security approvals", integrationSummary.securityApprovals),
           "",
           ...renderIntegrationItems("## Documentation gaps", integrationSummary.docGaps),
         ]
@@ -695,6 +702,9 @@ export function compileAgentInbox({
           `- Proof gaps: ${(integrationSummary.proofGaps || []).length}`,
           `- Deploy risks: ${(integrationSummary.deployRisks || []).length}`,
           `- Documentation gaps: ${(integrationSummary.docGaps || []).length}`,
+          `- Security review: ${integrationSummary.securityState || "not-applicable"}`,
+          `- Security findings: ${(integrationSummary.securityFindings || []).length}`,
+          `- Security approvals: ${(integrationSummary.securityApprovals || []).length}`,
           ...renderIntegrationItems(
             "- Changed interfaces",
             integrationSummary.changedInterfaces,
@@ -709,6 +719,12 @@ export function compileAgentInbox({
             maxItems: 3,
           }),
           ...renderIntegrationItems("- Deploy risks", integrationSummary.deployRisks, {
+            maxItems: 3,
+          }),
+          ...renderIntegrationItems("- Security findings", integrationSummary.securityFindings, {
+            maxItems: 3,
+          }),
+          ...renderIntegrationItems("- Security approvals", integrationSummary.securityApprovals, {
             maxItems: 3,
           }),
           ...renderIntegrationItems("- Documentation gaps", integrationSummary.docGaps, {
@@ -782,7 +798,8 @@ export function buildSeedCoordinationRecords({
   agents,
   componentPromotions = [],
   sharedPlanDocs = [],
-  evaluatorAgentId = "A0",
+  contQaAgentId = "A0",
+  contEvalAgentId = "E0",
   integrationAgentId = "A8",
   documentationAgentId = "A9",
   feedbackRequests = [],
@@ -790,7 +807,10 @@ export function buildSeedCoordinationRecords({
   const records = [];
   for (const agent of agents) {
     const targets =
-      agent.agentId === evaluatorAgentId || agent.agentId === documentationAgentId || agent.agentId === integrationAgentId
+      agent.agentId === contQaAgentId ||
+      agent.agentId === contEvalAgentId ||
+      agent.agentId === documentationAgentId ||
+      agent.agentId === integrationAgentId
         ? []
         : [`agent:${agent.agentId}`];
     records.push(
@@ -802,7 +822,9 @@ export function buildSeedCoordinationRecords({
         agentId: "launcher",
         targets,
         priority:
-          agent.agentId === evaluatorAgentId || agent.agentId === documentationAgentId
+          agent.agentId === contQaAgentId ||
+          agent.agentId === contEvalAgentId ||
+          agent.agentId === documentationAgentId
             ? "high"
             : "normal",
         summary: `Wave ${wave} assigned to ${agent.agentId}: ${agent.title}`,
@@ -853,7 +875,7 @@ export function buildSeedCoordinationRecords({
         agentId: "launcher",
         targets: [`agent:${integrationAgentId}`],
         priority: "high",
-        summary: `Synthesize wave ${wave} before documentation and evaluator closure`,
+        summary: `Synthesize wave ${wave} before documentation and cont-QA closure`,
         detail: "Integration steward must reconcile open claims, blockers, interfaces, and release risk.",
       }),
     );

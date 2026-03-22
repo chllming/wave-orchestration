@@ -77,22 +77,71 @@ export function sanitizeOrchestratorId(value) {
   return id.slice(0, 64);
 }
 
+export function sanitizeAdhocRunId(value) {
+  const id = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  if (!id) {
+    throw new Error("Ad-hoc run ID is required");
+  }
+  if (!/^[a-z0-9][a-z0-9._-]*$/.test(id)) {
+    throw new Error(`Invalid ad-hoc run ID: ${value}`);
+  }
+  return id;
+}
+
+export function buildWorkspaceTmuxToken(workspaceRoot = REPO_ROOT) {
+  const repoBase =
+    path
+      .basename(path.resolve(String(workspaceRoot || REPO_ROOT)))
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "")
+      .slice(0, 12) || "repo";
+  const repoHash = crypto
+    .createHash("sha1")
+    .update(path.resolve(String(workspaceRoot || REPO_ROOT)))
+    .digest("hex")
+    .slice(0, 8);
+  return `${repoBase}_${repoHash}`;
+}
+
 export function buildLanePaths(laneInput = DEFAULT_WAVE_LANE, options = {}) {
   const config = options.config || loadWaveConfig();
-  const laneProfile = resolveLaneProfile(config, laneInput || config.defaultLane);
+  const baseLaneProfile = resolveLaneProfile(config, laneInput || config.defaultLane);
+  const adhocRunId = options.adhocRunId ? sanitizeAdhocRunId(options.adhocRunId) : null;
+  const laneProfile = adhocRunId
+    ? {
+        ...baseLaneProfile,
+        validation: {
+          ...baseLaneProfile.validation,
+          requireComponentPromotionsFromWave: null,
+          requireAgentComponentsFromWave: null,
+        },
+      }
+    : baseLaneProfile;
   const lane = laneProfile.lane;
   const laneTmux = lane.replace(/-/g, "_");
+  const runKind = adhocRunId ? "adhoc" : "roadmap";
   const runVariant = String(options.runVariant || "")
     .trim()
     .toLowerCase();
   if (runVariant && runVariant !== "dry-run") {
     throw new Error(`Unsupported lane path variant: ${options.runVariant}`);
   }
+  const workspaceTmuxToken = buildWorkspaceTmuxToken(REPO_ROOT);
   const docsDir = path.join(REPO_ROOT, laneProfile.docsDir);
   const plansDir = path.join(REPO_ROOT, laneProfile.plansDir);
   const preferredWavesDir = path.join(REPO_ROOT, laneProfile.wavesDir);
   const legacyWavesDir = path.join(docsDir, "waves");
-  const baseStateDir = path.join(REPO_ROOT, laneProfile.paths.stateRoot, `${lane}-wave-launcher`);
+  const adhocRootDir = path.join(REPO_ROOT, ".wave", "adhoc");
+  const adhocRunDir = adhocRunId ? path.join(adhocRootDir, "runs", adhocRunId) : null;
+  const baseStateDir = adhocRunId
+    ? path.join(REPO_ROOT, laneProfile.paths.stateRoot, `${lane}-wave-launcher`, "adhoc", adhocRunId)
+    : path.join(REPO_ROOT, laneProfile.paths.stateRoot, `${lane}-wave-launcher`);
   const stateDir = runVariant === "dry-run" ? path.join(baseStateDir, "dry-run") : baseStateDir;
   const orchestratorStateDir =
     runVariant === "dry-run"
@@ -103,14 +152,24 @@ export function buildLanePaths(laneInput = DEFAULT_WAVE_LANE, options = {}) {
     config,
     laneProfile,
     lane,
+    runKind,
+    runId: adhocRunId,
     runVariant,
     docsDir,
     plansDir,
     wavesDir:
-      fs.existsSync(preferredWavesDir) || !fs.existsSync(legacyWavesDir)
+      adhocRunDir ||
+      (fs.existsSync(preferredWavesDir) || !fs.existsSync(legacyWavesDir)
         ? preferredWavesDir
-        : legacyWavesDir,
+        : legacyWavesDir),
     legacyWavesDir,
+    adhocRootDir,
+    adhocRunDir,
+    adhocIndexPath: path.join(adhocRootDir, "index.json"),
+    adhocRequestPath: adhocRunDir ? path.join(adhocRunDir, "request.json") : null,
+    adhocSpecPath: adhocRunDir ? path.join(adhocRunDir, "spec.json") : null,
+    adhocWavePath: adhocRunDir ? path.join(adhocRunDir, "wave-0.md") : null,
+    adhocResultPath: adhocRunDir ? path.join(adhocRunDir, "result.json") : null,
     promptsDir: path.join(stateDir, "prompts"),
     logsDir: path.join(stateDir, "logs"),
     statusDir: path.join(stateDir, "status"),
@@ -121,6 +180,7 @@ export function buildLanePaths(laneInput = DEFAULT_WAVE_LANE, options = {}) {
     inboxesDir: path.join(stateDir, "inboxes"),
     ledgerDir: path.join(stateDir, "ledger"),
     integrationDir: path.join(stateDir, "integration"),
+    securityDir: path.join(stateDir, "security"),
     dependencySnapshotsDir: path.join(stateDir, "dependencies"),
     docsQueueDir: path.join(stateDir, "docs-queue"),
     tracesDir: path.join(stateDir, "traces"),
@@ -130,6 +190,7 @@ export function buildLanePaths(laneInput = DEFAULT_WAVE_LANE, options = {}) {
     terminalsPath: path.join(REPO_ROOT, laneProfile.paths.terminalsPath),
     skillsDir: path.join(REPO_ROOT, laneProfile.skills?.dir || "skills"),
     context7BundleIndexPath: path.join(REPO_ROOT, laneProfile.paths.context7BundleIndexPath),
+    benchmarkCatalogPath: path.join(REPO_ROOT, laneProfile.paths.benchmarkCatalogPath),
     componentCutoverMatrixDocPath: path.join(
       REPO_ROOT,
       laneProfile.paths.componentCutoverMatrixDocPath,
@@ -138,15 +199,18 @@ export function buildLanePaths(laneInput = DEFAULT_WAVE_LANE, options = {}) {
       REPO_ROOT,
       laneProfile.paths.componentCutoverMatrixJsonPath,
     ),
-    sharedPlanDocs: laneProfile.sharedPlanDocs,
+    sharedPlanDocs: laneProfile.sharedPlanDocs || [],
     requiredPromptReferences: laneProfile.validation.requiredPromptReferences,
     rolePromptDir: laneProfile.roles.rolePromptDir,
-    evaluatorAgentId: laneProfile.roles.evaluatorAgentId,
+    contQaAgentId: laneProfile.roles.contQaAgentId,
+    contEvalAgentId: laneProfile.roles.contEvalAgentId,
     integrationAgentId: laneProfile.roles.integrationAgentId,
     documentationAgentId: laneProfile.roles.documentationAgentId,
-    evaluatorRolePromptPath: laneProfile.roles.evaluatorRolePromptPath,
+    contQaRolePromptPath: laneProfile.roles.contQaRolePromptPath,
+    contEvalRolePromptPath: laneProfile.roles.contEvalRolePromptPath,
     integrationRolePromptPath: laneProfile.roles.integrationRolePromptPath,
     documentationRolePromptPath: laneProfile.roles.documentationRolePromptPath,
+    securityRolePromptPath: laneProfile.roles.securityRolePromptPath,
     requireDocumentationStewardFromWave:
       laneProfile.validation.requireDocumentationStewardFromWave,
     requireContext7DeclarationsFromWave:
@@ -167,10 +231,10 @@ export function buildLanePaths(laneInput = DEFAULT_WAVE_LANE, options = {}) {
     terminalNamePrefix: `${lane}-wave`,
     dashboardTerminalNamePrefix: `${lane}-wave-dashboard`,
     globalDashboardTerminalName: `${lane}-wave-dashboard-global`,
-    tmuxSessionPrefix: `oc_${laneTmux}_wave`,
-    tmuxDashboardSessionPrefix: `oc_${laneTmux}_wave_dashboard`,
-    tmuxGlobalDashboardSessionPrefix: `oc_${laneTmux}_wave_dashboard_global`,
-    tmuxSocketName: `oc_${laneTmux}_waves`,
+    tmuxSessionPrefix: `oc_${laneTmux}_${workspaceTmuxToken}_wave`,
+    tmuxDashboardSessionPrefix: `oc_${laneTmux}_${workspaceTmuxToken}_wave_dashboard`,
+    tmuxGlobalDashboardSessionPrefix: `oc_${laneTmux}_${workspaceTmuxToken}_wave_dashboard_global`,
+    tmuxSocketName: `oc_${laneTmux}_${workspaceTmuxToken}_waves`,
     orchestratorStateDir,
     defaultOrchestratorBoardPath: path.join(
       orchestratorStateDir,

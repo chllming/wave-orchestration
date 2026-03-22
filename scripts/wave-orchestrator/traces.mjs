@@ -3,6 +3,11 @@ import path from "node:path";
 import { buildAgentExecutionSummary, validateImplementationSummary } from "./agent-state.mjs";
 import { openClarificationLinkedRequests, readCoordinationLog, serializeCoordinationState } from "./coordination-store.mjs";
 import {
+  isContEvalReportOnlyAgent,
+  isSecurityReviewAgent,
+  resolveSecurityReviewReportPath,
+} from "./role-helpers.mjs";
+import {
   REPO_ROOT,
   ensureDirectory,
   hashText,
@@ -12,6 +17,7 @@ import {
   writeJsonAtomic,
   writeTextAtomic,
 } from "./shared.mjs";
+import { summarizeResolvedSkills } from "./skills.mjs";
 
 export const TRACE_VERSION = 2;
 const LEGACY_TRACE_VERSION = 1;
@@ -109,7 +115,10 @@ function collectLaunchEventsFromMetadata(metadata) {
 }
 
 function collectEvaluatorStatusesFromMetadata(metadata) {
-  const statusCode = metadata?.gateSnapshot?.evaluatorGate?.statusCode || null;
+  const statusCode =
+    metadata?.gateSnapshot?.contQaGate?.statusCode ||
+    metadata?.gateSnapshot?.evaluatorGate?.statusCode ||
+    null;
   if (!statusCode) {
     return [];
   }
@@ -133,7 +142,8 @@ function collectLaunchEventsFromCurrent(agentRuns, attempt) {
 }
 
 function collectEvaluatorStatusesFromCurrent(gateSnapshot, attempt) {
-  const statusCode = gateSnapshot?.evaluatorGate?.statusCode || null;
+  const statusCode =
+    gateSnapshot?.contQaGate?.statusCode || gateSnapshot?.evaluatorGate?.statusCode || null;
   if (!statusCode) {
     return [];
   }
@@ -143,7 +153,7 @@ function collectEvaluatorStatusesFromCurrent(gateSnapshot, attempt) {
 function emptyHistorySnapshot() {
   return {
     launchEvents: [],
-    evaluatorStatuses: [],
+    contQaStatuses: [],
   };
 }
 
@@ -151,6 +161,11 @@ function normalizeHistorySnapshot(snapshot) {
   if (!snapshot || typeof snapshot !== "object") {
     return emptyHistorySnapshot();
   }
+  const rawContQaStatuses = Array.isArray(snapshot.contQaStatuses)
+    ? snapshot.contQaStatuses
+    : Array.isArray(snapshot.evaluatorStatuses)
+      ? snapshot.evaluatorStatuses
+      : [];
   return {
     launchEvents: dedupeByKey(
       Array.isArray(snapshot.launchEvents)
@@ -166,16 +181,14 @@ function normalizeHistorySnapshot(snapshot) {
         : [],
       (event) => `${event.attempt}:${event.agentId}:${event.executorId || ""}`,
     ).sort((a, b) => a.attempt - b.attempt || a.agentId.localeCompare(b.agentId)),
-    evaluatorStatuses: dedupeByKey(
-      Array.isArray(snapshot.evaluatorStatuses)
-        ? snapshot.evaluatorStatuses
-            .filter(Boolean)
-            .map((entry) => ({
-              attempt: Number.parseInt(String(entry.attempt), 10),
-              statusCode: String(entry.statusCode || "").trim() || null,
-            }))
-            .filter((entry) => Number.isFinite(entry.attempt) && entry.statusCode)
-        : [],
+    contQaStatuses: dedupeByKey(
+      rawContQaStatuses
+        .filter(Boolean)
+        .map((entry) => ({
+          attempt: Number.parseInt(String(entry.attempt), 10),
+          statusCode: String(entry.statusCode || "").trim() || null,
+        }))
+        .filter((entry) => Number.isFinite(entry.attempt) && entry.statusCode),
       (entry) => `${entry.attempt}`,
     ).sort((a, b) => a.attempt - b.attempt),
   };
@@ -196,7 +209,7 @@ function buildHistorySnapshotFromPriorMetadata(priorMetadata) {
   }
   return normalizeHistorySnapshot({
     launchEvents: (priorMetadata || []).flatMap((metadata) => collectLaunchEventsFromMetadata(metadata)),
-    evaluatorStatuses: (priorMetadata || []).flatMap((metadata) =>
+    contQaStatuses: (priorMetadata || []).flatMap((metadata) =>
       collectEvaluatorStatusesFromMetadata(metadata),
     ),
   });
@@ -207,7 +220,7 @@ function mergeHistorySnapshot(baseSnapshot, currentSnapshot) {
   const current = normalizeHistorySnapshot(currentSnapshot);
   return normalizeHistorySnapshot({
     launchEvents: [...base.launchEvents, ...current.launchEvents],
-    evaluatorStatuses: [...base.evaluatorStatuses, ...current.evaluatorStatuses],
+    contQaStatuses: [...base.contQaStatuses, ...current.contQaStatuses],
   });
 }
 
@@ -224,7 +237,7 @@ function buildHistorySnapshot({
   const priorSnapshot = buildHistorySnapshotFromPriorMetadata(priorMetadata);
   const currentSnapshot = {
     launchEvents: collectLaunchEventsFromCurrent(agentRuns, attempt),
-    evaluatorStatuses: collectEvaluatorStatusesFromCurrent(gateSnapshot, attempt),
+    contQaStatuses: collectEvaluatorStatusesFromCurrent(gateSnapshot, attempt),
   };
   return mergeHistorySnapshot(priorSnapshot, currentSnapshot);
 }
@@ -347,13 +360,16 @@ function computeAssignmentAndDependencyTimings(coordinationRecords, dependencySn
 }
 
 function computeProofCompletenessRatio(wave, summariesByAgentId) {
-  const evaluatorAgentId = wave?.evaluatorAgentId || "A0";
+  const contQaAgentId = wave?.contQaAgentId || wave?.evaluatorAgentId || "A0";
+  const contEvalAgentId = wave?.contEvalAgentId || "E0";
   const integrationAgentId = wave?.integrationAgentId || "A8";
   const documentationAgentId = wave?.documentationAgentId || "A9";
   const implementationAgents = (wave?.agents || []).filter((agent) =>
-    agent.agentId !== evaluatorAgentId &&
+    agent.agentId !== contQaAgentId &&
     agent.agentId !== integrationAgentId &&
-    agent.agentId !== documentationAgentId,
+    agent.agentId !== documentationAgentId &&
+    !isContEvalReportOnlyAgent(agent, { contEvalAgentId }) &&
+    !isSecurityReviewAgent(agent),
   );
   const contractAgents = implementationAgents.filter((agent) => agent.exitContract);
   if (contractAgents.length === 0) {
@@ -374,12 +390,13 @@ function countRuntimeFallbacks(agentRuns) {
   }, 0);
 }
 
-function evaluatorReversalFromHistory(historySnapshot, gateSnapshot) {
-  const currentStatus = gateSnapshot?.evaluatorGate?.statusCode || null;
+function contQaReversalFromHistory(historySnapshot, gateSnapshot) {
+  const currentStatus =
+    gateSnapshot?.contQaGate?.statusCode || gateSnapshot?.evaluatorGate?.statusCode || null;
   if (!currentStatus) {
     return false;
   }
-  const priorStatuses = normalizeHistorySnapshot(historySnapshot).evaluatorStatuses
+  const priorStatuses = normalizeHistorySnapshot(historySnapshot).contQaStatuses
     .map((entry) => entry.statusCode)
     .filter(Boolean)
     .filter((status) => status !== currentStatus);
@@ -479,7 +496,7 @@ export function buildQualityMetrics({
     helperTaskAssignmentCount: (capabilityAssignments || []).filter((assignment) => assignment.assignedAgentId).length,
     meanTimeToFirstAckMs: timings.meanTimeToFirstAckMs,
     meanTimeToBlockerResolutionMs: timings.meanTimeToBlockerResolutionMs,
-    evaluatorReversal: evaluatorReversalFromHistory(effectiveHistory, gateSnapshot),
+    contQaReversal: contQaReversalFromHistory(effectiveHistory, gateSnapshot),
     finalRecommendation: integrationSummary?.recommendation || "unknown",
   };
 }
@@ -488,7 +505,8 @@ function buildReplayContext({ lanePaths, wave }) {
   return {
     lane: lanePaths?.lane || null,
     roles: {
-      evaluatorAgentId: lanePaths?.evaluatorAgentId || wave.evaluatorAgentId || "A0",
+      contQaAgentId: lanePaths?.contQaAgentId || wave.contQaAgentId || wave.evaluatorAgentId || "A0",
+      contEvalAgentId: lanePaths?.contEvalAgentId || wave.contEvalAgentId || "E0",
       integrationAgentId: lanePaths?.integrationAgentId || wave.integrationAgentId || "A8",
       documentationAgentId: lanePaths?.documentationAgentId || wave.documentationAgentId || "A9",
     },
@@ -537,10 +555,13 @@ export function normalizeGateSnapshotForBundle(gateSnapshot, agentArtifacts) {
     "componentGate",
     "helperAssignmentBarrier",
     "dependencyBarrier",
+    "contEvalGate",
+    "securityGate",
     "integrationGate",
     "integrationBarrier",
     "documentationGate",
     "componentMatrixGate",
+    "contQaGate",
     "evaluatorGate",
     "infraGate",
   ]) {
@@ -605,9 +626,17 @@ function resolveRunSummaryPayload(wave, run) {
     return null;
   }
   const reportPath =
-    run.agent?.agentId === (wave?.evaluatorAgentId || "A0") && wave?.evaluatorReportPath
-      ? path.resolve(REPO_ROOT, wave.evaluatorReportPath)
-      : null;
+    run.agent?.agentId === (wave?.contQaAgentId || wave?.evaluatorAgentId || "A0") &&
+    (wave?.contQaReportPath || wave?.evaluatorReportPath)
+      ? path.resolve(REPO_ROOT, wave.contQaReportPath || wave.evaluatorReportPath)
+      : run.agent?.agentId === (wave?.contEvalAgentId || "E0") && wave?.contEvalReportPath
+        ? path.resolve(REPO_ROOT, wave.contEvalReportPath)
+        : isSecurityReviewAgent(run.agent)
+          ? (() => {
+              const securityReportPath = resolveSecurityReviewReportPath(run.agent);
+              return securityReportPath ? path.resolve(REPO_ROOT, securityReportPath) : null;
+            })()
+        : null;
   return buildAgentExecutionSummary({
     agent: run.agent,
     statusRecord,
@@ -673,27 +702,7 @@ function buildAgentMetadata(dir, run, attempt, artifacts) {
     },
     skills:
       run.lastSkillProjection ||
-      (run.agent?.skillsResolved
-        ? {
-            ids: run.agent.skillsResolved.ids || [],
-            role: run.agent.skillsResolved.role || null,
-            runtime: run.agent.skillsResolved.runtime || null,
-            deployKind: run.agent.skillsResolved.deployKind || null,
-            promptHash: run.agent.skillsResolved.promptHash || null,
-            bundles: Array.isArray(run.agent.skillsResolved.bundles)
-              ? run.agent.skillsResolved.bundles.map((bundle) => ({
-                  id: bundle.id,
-                  bundlePath: bundle.bundlePath,
-                  manifestPath: bundle.manifestPath,
-                  skillPath: bundle.skillPath,
-                  adapterPath: bundle.adapterPath || null,
-                  bundleHash: bundle.bundleHash || null,
-                  sourceFiles: Array.isArray(bundle.sourceFiles) ? bundle.sourceFiles.slice() : [],
-                }))
-              : [],
-            artifacts: run.agent.skillsResolved.artifacts || null,
-          }
-        : null),
+      (run.agent?.skillsResolved ? summarizeResolvedSkills(run.agent.skillsResolved) : null),
   };
 }
 
@@ -710,6 +719,7 @@ export function writeTraceBundle({
   docsQueue,
   capabilityAssignments = [],
   dependencySnapshot = null,
+  securitySummary = null,
   integrationSummary,
   integrationMarkdownPath,
   clarificationTriage,
@@ -760,6 +770,13 @@ export function writeTraceBundle({
     dir,
     path.join(dir, "dependency-snapshot.json"),
     dependencySnapshot || {},
+    "json",
+    true,
+  );
+  const securityArtifact = writeArtifactDescriptor(
+    dir,
+    path.join(dir, "security.json"),
+    securitySummary || {},
     "json",
     true,
   );
@@ -883,9 +900,13 @@ export function writeTraceBundle({
   const metadata = {
     traceVersion: TRACE_VERSION,
     replayMode: "hermetic",
+    runKind: lanePaths?.runKind || "roadmap",
+    runId: lanePaths?.runId || null,
     wave: wave.wave,
     lane: lanePaths?.lane || null,
     waveFile: wave.file,
+    requestPath: lanePaths?.adhocRequestPath ? relativePathOrNull(lanePaths.adhocRequestPath, REPO_ROOT) : null,
+    specPath: lanePaths?.adhocSpecPath ? relativePathOrNull(lanePaths.adhocSpecPath, REPO_ROOT) : null,
     waveFileHash: fileHashOrNull(path.resolve(REPO_ROOT, wave.file || "")),
     attempt,
     cumulativeAttemptCount: attempt,
@@ -909,6 +930,7 @@ export function writeTraceBundle({
       docsQueue: docsQueueArtifact,
       capabilityAssignments: capabilityAssignmentsArtifact,
       dependencySnapshot: dependencySnapshotArtifact,
+      security: securityArtifact,
       integration: integrationArtifact,
       integrationMarkdown: integrationMarkdownArtifact,
       componentMatrix: componentMatrixArtifact,
@@ -949,6 +971,7 @@ export function loadTraceBundle(dir) {
     docsQueue: readJsonOrNull(path.join(dir, "docs-queue.json")),
     capabilityAssignments: readJsonOrNull(path.join(dir, "capability-assignments.json")),
     dependencySnapshot: readJsonOrNull(path.join(dir, "dependency-snapshot.json")),
+    securitySummary: readJsonOrNull(path.join(dir, "security.json")),
     integrationSummary: readJsonOrNull(path.join(dir, "integration.json")),
     quality: readJsonOrNull(path.join(dir, "quality.json")),
     storedOutcome: readJsonOrNull(path.join(dir, "outcome.json")),

@@ -19,13 +19,16 @@ export const STARTER_TEMPLATE_PATHS = [
   "wave.config.json",
   "docs/README.md",
   "docs/agents/wave-documentation-role.md",
-  "docs/agents/wave-evaluator-role.md",
+  "docs/agents/wave-cont-qa-role.md",
+  "docs/agents/wave-cont-eval-role.md",
   "docs/agents/wave-integration-role.md",
+  "docs/agents/wave-security-role.md",
   "docs/concepts/context7-vs-skills.md",
   "docs/concepts/operating-modes.md",
   "docs/concepts/runtime-agnostic-orchestration.md",
   "docs/concepts/what-is-a-wave.md",
   "docs/context7/bundles.json",
+  "docs/evals/benchmark-catalog.json",
   "docs/guides/planner.md",
   "docs/guides/terminal-surfaces.md",
   "docs/plans/component-cutover-matrix.json",
@@ -53,6 +56,17 @@ const REQUIRED_GITIGNORE_ENTRIES = [
   "docs/research/papers/",
   "docs/research/articles/",
 ];
+
+function collectDeclaredDeployKinds(waves = []) {
+  return Array.from(
+    new Set(
+      (Array.isArray(waves) ? waves : [])
+        .flatMap((wave) => wave?.deployEnvironments || [])
+        .map((environment) => String(environment?.kind || "").trim().toLowerCase())
+        .filter(Boolean),
+    ),
+  ).sort();
+}
 
 function packageMetadata() {
   const payload = readJsonOrNull(PACKAGE_METADATA_PATH);
@@ -265,9 +279,11 @@ export function runDoctor() {
         errors.push(`Missing shared plan doc: ${docPath}`);
       }
       for (const requiredPath of [
-        lanePaths.evaluatorRolePromptPath,
+        lanePaths.contQaRolePromptPath,
+        lanePaths.contEvalRolePromptPath,
         lanePaths.integrationRolePromptPath,
         lanePaths.documentationRolePromptPath,
+        lanePaths.benchmarkCatalogPath.replace(`${REPO_ROOT}${path.sep}`, ""),
         lanePaths.context7BundleIndexPath.replace(`${REPO_ROOT}${path.sep}`, ""),
       ]) {
         const relPath = path.isAbsolute(requiredPath)
@@ -277,13 +293,10 @@ export function runDoctor() {
           errors.push(`Missing required Wave file: ${relPath}`);
         }
       }
-      const skillValidation = validateLaneSkillConfiguration(lanePaths.laneProfile);
-      if (!skillValidation.ok) {
-        errors.push(...skillValidation.errors);
-      }
+      let parsedWaves = [];
       if (fs.existsSync(lanePaths.wavesDir)) {
         const context7BundleIndex = loadContext7BundleIndex(lanePaths.context7BundleIndexPath);
-        parseWaveFiles(lanePaths.wavesDir, { laneProfile: lanePaths.laneProfile })
+        parsedWaves = parseWaveFiles(lanePaths.wavesDir, { laneProfile: lanePaths.laneProfile })
           .map((wave) =>
             applyExecutorSelectionsToWave(wave, {
               laneProfile: lanePaths.laneProfile,
@@ -296,9 +309,19 @@ export function runDoctor() {
               lane: lanePaths.lane,
               bundleIndex: context7BundleIndex,
             }),
-          )
-          .forEach((wave) => validateWaveDefinition(wave, { laneProfile: lanePaths.laneProfile }));
+          );
+        const skillValidation = validateLaneSkillConfiguration(lanePaths.laneProfile, {
+          allowedDeployKinds: collectDeclaredDeployKinds(parsedWaves),
+        });
+        if (!skillValidation.ok) {
+          errors.push(...skillValidation.errors);
+        }
+        parsedWaves.forEach((wave) => validateWaveDefinition(wave, { laneProfile: lanePaths.laneProfile }));
       } else {
+        const skillValidation = validateLaneSkillConfiguration(lanePaths.laneProfile);
+        if (!skillValidation.ok) {
+          errors.push(...skillValidation.errors);
+        }
         warnings.push(`No waves directory found at ${path.relative(REPO_ROOT, lanePaths.wavesDir)}.`);
       }
     } catch (error) {

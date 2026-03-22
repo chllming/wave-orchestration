@@ -4,10 +4,13 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   buildAgentExecutionSummary,
+  validateContEvalSummary,
   validateDocumentationClosureSummary,
-  validateEvaluatorSummary,
+  validateContQaSummary,
   validateImplementationSummary,
+  validateSecuritySummary,
 } from "../../scripts/wave-orchestrator/agent-state.mjs";
+import { REPO_ROOT } from "../../scripts/wave-orchestrator/shared.mjs";
 
 const tempDirs = [];
 
@@ -19,6 +22,13 @@ afterEach(() => {
 
 function makeTempDir() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wave-agent-state-"));
+  tempDirs.push(dir);
+  return dir;
+}
+
+function makeRepoTempDir() {
+  const dir = path.join(REPO_ROOT, ".tmp", `wave-agent-state-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+  fs.mkdirSync(dir, { recursive: true });
   tempDirs.push(dir);
   return dir;
 }
@@ -88,7 +98,9 @@ describe("buildAgentExecutionSummary", () => {
       docs: "pass",
       detail: "wrapped-gate",
     });
-    expect(summary.deliverables).toEqual([{ path: "README.md", exists: true }]);
+    expect(summary.deliverables).toEqual([
+      expect.objectContaining({ path: "README.md", exists: true }),
+    ]);
   });
 
   it("ignores fenced example markers that are mixed with prose", () => {
@@ -120,6 +132,90 @@ describe("buildAgentExecutionSummary", () => {
 
     expect(summary.proof).toBeNull();
     expect(summary.docDelta).toBeNull();
+  });
+
+  it("parses cont-EVAL target_ids and benchmark_ids from the final eval marker", () => {
+    const dir = makeTempDir();
+    const logPath = path.join(dir, "e0.log");
+    fs.writeFileSync(
+      logPath,
+      "[wave-eval] state=satisfied targets=2 benchmarks=2 regressions=0 target_ids=response-quality,startup-latency benchmark_ids=golden-response-smoke,http-latency-smoke detail=all-good\n",
+      "utf8",
+    );
+
+    const summary = buildAgentExecutionSummary({
+      agent: { agentId: "E0" },
+      statusRecord: { code: 0, promptHash: "hash" },
+      logPath,
+    });
+
+    expect(summary.eval).toMatchObject({
+      state: "satisfied",
+      targets: 2,
+      benchmarks: 2,
+      regressions: 0,
+      targetIds: ["response-quality", "startup-latency"],
+      benchmarkIds: ["golden-response-smoke", "http-latency-smoke"],
+      detail: "all-good",
+    });
+  });
+
+  it("records proof artifact presence for implementation agents", () => {
+    const repoDir = makeRepoTempDir();
+    const artifactPath = path
+      .relative(REPO_ROOT, path.join(repoDir, "live-proof.json"))
+      .replaceAll("\\", "/");
+    fs.writeFileSync(path.join(REPO_ROOT, artifactPath), "{\"ok\":true}\n", "utf8");
+    const logPath = path.join(repoDir, "a6.log");
+    fs.writeFileSync(
+      logPath,
+      "[wave-proof] completion=live durability=durable proof=live state=met detail=live-proof\n[wave-doc-delta] state=none detail=no-docs\n",
+      "utf8",
+    );
+
+    const summary = buildAgentExecutionSummary({
+      agent: {
+        agentId: "A6",
+        proofArtifacts: [
+          { path: artifactPath, kind: "live-status", requiredFor: ["pilot-live"] },
+        ],
+      },
+      statusRecord: { code: 0, promptHash: "hash" },
+      logPath,
+    });
+
+    expect(summary.proofArtifacts).toEqual([
+      expect.objectContaining({
+        path: artifactPath,
+        kind: "live-status",
+        requiredFor: ["pilot-live"],
+        exists: true,
+      }),
+    ]);
+  });
+
+  it("parses the final wave-security marker", () => {
+    const dir = makeTempDir();
+    const logPath = path.join(dir, "a7.log");
+    fs.writeFileSync(
+      logPath,
+      "[wave-security] state=concerns findings=2 approvals=1 detail=needs-human-review\n",
+      "utf8",
+    );
+
+    const summary = buildAgentExecutionSummary({
+      agent: { agentId: "A7" },
+      statusRecord: { code: 0, promptHash: "hash" },
+      logPath,
+      reportPath: path.join(dir, "wave-0-security-review.md"),
+    });
+
+    expect(summary.security).toMatchObject({
+      state: "concerns",
+      findings: 2,
+      approvals: 1,
+      detail: "needs-human-review",
+    });
   });
 });
 
@@ -255,6 +351,63 @@ describe("validateImplementationSummary", () => {
     });
   });
 
+  it("rejects missing required proof artifacts for proof-centric owners", () => {
+    expect(
+      validateImplementationSummary(
+        {
+          agentId: "A6",
+          exitContract: {
+            completion: "live",
+            durability: "durable",
+            proof: "live",
+            docImpact: "none",
+          },
+          components: ["learning-memory-action-plane"],
+          componentTargets: {
+            "learning-memory-action-plane": "pilot-live",
+          },
+          proofArtifacts: [
+            {
+              path: ".tmp/wave-8-learning-proof/learning-plane-after-restart.json",
+              kind: "restart-check",
+              requiredFor: ["pilot-live"],
+            },
+          ],
+        },
+        {
+          proof: {
+            completion: "live",
+            durability: "durable",
+            proof: "live",
+            state: "met",
+          },
+          docDelta: {
+            state: "none",
+            paths: [],
+          },
+          components: [
+            {
+              componentId: "learning-memory-action-plane",
+              level: "pilot-live",
+              state: "met",
+            },
+          ],
+          proofArtifacts: [
+            {
+              path: ".tmp/wave-8-learning-proof/learning-plane-after-restart.json",
+              kind: "restart-check",
+              requiredFor: ["pilot-live"],
+              exists: false,
+            },
+          ],
+        },
+      ),
+    ).toMatchObject({
+      ok: false,
+      statusCode: "missing-proof-artifact",
+    });
+  });
+
   it("rejects example markers that only appear inside a prose fence", () => {
     const dir = makeTempDir();
     const logPath = path.join(dir, "a1.log");
@@ -301,6 +454,86 @@ describe("validateImplementationSummary", () => {
   });
 });
 
+describe("validateSecuritySummary", () => {
+  it("accepts clear security output when the report exists", () => {
+    const reportDir = makeRepoTempDir();
+    const reportPath = path.join(reportDir, "wave-0-security-review.md");
+    fs.writeFileSync(reportPath, "# Security Review\n", "utf8");
+
+    expect(
+      validateSecuritySummary(
+        {
+          agentId: "A7",
+        },
+        {
+          reportPath: path.relative(REPO_ROOT, reportPath),
+          security: {
+            state: "clear",
+            findings: 0,
+            approvals: 0,
+            detail: "clear",
+          },
+        },
+      ),
+    ).toMatchObject({
+      ok: true,
+      statusCode: "pass",
+    });
+  });
+
+  it("treats blocked security output as a hard failure", () => {
+    const reportDir = makeRepoTempDir();
+    const reportPath = path.join(reportDir, "wave-0-security-review.md");
+    fs.writeFileSync(reportPath, "# Security Review\n", "utf8");
+
+    expect(
+      validateSecuritySummary(
+        {
+          agentId: "A7",
+        },
+        {
+          reportPath: path.relative(REPO_ROOT, reportPath),
+          security: {
+            state: "blocked",
+            findings: 1,
+            approvals: 0,
+            detail: "untrusted-shell-execution",
+          },
+        },
+      ),
+    ).toMatchObject({
+      ok: false,
+      statusCode: "security-blocked",
+    });
+  });
+
+  it("rejects clear security output when findings remain open", () => {
+    const reportDir = makeRepoTempDir();
+    const reportPath = path.join(reportDir, "wave-0-security-review.md");
+    fs.writeFileSync(reportPath, "# Security Review\n", "utf8");
+
+    expect(
+      validateSecuritySummary(
+        {
+          agentId: "A7",
+        },
+        {
+          reportPath: path.relative(REPO_ROOT, reportPath),
+          security: {
+            state: "clear",
+            findings: 1,
+            approvals: 0,
+            detail: "incorrectly-cleared",
+          },
+        },
+      ),
+    ).toMatchObject({
+      ok: false,
+      statusCode: "invalid-security-clear-state",
+    });
+  });
+});
+
 describe("validateDocumentationClosureSummary", () => {
   it("rejects open shared-plan deltas", () => {
     expect(
@@ -335,10 +568,176 @@ describe("validateDocumentationClosureSummary", () => {
   });
 });
 
-describe("validateEvaluatorSummary", () => {
+describe("validateContEvalSummary", () => {
+  it("rejects cont-EVAL summaries that still need more work", () => {
+    expect(
+      validateContEvalSummary(
+        { agentId: "E0" },
+        {
+          eval: {
+            state: "needs-more-work",
+            detail: "Golden response smoke still drifts from target output.",
+          },
+        },
+      ),
+    ).toMatchObject({
+      ok: false,
+      statusCode: "cont-eval-needs-more-work",
+    });
+  });
+
+  it("requires the owned cont-EVAL report when the summary references one", () => {
+    expect(
+      validateContEvalSummary(
+        { agentId: "E0" },
+        {
+          eval: {
+            state: "satisfied",
+            detail: "Targets satisfied.",
+          },
+          reportPath: "docs/plans/waves/reviews/missing-cont-eval.md",
+        },
+      ),
+    ).toMatchObject({
+      ok: false,
+      statusCode: "missing-cont-eval-report",
+    });
+  });
+
+  it("rejects live cont-EVAL summaries that do not enumerate the declared target ids", () => {
+    const repoDir = makeRepoTempDir();
+    const reportRelPath = path.relative(REPO_ROOT, path.join(repoDir, "wave-4-cont-eval.md")).replaceAll(path.sep, "/");
+    fs.writeFileSync(path.join(REPO_ROOT, reportRelPath), "# cont-EVAL\n", "utf8");
+
+    expect(
+      validateContEvalSummary(
+        { agentId: "E0" },
+        {
+          eval: {
+            state: "satisfied",
+            targets: 1,
+            benchmarks: 1,
+            regressions: 0,
+            targetIds: [],
+            benchmarkIds: ["golden-response-smoke"],
+          },
+          reportPath: reportRelPath,
+        },
+        {
+          mode: "live",
+          evalTargets: [
+            {
+              id: "response-quality",
+              selection: "delegated",
+              benchmarkFamily: "service-output",
+              benchmarks: [],
+              objective: "Tune response quality",
+              threshold: "Golden response smoke passes",
+            },
+          ],
+          benchmarkCatalogPath: "docs/evals/benchmark-catalog.json",
+        },
+      ),
+    ).toMatchObject({
+      ok: false,
+      statusCode: "missing-cont-eval-target-ids",
+    });
+  });
+
+  it("rejects live cont-EVAL summaries that still report regressions", () => {
+    const repoDir = makeRepoTempDir();
+    const reportRelPath = path.relative(REPO_ROOT, path.join(repoDir, "wave-4-cont-eval.md")).replaceAll(path.sep, "/");
+    fs.writeFileSync(path.join(REPO_ROOT, reportRelPath), "# cont-EVAL\n", "utf8");
+
+    expect(
+      validateContEvalSummary(
+        { agentId: "E0" },
+        {
+          eval: {
+            state: "satisfied",
+            targets: 1,
+            benchmarks: 1,
+            regressions: 1,
+            targetIds: ["response-quality"],
+            benchmarkIds: ["golden-response-smoke"],
+          },
+          reportPath: reportRelPath,
+        },
+        {
+          mode: "live",
+          evalTargets: [
+            {
+              id: "response-quality",
+              selection: "delegated",
+              benchmarkFamily: "service-output",
+              benchmarks: [],
+              objective: "Tune response quality",
+              threshold: "Golden response smoke passes",
+            },
+          ],
+          benchmarkCatalogPath: "docs/evals/benchmark-catalog.json",
+        },
+      ),
+    ).toMatchObject({
+      ok: false,
+      statusCode: "cont-eval-regressions",
+    });
+  });
+
+  it("accepts live cont-EVAL summaries only when target and benchmark ids match the contract", () => {
+    const repoDir = makeRepoTempDir();
+    const reportRelPath = path.relative(REPO_ROOT, path.join(repoDir, "wave-4-cont-eval.md")).replaceAll(path.sep, "/");
+    fs.writeFileSync(path.join(REPO_ROOT, reportRelPath), "# cont-EVAL\n", "utf8");
+
+    expect(
+      validateContEvalSummary(
+        { agentId: "E0" },
+        {
+          eval: {
+            state: "satisfied",
+            targets: 2,
+            benchmarks: 2,
+            regressions: 0,
+            targetIds: ["response-quality", "startup-latency"],
+            benchmarkIds: ["golden-response-smoke", "http-latency-smoke"],
+            detail: "Targets satisfied.",
+          },
+          reportPath: reportRelPath,
+        },
+        {
+          mode: "live",
+          evalTargets: [
+            {
+              id: "response-quality",
+              selection: "delegated",
+              benchmarkFamily: "service-output",
+              benchmarks: [],
+              objective: "Tune response quality",
+              threshold: "Golden response smoke passes",
+            },
+            {
+              id: "startup-latency",
+              selection: "pinned",
+              benchmarkFamily: "latency",
+              benchmarks: ["http-latency-smoke"],
+              objective: "Hold request latency",
+              threshold: "Latency remains acceptable",
+            },
+          ],
+          benchmarkCatalogPath: "docs/evals/benchmark-catalog.json",
+        },
+      ),
+    ).toMatchObject({
+      ok: true,
+      statusCode: "pass",
+    });
+  });
+});
+
+describe("validateContQaSummary", () => {
   it("rejects final gates that still report concerns", () => {
     expect(
-      validateEvaluatorSummary(
+      validateContQaSummary(
         { agentId: "A0" },
         {
           verdict: { verdict: "pass", detail: "stale report text" },
@@ -354,6 +753,28 @@ describe("validateEvaluatorSummary", () => {
     ).toMatchObject({
       ok: false,
       statusCode: "gate-integration-concerns",
+    });
+  });
+
+  it("requires the owned cont-QA report for live validation", () => {
+    expect(
+      validateContQaSummary(
+        { agentId: "A0" },
+        {
+          verdict: { verdict: "pass", detail: "ready" },
+          gate: {
+            architecture: "pass",
+            integration: "pass",
+            durability: "pass",
+            live: "pass",
+            docs: "pass",
+          },
+        },
+        { mode: "live" },
+      ),
+    ).toMatchObject({
+      ok: false,
+      statusCode: "missing-cont-qa-report",
     });
   });
 });

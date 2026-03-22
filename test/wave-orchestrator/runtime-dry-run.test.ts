@@ -57,11 +57,11 @@ describe("runtime dry-run harness", () => {
 - bundle: node-typescript
 - query: "Node.js and TypeScript basics for orchestrator maintenance"
 
-## Agent A0: Running Evaluator
+## Agent A0: cont-QA
 
 ### Role prompts
 
-- docs/agents/wave-evaluator-role.md
+- docs/agents/wave-cont-qa-role.md
 
 ### Executor
 
@@ -88,7 +88,7 @@ Required context before coding:
 - Read docs/plans/master-plan.md, docs/plans/current-state.md, and docs/plans/migration.md.
 
 File ownership (only touch these paths):
-- docs/plans/waves/reviews/wave-0-evaluator.md
+- docs/plans/waves/reviews/wave-0-cont-qa.md
 \`\`\`
 
 ## Agent A8: Integration Steward
@@ -116,7 +116,7 @@ File ownership (only touch these paths):
 ### Prompt
 
 \`\`\`text
-Synthesize the wave before documentation and evaluator closure.
+Synthesize the wave before documentation and cont-qa closure.
 
 Required context before coding:
 - Read docs/reference/repository-guidance.md.
@@ -217,6 +217,13 @@ File ownership (only touch these paths):
     expect(dryRunResult.status).toBe(0);
 
     const dryRunRoot = path.join(repoDir, ".tmp", "main-wave-launcher", "dry-run");
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(dryRunRoot, "waves.manifest.json"), "utf8"),
+    );
+    expect(manifest).toMatchObject({
+      schemaVersion: 1,
+      kind: "wave-manifest",
+    });
     expect(fs.existsSync(path.join(dryRunRoot, "prompts", "wave-0-0-a0.prompt.md"))).toBe(true);
     expect(fs.existsSync(path.join(dryRunRoot, "prompts", "wave-0-0-a8.prompt.md"))).toBe(true);
     expect(fs.existsSync(path.join(dryRunRoot, "prompts", "wave-0-0-a9.prompt.md"))).toBe(true);
@@ -233,6 +240,9 @@ File ownership (only touch these paths):
     expect(codexPreview.skills.ids).toContain("runtime-codex");
     expect(
       fs.existsSync(path.join(dryRunRoot, "executors", "wave-0", "0-a0", "skills.resolved.md")),
+    ).toBe(true);
+    expect(
+      fs.existsSync(path.join(dryRunRoot, "executors", "wave-0", "0-a0", "skills.expanded.md")),
     ).toBe(true);
 
     const claudePreview = JSON.parse(
@@ -274,7 +284,13 @@ File ownership (only touch these paths):
     expect(opencodePreview.executorId).toBe("opencode");
     expect(opencodePreview.skills.ids).toContain("runtime-opencode");
     expect(opencodePreview.invocationLines.join("\n")).toContain("--file 'docs/runtime.md'");
+    expect(opencodePreview.invocationLines.join("\n")).toContain(
+      "skills/role-documentation/skill.json",
+    );
     expect(opencodePreview.invocationLines.join("\n")).toContain("skills/role-documentation/SKILL.md");
+    expect(opencodePreview.invocationLines.join("\n")).toContain(
+      "skills/wave-core/references/marker-syntax.md",
+    );
     const opencodeConfig = JSON.parse(
       fs.readFileSync(
         path.join(dryRunRoot, "executors", "wave-0", "0-a9", "opencode.json"),

@@ -1,6 +1,10 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { REPO_ROOT, buildLanePaths } from "../../scripts/wave-orchestrator/shared.mjs";
+import {
+  REPO_ROOT,
+  buildLanePaths,
+  buildWorkspaceTmuxToken,
+} from "../../scripts/wave-orchestrator/shared.mjs";
 
 describe("buildLanePaths", () => {
   it("isolates dry-run artifacts under a dry-run state root", () => {
@@ -23,5 +27,14 @@ describe("buildLanePaths", () => {
       path.join(dryRun.stateDir, "orchestrator", "feedback", "requests"),
     );
     expect(dryRun.docsDir).toBe(path.join(REPO_ROOT, "docs"));
+  });
+
+  it("names tmux resources uniquely per workspace root", () => {
+    const tokenA = buildWorkspaceTmuxToken("/tmp/wave-test-a");
+    const tokenB = buildWorkspaceTmuxToken("/tmp/wave-test-b");
+
+    expect(tokenA).not.toBe(tokenB);
+    expect(tokenA).toMatch(/^[a-z0-9_]+$/);
+    expect(tokenB).toMatch(/^[a-z0-9_]+$/);
   });
 });

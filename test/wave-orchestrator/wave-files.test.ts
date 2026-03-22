@@ -5,20 +5,24 @@ import { hashText, REPO_ROOT } from "../../scripts/wave-orchestrator/shared.mjs"
 import { hashAgentPromptFingerprint } from "../../scripts/wave-orchestrator/context7.mjs";
 import {
   completedWavesFromStatusFiles,
+  markWaveCompleted,
   normalizeCompletedWaves,
   parseWaveContent,
   parseWaveFiles,
   readRunState,
   reconcileRunStateFromStatusFiles,
+  resolveAgentExecutor,
   requiredDocumentationStewardPathsForWave,
   SHARED_PLAN_DOC_PATHS,
   validateWaveComponentPromotions,
   validateWaveComponentMatrixCurrentLevels,
   validateWaveDefinition,
   validateWaveRuntimeMixAssignments,
+  WAVE_CONT_EVAL_ROLE_PROMPT_PATH,
   WAVE_DOCUMENTATION_ROLE_PROMPT_PATH,
-  WAVE_EVALUATOR_ROLE_PROMPT_PATH,
+  WAVE_CONT_QA_ROLE_PROMPT_PATH,
   WAVE_INTEGRATION_ROLE_PROMPT_PATH,
+  WAVE_SECURITY_ROLE_PROMPT_PATH,
 } from "../../scripts/wave-orchestrator/wave-files.mjs";
 
 const tempPaths = [];
@@ -82,13 +86,13 @@ Do the second thing.
     });
   });
 
-  it("extracts owned paths and evaluator report paths", () => {
+  it("extracts owned paths and cont-qa report paths", () => {
     const wave = parseWaveContent(
       `# Wave 0 - Sample
 
 **Commit message**: \`Docs: sample\`
 
-## Agent A0: Evaluator
+## Agent A0: cont-QA
 
 ### Prompt
 \`\`\`text
@@ -96,7 +100,7 @@ Read docs/code-guidance.md.
 Read docs/research/hardening-tech-stack.md.
 
 File ownership (only touch these paths):
-- docs/plans/waves/reviews/wave-0-evaluator.md
+- docs/plans/waves/reviews/wave-0-cont-qa.md
 \`\`\`
 
 ## Agent A1: Worker
@@ -114,10 +118,60 @@ File ownership (only touch these paths):
     );
 
     expect(wave.agents[0]?.ownedPaths).toEqual([
-      "docs/plans/waves/reviews/wave-0-evaluator.md",
+      "docs/plans/waves/reviews/wave-0-cont-qa.md",
     ]);
     expect(wave.agents[1]?.ownedPaths).toEqual(["go/contracts/types.go"]);
-    expect(wave.evaluatorReportPath).toBe("docs/plans/waves/reviews/wave-0-evaluator.md");
+    expect(wave.contQaReportPath).toBe("docs/plans/waves/reviews/wave-0-cont-qa.md");
+  });
+
+  it("extracts eval targets and the cont-EVAL report path", () => {
+    const wave = parseWaveContent(
+      `# Wave 4 - Output Tuning
+
+**Commit message**: \`Test: eval targets\`
+
+## Eval targets
+
+- id: response-quality | selection: delegated | benchmark-family: service-output | objective: Match the expected support response tone and facts | threshold: No material gap in the manual review sample
+- id: latency-guard | selection: pinned | benchmarks: http-latency-smoke,cold-start-smoke | objective: Preserve startup responsiveness while tuning output | threshold: No benchmark regresses beyond the accepted smoke threshold
+
+## Agent E0: cont-EVAL
+
+### Role prompts
+
+- ${WAVE_CONT_EVAL_ROLE_PROMPT_PATH}
+
+### Prompt
+\`\`\`text
+Read docs/reference/repository-guidance.md.
+Read docs/research/agent-context-sources.md.
+
+File ownership (only touch these paths):
+- docs/plans/waves/reviews/wave-4-cont-eval.md
+\`\`\`
+`,
+      path.join(REPO_ROOT, "docs/plans/waves/wave-4.md"),
+    );
+
+    expect(wave.contEvalReportPath).toBe("docs/plans/waves/reviews/wave-4-cont-eval.md");
+    expect(wave.evalTargets).toEqual([
+      {
+        id: "response-quality",
+        selection: "delegated",
+        benchmarkFamily: "service-output",
+        benchmarks: [],
+        objective: "Match the expected support response tone and facts",
+        threshold: "No material gap in the manual review sample",
+      },
+      {
+        id: "latency-guard",
+        selection: "pinned",
+        benchmarkFamily: null,
+        benchmarks: ["http-latency-smoke", "cold-start-smoke"],
+        objective: "Preserve startup responsiveness while tuning output",
+        threshold: "No benchmark regresses beyond the accepted smoke threshold",
+      },
+    ]);
   });
 
   it("extracts optional deliverables separately from file ownership", () => {
@@ -134,11 +188,11 @@ File ownership (only touch these paths):
 
 - bundle: none
 
-## Agent A0: Evaluator
+## Agent A0: cont-QA
 
 ### Role prompts
 
-- ${WAVE_EVALUATOR_ROLE_PROMPT_PATH}
+- ${WAVE_CONT_QA_ROLE_PROMPT_PATH}
 
 ### Context7
 
@@ -149,7 +203,7 @@ File ownership (only touch these paths):
 Read docs/reference/repository-guidance.md.
 
 File ownership (only touch these paths):
-- docs/plans/waves/reviews/wave-7-evaluator.md
+- docs/plans/waves/reviews/wave-7-cont-qa.md
 \`\`\`
 
 ## Agent A8: Integration
@@ -255,6 +309,48 @@ File ownership (only touch these paths):
     expect(wave.agents[0]?.skills).toEqual(["provider-github-release", "provider-aws"]);
   });
 
+  it("extracts proof artifacts from agent sections", () => {
+    const wave = parseWaveContent(
+      `# Wave 8 - Live Proof
+
+## Agent A6: Live Validation
+
+### Exit contract
+
+- completion: live
+- durability: durable
+- proof: live
+- doc-impact: none
+
+### Proof artifacts
+
+- path: .tmp/wave-8-learning-proof/learning-plane-before-restart.json | kind: live-status | required-for: pilot-live
+- path: .tmp/wave-8-learning-proof/learning-plane-after-restart.json | kind: restart-check | required-for: pilot-live
+
+### Prompt
+\`\`\`text
+File ownership (only touch these paths):
+- .tmp/wave-8-learning-proof/
+\`\`\`
+`,
+      path.join(REPO_ROOT, "docs/plans/waves/wave-8.md"),
+      { lane: "main" },
+    );
+
+    expect(wave.agents[0]?.proofArtifacts).toEqual([
+      {
+        path: ".tmp/wave-8-learning-proof/learning-plane-before-restart.json",
+        kind: "live-status",
+        requiredFor: ["pilot-live"],
+      },
+      {
+        path: ".tmp/wave-8-learning-proof/learning-plane-after-restart.json",
+        kind: "restart-check",
+        requiredFor: ["pilot-live"],
+      },
+    ]);
+  });
+
   it("accepts deliverables that exactly match an owned file path", () => {
     const wave = parseWaveContent(
       `# Wave 7 - Sample
@@ -353,24 +449,102 @@ File ownership (only touch these paths):
     ).toThrow(/must be a file path, not a directory path/);
   });
 
+  it("rejects proof artifacts that escape the agent's owned paths", () => {
+    expect(() =>
+      parseWaveContent(
+        `# Wave 8 - Live Proof
+
+## Agent A6: Live Validation
+
+### Exit contract
+
+- completion: live
+- durability: durable
+- proof: live
+- doc-impact: none
+
+### Proof artifacts
+
+- path: .tmp/wave-8-learning-proof/learning-plane-before-restart.json | kind: live-status | required-for: pilot-live
+
+### Prompt
+\`\`\`text
+File ownership (only touch these paths):
+- docs/
+\`\`\`
+`,
+        path.join(REPO_ROOT, "docs/plans/waves/wave-8.md"),
+        { lane: "main" },
+      ),
+    ).toThrow(/Proof artifact ".*" .* must stay within the agent's declared file ownership/);
+  });
+
+  it("defaults proof-centric agents to sticky retry policy", () => {
+    const resolved = resolveAgentExecutor(
+      {
+        agentId: "A6",
+        title: "Live Validation",
+        components: ["learning-memory-action-plane"],
+        componentTargets: {
+          "learning-memory-action-plane": "pilot-live",
+        },
+        exitContract: {
+          completion: "live",
+          durability: "durable",
+          proof: "live",
+          docImpact: "none",
+        },
+        proofArtifacts: [
+          {
+            path: ".tmp/wave-8-learning-proof/learning-plane-after-restart.json",
+            kind: "restart-check",
+            requiredFor: ["pilot-live"],
+          },
+        ],
+        executorConfig: {
+          id: "codex",
+        },
+      },
+      {
+        lane: "main",
+        wave: {
+          wave: 8,
+          componentPromotions: [
+            {
+              componentId: "learning-memory-action-plane",
+              targetLevel: "pilot-live",
+            },
+          ],
+        },
+      },
+    );
+
+    expect(resolved).toMatchObject({
+      id: "codex",
+      retryPolicy: "sticky",
+      allowFallbackOnRetry: false,
+      fallbacks: [],
+    });
+  });
+
   it("composes imported standing role prompts while keeping ownership local", () => {
     const overlayPrompt = [
       "Primary goal:",
       "- Keep the wave coherent.",
       "",
       "File ownership (only touch these paths):",
-      "- docs/plans/waves/reviews/wave-0-evaluator.md",
+      "- docs/plans/waves/reviews/wave-0-cont-qa.md",
     ].join("\n");
     const wave = parseWaveContent(
       `# Wave 0 - Sample
 
 **Commit message**: \`Docs: sample\`
 
-## Agent A0: Evaluator
+## Agent A0: cont-QA
 
 ### Role prompts
 
-- ${WAVE_EVALUATOR_ROLE_PROMPT_PATH}
+- ${WAVE_CONT_QA_ROLE_PROMPT_PATH}
 
 ### Prompt
 \`\`\`text
@@ -383,10 +557,10 @@ ${overlayPrompt}
     expect(wave.agents[0]).toMatchObject({
       agentId: "A0",
       promptOverlay: overlayPrompt,
-      rolePromptPaths: [WAVE_EVALUATOR_ROLE_PROMPT_PATH],
-      ownedPaths: ["docs/plans/waves/reviews/wave-0-evaluator.md"],
+      rolePromptPaths: [WAVE_CONT_QA_ROLE_PROMPT_PATH],
+      ownedPaths: ["docs/plans/waves/reviews/wave-0-cont-qa.md"],
     });
-    expect(wave.agents[0]?.prompt).toContain("You are the running evaluator for the current wave.");
+    expect(wave.agents[0]?.prompt).toContain("You are the cont-QA role for the current wave.");
     expect(wave.agents[0]?.prompt).toContain("Primary goal:");
     expect(wave.agents[0]?.prompt).toContain("exact shared-doc deltas");
   });
@@ -603,7 +777,7 @@ Do the first thing.
 ### Prompt
 \`\`\`text
 File ownership (only touch these paths):
-- docs/plans/waves/reviews/wave-1-evaluator.md
+- docs/plans/waves/reviews/wave-1-cont-qa.md
 \`\`\`
 `;
 
@@ -674,10 +848,10 @@ describe("validateWaveDefinition", () => {
               agentId: "A0",
               prompt: leapClawPrompt.replace(
                 "go/example/file.go",
-                "docs/plans/waves/reviews/wave-0-evaluator.md",
+                "docs/plans/waves/reviews/wave-0-cont-qa.md",
               ),
-              rolePromptPaths: [WAVE_EVALUATOR_ROLE_PROMPT_PATH],
-              ownedPaths: ["docs/plans/waves/reviews/wave-0-evaluator.md"],
+              rolePromptPaths: [WAVE_CONT_QA_ROLE_PROMPT_PATH],
+              ownedPaths: ["docs/plans/waves/reviews/wave-0-cont-qa.md"],
             },
             {
               agentId: "A8",
@@ -708,7 +882,258 @@ describe("validateWaveDefinition", () => {
     ).toMatchObject({ wave: 0 });
   });
 
-  it("rejects leap-claw waves without an evaluator", () => {
+  it("accepts a security reviewer without components or an exit contract", () => {
+    expect(
+      validateWaveDefinition(
+        {
+          wave: 0,
+          file: "docs/plans/waves/wave-0.md",
+          componentPromotions: starterComponentPromotions,
+          agents: [
+            {
+              agentId: "A0",
+              prompt: leapClawPrompt.replace(
+                "go/example/file.go",
+                "docs/plans/waves/reviews/wave-0-cont-qa.md",
+              ),
+              rolePromptPaths: [WAVE_CONT_QA_ROLE_PROMPT_PATH],
+              ownedPaths: ["docs/plans/waves/reviews/wave-0-cont-qa.md"],
+            },
+            {
+              agentId: "A8",
+              prompt: integrationStewardPrompt,
+              rolePromptPaths: [WAVE_INTEGRATION_ROLE_PROMPT_PATH],
+              ownedPaths: [
+                ".tmp/main-wave-launcher/integration/wave-0.json",
+                ".tmp/main-wave-launcher/integration/wave-0.md",
+              ],
+            },
+            {
+              agentId: "A9",
+              prompt: documentationStewardPrompt,
+              rolePromptPaths: [WAVE_DOCUMENTATION_ROLE_PROMPT_PATH],
+              ownedPaths: starterDocumentationPaths,
+            },
+            {
+              agentId: "A7",
+              title: "Security Engineer",
+              prompt: [
+                "Read docs/reference/repository-guidance.md.",
+                "Read docs/research/agent-context-sources.md.",
+                "",
+                "File ownership (only touch these paths):",
+                "- .tmp/main-wave-launcher/security/wave-0-review.md",
+              ].join("\n"),
+              rolePromptPaths: [WAVE_SECURITY_ROLE_PROMPT_PATH],
+              ownedPaths: [".tmp/main-wave-launcher/security/wave-0-review.md"],
+              capabilities: ["security-review"],
+            },
+            {
+              agentId: "A1",
+              prompt: leapClawPrompt,
+              ownedPaths: ["go/example/file.go"],
+              components: Object.keys(starterComponentTargets),
+              componentTargets: starterComponentTargets,
+              exitContract: {
+                completion: "integrated",
+                durability: "none",
+                proof: "integration",
+                docImpact: "owned",
+              },
+            },
+          ],
+        },
+        { lane: "leap-claw" },
+      ),
+    ).toMatchObject({ wave: 0 });
+  });
+
+  it("requires security reviewers to import the standing security role prompt", () => {
+    expect(() =>
+      validateWaveDefinition(
+        {
+          wave: 0,
+          file: "docs/plans/waves/wave-0.md",
+          componentPromotions: starterComponentPromotions,
+          agents: [
+            {
+              agentId: "A0",
+              prompt: leapClawPrompt.replace(
+                "go/example/file.go",
+                "docs/plans/waves/reviews/wave-0-cont-qa.md",
+              ),
+              rolePromptPaths: [WAVE_CONT_QA_ROLE_PROMPT_PATH],
+              ownedPaths: ["docs/plans/waves/reviews/wave-0-cont-qa.md"],
+            },
+            {
+              agentId: "A8",
+              prompt: integrationStewardPrompt,
+              rolePromptPaths: [WAVE_INTEGRATION_ROLE_PROMPT_PATH],
+              ownedPaths: [
+                ".tmp/main-wave-launcher/integration/wave-0.json",
+                ".tmp/main-wave-launcher/integration/wave-0.md",
+              ],
+            },
+            {
+              agentId: "A9",
+              prompt: documentationStewardPrompt,
+              rolePromptPaths: [WAVE_DOCUMENTATION_ROLE_PROMPT_PATH],
+              ownedPaths: starterDocumentationPaths,
+            },
+            {
+              agentId: "A7",
+              title: "Security Engineer",
+              prompt: [
+                "Read docs/reference/repository-guidance.md.",
+                "Read docs/research/agent-context-sources.md.",
+                "",
+                "File ownership (only touch these paths):",
+                "- .tmp/main-wave-launcher/security/wave-0-review.md",
+              ].join("\n"),
+              rolePromptPaths: [],
+              ownedPaths: [".tmp/main-wave-launcher/security/wave-0-review.md"],
+              capabilities: ["security-review"],
+            },
+            {
+              agentId: "A1",
+              prompt: leapClawPrompt,
+              ownedPaths: ["go/example/file.go"],
+              components: Object.keys(starterComponentTargets),
+              componentTargets: starterComponentTargets,
+              exitContract: {
+                completion: "integrated",
+                durability: "none",
+                proof: "integration",
+                docImpact: "owned",
+              },
+            },
+          ],
+        },
+        { lane: "leap-claw" },
+      ),
+    ).toThrow(new RegExp(`must import ${WAVE_SECURITY_ROLE_PROMPT_PATH}`));
+  });
+
+  it("requires security reviewers to own a security review report path", () => {
+    expect(() =>
+      validateWaveDefinition(
+        {
+          wave: 0,
+          file: "docs/plans/waves/wave-0.md",
+          componentPromotions: starterComponentPromotions,
+          agents: [
+            {
+              agentId: "A0",
+              prompt: leapClawPrompt.replace(
+                "go/example/file.go",
+                "docs/plans/waves/reviews/wave-0-cont-qa.md",
+              ),
+              rolePromptPaths: [WAVE_CONT_QA_ROLE_PROMPT_PATH],
+              ownedPaths: ["docs/plans/waves/reviews/wave-0-cont-qa.md"],
+            },
+            {
+              agentId: "A8",
+              prompt: integrationStewardPrompt,
+              rolePromptPaths: [WAVE_INTEGRATION_ROLE_PROMPT_PATH],
+              ownedPaths: [
+                ".tmp/main-wave-launcher/integration/wave-0.json",
+                ".tmp/main-wave-launcher/integration/wave-0.md",
+              ],
+            },
+            {
+              agentId: "A9",
+              prompt: documentationStewardPrompt,
+              rolePromptPaths: [WAVE_DOCUMENTATION_ROLE_PROMPT_PATH],
+              ownedPaths: starterDocumentationPaths,
+            },
+            {
+              agentId: "A7",
+              title: "Security Engineer",
+              prompt: [
+                "Read docs/reference/repository-guidance.md.",
+                "Read docs/research/agent-context-sources.md.",
+                "",
+                "File ownership (only touch these paths):",
+                "- docs/reviews/wave-0.md",
+              ].join("\n"),
+              rolePromptPaths: [WAVE_SECURITY_ROLE_PROMPT_PATH],
+              ownedPaths: ["docs/reviews/wave-0.md"],
+              capabilities: ["security-review"],
+            },
+            {
+              agentId: "A1",
+              prompt: leapClawPrompt,
+              ownedPaths: ["go/example/file.go"],
+              components: Object.keys(starterComponentTargets),
+              componentTargets: starterComponentTargets,
+              exitContract: {
+                completion: "integrated",
+                durability: "none",
+                proof: "integration",
+                docImpact: "owned",
+              },
+            },
+          ],
+        },
+        { lane: "leap-claw" },
+      ),
+    ).toThrow(/must own a security review report path/);
+  });
+
+  it("does not classify implementation agents by title alone as security reviewers", () => {
+    expect(
+      validateWaveDefinition(
+        {
+          wave: 0,
+          file: "docs/plans/waves/wave-0.md",
+          componentPromotions: starterComponentPromotions,
+          agents: [
+            {
+              agentId: "A0",
+              prompt: leapClawPrompt.replace(
+                "go/example/file.go",
+                "docs/plans/waves/reviews/wave-0-cont-qa.md",
+              ),
+              rolePromptPaths: [WAVE_CONT_QA_ROLE_PROMPT_PATH],
+              ownedPaths: ["docs/plans/waves/reviews/wave-0-cont-qa.md"],
+            },
+            {
+              agentId: "A8",
+              prompt: integrationStewardPrompt,
+              rolePromptPaths: [WAVE_INTEGRATION_ROLE_PROMPT_PATH],
+              ownedPaths: [
+                ".tmp/main-wave-launcher/integration/wave-0.json",
+                ".tmp/main-wave-launcher/integration/wave-0.md",
+              ],
+            },
+            {
+              agentId: "A9",
+              prompt: documentationStewardPrompt,
+              rolePromptPaths: [WAVE_DOCUMENTATION_ROLE_PROMPT_PATH],
+              ownedPaths: starterDocumentationPaths,
+            },
+            {
+              agentId: "A1",
+              title: "Security Hardening Engineer",
+              prompt: leapClawPrompt,
+              ownedPaths: ["go/example/file.go"],
+              components: Object.keys(starterComponentTargets),
+              componentTargets: starterComponentTargets,
+              exitContract: {
+                completion: "integrated",
+                durability: "none",
+                proof: "integration",
+                docImpact: "owned",
+              },
+            },
+          ],
+        },
+        { lane: "leap-claw" },
+      ),
+    ).toMatchObject({ wave: 0 });
+  });
+
+  it("rejects leap-claw waves without a cont-QA role", () => {
     expect(() =>
       validateWaveDefinition(
         {
@@ -740,10 +1165,10 @@ describe("validateWaveDefinition", () => {
                 "Read docs/reference/repository-guidance.md.",
                 "",
                 "File ownership (only touch these paths):",
-                "- docs/plans/waves/reviews/wave-0-evaluator.md",
+                "- docs/plans/waves/reviews/wave-0-cont-qa.md",
               ].join("\n"),
-              rolePromptPaths: [WAVE_EVALUATOR_ROLE_PROMPT_PATH],
-              ownedPaths: ["docs/plans/waves/reviews/wave-0-evaluator.md"],
+              rolePromptPaths: [WAVE_CONT_QA_ROLE_PROMPT_PATH],
+              ownedPaths: ["docs/plans/waves/reviews/wave-0-cont-qa.md"],
             },
           ],
         },
@@ -752,7 +1177,7 @@ describe("validateWaveDefinition", () => {
     ).toThrow(/must reference docs\/research\/agent-context-sources\.md/);
   });
 
-  it("rejects leap-claw evaluators that do not import the standing evaluator role", () => {
+  it("rejects leap-claw cont-QA agents that do not import the standing cont-QA role", () => {
     expect(() =>
       validateWaveDefinition(
         {
@@ -763,16 +1188,16 @@ describe("validateWaveDefinition", () => {
               agentId: "A0",
               prompt: leapClawPrompt.replace(
                 "go/example/file.go",
-                "docs/plans/waves/reviews/wave-0-evaluator.md",
+                "docs/plans/waves/reviews/wave-0-cont-qa.md",
               ),
               rolePromptPaths: [],
-              ownedPaths: ["docs/plans/waves/reviews/wave-0-evaluator.md"],
+              ownedPaths: ["docs/plans/waves/reviews/wave-0-cont-qa.md"],
             },
           ],
         },
         { lane: "leap-claw" },
       ),
-    ).toThrow(new RegExp(`must import ${WAVE_EVALUATOR_ROLE_PROMPT_PATH}`));
+    ).toThrow(new RegExp(`must import ${WAVE_CONT_QA_ROLE_PROMPT_PATH}`));
   });
 
   it("requires one documentation steward for leap-claw waves 5 and later", () => {
@@ -787,10 +1212,10 @@ describe("validateWaveDefinition", () => {
               agentId: "A0",
               prompt: leapClawPrompt.replace(
                 "go/example/file.go",
-                "docs/plans/waves/reviews/wave-5-evaluator.md",
+                "docs/plans/waves/reviews/wave-5-cont-qa.md",
               ),
-              rolePromptPaths: [WAVE_EVALUATOR_ROLE_PROMPT_PATH],
-              ownedPaths: ["docs/plans/waves/reviews/wave-5-evaluator.md"],
+              rolePromptPaths: [WAVE_CONT_QA_ROLE_PROMPT_PATH],
+              ownedPaths: ["docs/plans/waves/reviews/wave-5-cont-qa.md"],
             },
             {
               agentId: "A1",
@@ -816,10 +1241,10 @@ describe("validateWaveDefinition", () => {
               agentId: "A0",
               prompt: leapClawPrompt.replace(
                 "go/example/file.go",
-                "docs/plans/waves/reviews/wave-0-evaluator.md",
+                "docs/plans/waves/reviews/wave-0-cont-qa.md",
               ),
-              rolePromptPaths: [WAVE_EVALUATOR_ROLE_PROMPT_PATH],
-              ownedPaths: ["docs/plans/waves/reviews/wave-0-evaluator.md"],
+              rolePromptPaths: [WAVE_CONT_QA_ROLE_PROMPT_PATH],
+              ownedPaths: ["docs/plans/waves/reviews/wave-0-cont-qa.md"],
             },
             {
               agentId: "A8",
@@ -866,10 +1291,10 @@ describe("validateWaveDefinition", () => {
               agentId: "A0",
               prompt: leapClawPrompt.replace(
                 "go/example/file.go",
-                "docs/plans/waves/reviews/wave-6-evaluator.md",
+                "docs/plans/waves/reviews/wave-6-cont-qa.md",
               ),
-              rolePromptPaths: [WAVE_EVALUATOR_ROLE_PROMPT_PATH],
-              ownedPaths: ["docs/plans/waves/reviews/wave-6-evaluator.md"],
+              rolePromptPaths: [WAVE_CONT_QA_ROLE_PROMPT_PATH],
+              ownedPaths: ["docs/plans/waves/reviews/wave-6-cont-qa.md"],
               context7Config: { bundle: "none", query: "repo truth only" },
             },
             {
@@ -919,6 +1344,263 @@ describe("validateWaveDefinition", () => {
           expect(() => validateWaveDefinition(wave, { lane: "leap-claw" })).not.toThrow();
         });
   });
+
+  it("requires eval targets when cont-EVAL is present", () => {
+    expect(() =>
+      validateWaveDefinition(
+        {
+          wave: 4,
+          file: "docs/plans/waves/wave-4.md",
+          agents: [
+            {
+              agentId: "A0",
+              prompt: leapClawPrompt.replace(
+                "go/example/file.go",
+                "docs/plans/waves/reviews/wave-4-cont-qa.md",
+              ),
+              rolePromptPaths: [WAVE_CONT_QA_ROLE_PROMPT_PATH],
+              ownedPaths: ["docs/plans/waves/reviews/wave-4-cont-qa.md"],
+            },
+            {
+              agentId: "E0",
+              prompt: leapClawPrompt.replace(
+                "go/example/file.go",
+                "docs/plans/waves/reviews/wave-4-cont-eval.md",
+              ),
+              rolePromptPaths: [WAVE_CONT_EVAL_ROLE_PROMPT_PATH],
+              ownedPaths: ["docs/plans/waves/reviews/wave-4-cont-eval.md"],
+            },
+          ],
+        },
+        { lane: "leap-claw" },
+      ),
+    ).toThrow(/must declare a ## Eval targets section when E0 is present/);
+  });
+
+  it("allows report-only cont-EVAL agents to stay exempt from implementation exit contracts", () => {
+    const wave6DocumentationPaths = requiredDocumentationStewardPathsForWave(6);
+    expect(
+      validateWaveDefinition(
+        {
+          wave: 6,
+          file: "docs/plans/waves/wave-6.md",
+          evalTargets: [
+            {
+              id: "response-quality",
+              selection: "delegated",
+              benchmarkFamily: "service-output",
+              benchmarks: [],
+              objective: "Tune response quality",
+              threshold: "Golden response smoke passes",
+            },
+          ],
+          agents: [
+            {
+              agentId: "A0",
+              prompt: leapClawPrompt.replace(
+                "go/example/file.go",
+                "docs/plans/waves/reviews/wave-6-cont-qa.md",
+              ),
+              rolePromptPaths: [WAVE_CONT_QA_ROLE_PROMPT_PATH],
+              ownedPaths: ["docs/plans/waves/reviews/wave-6-cont-qa.md"],
+              context7Config: { bundle: "none", query: "repo truth only" },
+            },
+            {
+              agentId: "E0",
+              prompt: leapClawPrompt.replace(
+                "go/example/file.go",
+                "docs/plans/waves/reviews/wave-6-cont-eval.md",
+              ),
+              rolePromptPaths: [WAVE_CONT_EVAL_ROLE_PROMPT_PATH],
+              ownedPaths: ["docs/plans/waves/reviews/wave-6-cont-eval.md"],
+              context7Config: { bundle: "none", query: "repo truth only" },
+            },
+            {
+              agentId: "A8",
+              prompt: integrationStewardPrompt.replaceAll("wave-0", "wave-6"),
+              rolePromptPaths: [WAVE_INTEGRATION_ROLE_PROMPT_PATH],
+              ownedPaths: [
+                ".tmp/main-wave-launcher/integration/wave-6.json",
+                ".tmp/main-wave-launcher/integration/wave-6.md",
+              ],
+              context7Config: { bundle: "none", query: "repo truth only" },
+            },
+            {
+              agentId: "A9",
+              prompt: [
+                "Read docs/reference/repository-guidance.md.",
+                "Read docs/research/agent-context-sources.md.",
+                "",
+                "File ownership (only touch these paths):",
+                ...wave6DocumentationPaths.map((docPath) => `- ${docPath}`),
+              ].join("\n"),
+              rolePromptPaths: [WAVE_DOCUMENTATION_ROLE_PROMPT_PATH],
+              ownedPaths: wave6DocumentationPaths,
+              context7Config: { bundle: "none", query: "repo truth only" },
+            },
+            {
+              agentId: "A1",
+              prompt: leapClawPrompt,
+              ownedPaths: ["go/example/file.go"],
+              context7Config: { bundle: "none", query: "repo truth only" },
+              exitContract: {
+                completion: "contract",
+                durability: "none",
+                proof: "unit",
+                docImpact: "owned",
+              },
+            },
+          ],
+          context7Defaults: { bundle: "none", query: "repo truth only" },
+        },
+        {
+          laneProfile: {
+            lane: "leap-claw",
+            roles: {
+              contQaAgentId: "A0",
+              contQaRolePromptPath: WAVE_CONT_QA_ROLE_PROMPT_PATH,
+              contEvalAgentId: "E0",
+              contEvalRolePromptPath: WAVE_CONT_EVAL_ROLE_PROMPT_PATH,
+              integrationAgentId: "A8",
+              integrationRolePromptPath: WAVE_INTEGRATION_ROLE_PROMPT_PATH,
+              documentationAgentId: "A9",
+              documentationRolePromptPath: WAVE_DOCUMENTATION_ROLE_PROMPT_PATH,
+            },
+            validation: {
+              requiredPromptReferences: [],
+              requireComponentPromotionsFromWave: null,
+              requireDocumentationStewardFromWave: 5,
+              requireContext7DeclarationsFromWave: 6,
+              requireExitContractsFromWave: 6,
+              requireIntegrationStewardFromWave: 0,
+              requireAgentComponentsFromWave: null,
+            },
+            paths: {
+              benchmarkCatalogPath: "docs/evals/benchmark-catalog.json",
+              componentCutoverMatrixJsonPath: "docs/plans/component-cutover-matrix.json",
+              componentCutoverMatrixDocPath: "docs/plans/component-cutover-matrix.md",
+            },
+            sharedPlanDocs: SHARED_PLAN_DOC_PATHS,
+          },
+        },
+      ),
+    ).toMatchObject({ wave: 6 });
+  });
+
+  it("requires implementation-owning cont-EVAL agents to declare an exit contract", () => {
+    const wave6DocumentationPaths = requiredDocumentationStewardPathsForWave(6);
+    expect(() =>
+      validateWaveDefinition(
+        {
+          wave: 6,
+          file: "docs/plans/waves/wave-6.md",
+          evalTargets: [
+            {
+              id: "response-quality",
+              selection: "delegated",
+              benchmarkFamily: "service-output",
+              benchmarks: [],
+              objective: "Tune response quality",
+              threshold: "Golden response smoke passes",
+            },
+          ],
+          agents: [
+            {
+              agentId: "A0",
+              prompt: leapClawPrompt.replace(
+                "go/example/file.go",
+                "docs/plans/waves/reviews/wave-6-cont-qa.md",
+              ),
+              rolePromptPaths: [WAVE_CONT_QA_ROLE_PROMPT_PATH],
+              ownedPaths: ["docs/plans/waves/reviews/wave-6-cont-qa.md"],
+            },
+            {
+              agentId: "E0",
+              prompt: [
+                "Read docs/reference/repository-guidance.md.",
+                "Read docs/research/agent-context-sources.md.",
+                "",
+                "File ownership (only touch these paths):",
+                "- docs/plans/waves/reviews/wave-6-cont-eval.md",
+                "- go/example/eval-tuning.go",
+              ].join("\n"),
+              rolePromptPaths: [WAVE_CONT_EVAL_ROLE_PROMPT_PATH],
+              ownedPaths: [
+                "docs/plans/waves/reviews/wave-6-cont-eval.md",
+                "go/example/eval-tuning.go",
+              ],
+            },
+            {
+              agentId: "A8",
+              prompt: integrationStewardPrompt.replaceAll("wave-0", "wave-6"),
+              rolePromptPaths: [WAVE_INTEGRATION_ROLE_PROMPT_PATH],
+              ownedPaths: [
+                ".tmp/main-wave-launcher/integration/wave-6.json",
+                ".tmp/main-wave-launcher/integration/wave-6.md",
+              ],
+            },
+            {
+              agentId: "A9",
+              prompt: [
+                "Read docs/reference/repository-guidance.md.",
+                "Read docs/research/agent-context-sources.md.",
+                "",
+                "File ownership (only touch these paths):",
+                ...wave6DocumentationPaths.map((docPath) => `- ${docPath}`),
+              ].join("\n"),
+              rolePromptPaths: [WAVE_DOCUMENTATION_ROLE_PROMPT_PATH],
+              ownedPaths: wave6DocumentationPaths,
+            },
+            {
+              agentId: "A1",
+              prompt: leapClawPrompt,
+              ownedPaths: ["go/example/file.go"],
+              exitContract: {
+                completion: "contract",
+                durability: "none",
+                proof: "unit",
+                docImpact: "owned",
+              },
+            },
+          ],
+        },
+        { lane: "leap-claw" },
+      ),
+    ).toThrow(/Agent E0 must declare a ### Exit contract section/);
+  });
+
+  it("rejects eval targets when cont-EVAL is not present", () => {
+    expect(() =>
+      validateWaveDefinition(
+        {
+          wave: 4,
+          file: "docs/plans/waves/wave-4.md",
+          evalTargets: [
+            {
+              id: "response-quality",
+              selection: "delegated",
+              benchmarkFamily: "service-output",
+              benchmarks: [],
+              objective: "Tune response quality",
+              threshold: "Manual review passes",
+            },
+          ],
+          agents: [
+            {
+              agentId: "A0",
+              prompt: leapClawPrompt.replace(
+                "go/example/file.go",
+                "docs/plans/waves/reviews/wave-4-cont-qa.md",
+              ),
+              rolePromptPaths: [WAVE_CONT_QA_ROLE_PROMPT_PATH],
+              ownedPaths: ["docs/plans/waves/reviews/wave-4-cont-qa.md"],
+            },
+          ],
+        },
+        { lane: "leap-claw" },
+      ),
+    ).toThrow(/declares ## Eval targets but does not include Agent E0/);
+  });
 });
 
 describe("completedWavesFromStatusFiles", () => {
@@ -949,7 +1631,7 @@ describe("completedWavesFromStatusFiles", () => {
     });
   });
 
-  it("requires prompt-hash-matching status files and evaluator PASS", () => {
+  it("requires prompt-hash-matching status files and cont-QA PASS", () => {
     const tempRoot = registerTempPath(
       path.join(REPO_ROOT, ".tmp", `wave-files-test-${Date.now()}-completion`),
     );
@@ -958,7 +1640,7 @@ describe("completedWavesFromStatusFiles", () => {
     fs.mkdirSync(statusDir, { recursive: true });
     fs.mkdirSync(logsDir, { recursive: true });
 
-    const reportRelPath = `.tmp/${path.basename(tempRoot)}/wave-0-evaluator.md`;
+    const reportRelPath = `.tmp/${path.basename(tempRoot)}/wave-0-cont-qa.md`;
     const evaluatorPrompt = [
       "Read docs/code-guidance.md.",
       "Read docs/research/hardening-tech-stack.md.",
@@ -995,10 +1677,10 @@ describe("completedWavesFromStatusFiles", () => {
           },
         },
       ],
-      evaluatorReportPath: reportRelPath,
+      contQaReportPath: reportRelPath,
     };
 
-    fs.writeFileSync(path.join(REPO_ROOT, reportRelPath), "# Evaluator\n\nVerdict: PASS\n", "utf8");
+    fs.writeFileSync(path.join(REPO_ROOT, reportRelPath), "# cont-QA\n\nVerdict: PASS\n", "utf8");
     fs.writeFileSync(
       path.join(statusDir, "wave-0-0-a0.status"),
       JSON.stringify(
@@ -1043,6 +1725,26 @@ describe("completedWavesFromStatusFiles", () => {
         {
           code: 0,
           promptHash: hashAgentPromptFingerprint(wave.agents[1]),
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(statusDir, "wave-0-0-a0.summary.json"),
+      JSON.stringify(
+        {
+          agentId: "A0",
+          reportPath: reportRelPath,
+          gate: {
+            architecture: "pass",
+            integration: "pass",
+            durability: "pass",
+            live: "pass",
+            docs: "pass",
+          },
+          verdict: { verdict: "pass", detail: "ready" },
         },
         null,
         2,
@@ -1095,7 +1797,7 @@ describe("completedWavesFromStatusFiles", () => {
     fs.mkdirSync(statusDir, { recursive: true });
     fs.mkdirSync(logsDir, { recursive: true });
 
-    const reportRelPath = `.tmp/${path.basename(tempRoot)}/wave-0-evaluator.md`;
+    const reportRelPath = `.tmp/${path.basename(tempRoot)}/wave-0-cont-qa.md`;
     const wave = {
       wave: 0,
       file: "docs/plans/waves/wave-0.md",
@@ -1107,7 +1809,7 @@ describe("completedWavesFromStatusFiles", () => {
           agentId: "A0",
           slug: "0-a0",
           prompt: `File ownership (only touch these paths):\n- ${reportRelPath}`,
-          rolePromptPaths: [WAVE_EVALUATOR_ROLE_PROMPT_PATH],
+          rolePromptPaths: [WAVE_CONT_QA_ROLE_PROMPT_PATH],
         },
         {
           agentId: "A8",
@@ -1144,10 +1846,10 @@ describe("completedWavesFromStatusFiles", () => {
           },
         },
       ],
-      evaluatorReportPath: reportRelPath,
+      contQaReportPath: reportRelPath,
     };
 
-    fs.writeFileSync(path.join(REPO_ROOT, reportRelPath), "# Evaluator\n\nVerdict: PASS\n", "utf8");
+    fs.writeFileSync(path.join(REPO_ROOT, reportRelPath), "# cont-QA\n\nVerdict: PASS\n", "utf8");
     for (const agent of wave.agents) {
       fs.writeFileSync(
         path.join(statusDir, `wave-0-${agent.slug}.status`),
@@ -1166,6 +1868,7 @@ describe("completedWavesFromStatusFiles", () => {
       path.join(statusDir, "wave-0-0-a0.summary.json"),
       JSON.stringify(
         {
+          reportPath: reportRelPath,
           gate: {
             architecture: "pass",
             integration: "pass",
@@ -1226,7 +1929,7 @@ describe("completedWavesFromStatusFiles", () => {
     fs.mkdirSync(statusDir, { recursive: true });
     fs.mkdirSync(logsDir, { recursive: true });
 
-    const reportRelPath = `.tmp/${path.basename(tempRoot)}/wave-0-evaluator.md`;
+    const reportRelPath = `.tmp/${path.basename(tempRoot)}/wave-0-cont-qa.md`;
     const wave = {
       wave: 0,
       file: "docs/plans/waves/wave-0.md",
@@ -1238,7 +1941,7 @@ describe("completedWavesFromStatusFiles", () => {
           agentId: "A0",
           slug: "0-a0",
           prompt: `File ownership (only touch these paths):\n- ${reportRelPath}`,
-          rolePromptPaths: [WAVE_EVALUATOR_ROLE_PROMPT_PATH],
+          rolePromptPaths: [WAVE_CONT_QA_ROLE_PROMPT_PATH],
         },
         {
           agentId: "A8",
@@ -1275,10 +1978,10 @@ describe("completedWavesFromStatusFiles", () => {
           },
         },
       ],
-      evaluatorReportPath: reportRelPath,
+      contQaReportPath: reportRelPath,
     };
 
-    fs.writeFileSync(path.join(REPO_ROOT, reportRelPath), "# Evaluator\n\nVerdict: PASS\n", "utf8");
+    fs.writeFileSync(path.join(REPO_ROOT, reportRelPath), "# cont-QA\n\nVerdict: PASS\n", "utf8");
     for (const agent of wave.agents) {
       fs.writeFileSync(
         path.join(statusDir, `wave-0-${agent.slug}.status`),
@@ -1297,6 +2000,7 @@ describe("completedWavesFromStatusFiles", () => {
       path.join(statusDir, "wave-0-0-a0.summary.json"),
       JSON.stringify(
         {
+          reportPath: reportRelPath,
           gate: {
             architecture: "pass",
             integration: "pass",
@@ -1374,7 +2078,7 @@ describe("completedWavesFromStatusFiles", () => {
     fs.mkdirSync(logsDir, { recursive: true });
     fs.mkdirSync(coordinationDir, { recursive: true });
 
-    const reportRelPath = `.tmp/${path.basename(tempRoot)}/wave-0-evaluator.md`;
+    const reportRelPath = `.tmp/${path.basename(tempRoot)}/wave-0-cont-qa.md`;
     const wave = {
       wave: 0,
       file: "docs/plans/waves/wave-0.md",
@@ -1384,7 +2088,7 @@ describe("completedWavesFromStatusFiles", () => {
           agentId: "A0",
           slug: "0-a0",
           prompt: `File ownership (only touch these paths):\n- ${reportRelPath}`,
-          rolePromptPaths: [WAVE_EVALUATOR_ROLE_PROMPT_PATH],
+          rolePromptPaths: [WAVE_CONT_QA_ROLE_PROMPT_PATH],
         },
         {
           agentId: "A1",
@@ -1398,10 +2102,10 @@ describe("completedWavesFromStatusFiles", () => {
           },
         },
       ],
-      evaluatorReportPath: reportRelPath,
+      contQaReportPath: reportRelPath,
     };
 
-    fs.writeFileSync(path.join(REPO_ROOT, reportRelPath), "# Evaluator\n\nVerdict: PASS\n", "utf8");
+    fs.writeFileSync(path.join(REPO_ROOT, reportRelPath), "# cont-QA\n\nVerdict: PASS\n", "utf8");
     for (const agent of wave.agents) {
       fs.writeFileSync(
         path.join(statusDir, `wave-0-${agent.slug}.status`),
@@ -1420,6 +2124,7 @@ describe("completedWavesFromStatusFiles", () => {
       path.join(statusDir, "wave-0-0-a0.summary.json"),
       JSON.stringify(
         {
+          reportPath: reportRelPath,
           gate: {
             architecture: "pass",
             integration: "pass",
@@ -1607,7 +2312,7 @@ describe("reconcileRunStateFromStatusFiles", () => {
             "Read docs/code-guidance.md.",
             "",
             "File ownership (only touch these paths):",
-            "- docs/research/runtime-waves/reviews/wave-200-evaluator.md",
+            "- docs/research/runtime-waves/reviews/wave-200-cont-qa.md",
           ].join("\n"),
         },
         {
@@ -1641,7 +2346,7 @@ describe("reconcileRunStateFromStatusFiles", () => {
           ].join("\n"),
         },
       ],
-      evaluatorReportPath: `.tmp/${path.basename(tempRoot)}/wave-200-evaluator.md`,
+      contQaReportPath: `.tmp/${path.basename(tempRoot)}/wave-200-cont-qa.md`,
     };
   }
 
@@ -1681,7 +2386,7 @@ describe("reconcileRunStateFromStatusFiles", () => {
             "Read docs/research/hardening-tech-stack.md.",
             "",
             "File ownership (only touch these paths):",
-            "- docs/plans/waves/reviews/wave-1-evaluator.md",
+            "- docs/plans/waves/reviews/wave-1-cont-qa.md",
           ].join("\n"),
         },
         {
@@ -1696,7 +2401,7 @@ describe("reconcileRunStateFromStatusFiles", () => {
           ].join("\n"),
         },
       ],
-      evaluatorReportPath: "docs/plans/waves/reviews/wave-1-evaluator.md",
+      contQaReportPath: "docs/plans/waves/reviews/wave-1-cont-qa.md",
     };
 
     fs.writeFileSync(path.join(statusDir, "wave-1-1-a0.status"), "0\n", "utf8");
@@ -1704,7 +2409,203 @@ describe("reconcileRunStateFromStatusFiles", () => {
 
     const reconciliation = reconcileRunStateFromStatusFiles([wave], runStatePath, statusDir);
     expect(reconciliation.completedFromStatus).toEqual([]);
-    expect(readRunState(runStatePath).completedWaves).toEqual([]);
+    expect(readRunState(runStatePath)).toMatchObject({
+      schemaVersion: 2,
+      kind: "wave-run-state",
+      completedWaves: [],
+    });
+  });
+
+  it("writes append-only run-state history with legacy normalization and blocker evidence", () => {
+    const tempRoot = registerTempPath(
+      path.join(REPO_ROOT, ".tmp", `wave-files-test-${Date.now()}-run-state-history`),
+    );
+    const statusDir = path.join(tempRoot, "status");
+    const logsDir = path.join(tempRoot, "logs");
+    const coordinationDir = path.join(tempRoot, "coordination");
+    const assignmentsDir = path.join(tempRoot, "assignments");
+    const dependencySnapshotsDir = path.join(tempRoot, "dependencies");
+    const runStatePath = path.join(tempRoot, "run-state.json");
+    fs.mkdirSync(statusDir, { recursive: true });
+    fs.mkdirSync(logsDir, { recursive: true });
+    fs.mkdirSync(coordinationDir, { recursive: true });
+    fs.mkdirSync(assignmentsDir, { recursive: true });
+    fs.mkdirSync(dependencySnapshotsDir, { recursive: true });
+
+    fs.writeFileSync(
+      path.join(runStatePath),
+      JSON.stringify({ completedWaves: [7] }, null, 2),
+      "utf8",
+    );
+    expect(readRunState(runStatePath)).toMatchObject({
+      schemaVersion: 2,
+      kind: "wave-run-state",
+      completedWaves: [7],
+      waves: {
+        7: {
+          currentState: "completed",
+          lastSource: "legacy-run-state",
+        },
+      },
+      history: [],
+    });
+
+    const wave = makeReconcileWave(tempRoot);
+    fs.writeFileSync(
+      path.join(REPO_ROOT, wave.contQaReportPath),
+      "# cont-QA\n\nVerdict: PASS\n",
+      "utf8",
+    );
+    for (const agent of wave.agents) {
+      writeStatus(statusDir, agent, {
+        code: 0,
+        promptHash: hashAgentPromptFingerprint(agent),
+        completedAt: "2026-03-22T00:00:00.000Z",
+      });
+    }
+    writeSummary(statusDir, wave.agents[0], {
+      reportPath: wave.contQaReportPath,
+      verdict: { verdict: "pass", detail: "good" },
+      gate: {
+        architecture: "pass",
+        integration: "pass",
+        durability: "pass",
+        live: "pass",
+        docs: "pass",
+        detail: "all clear",
+      },
+    });
+    writeSummary(statusDir, wave.agents[1], {
+      proof: { completion: "contract", durability: "none", proof: "unit", state: "met" },
+      docDelta: { state: "owned", paths: [] },
+    });
+    writeSummary(statusDir, wave.agents[2], {
+      integration: { state: "ready-for-doc-closure", detail: "all lanes landed" },
+    });
+    writeSummary(statusDir, wave.agents[3], {
+      docClosure: { state: "closed", detail: "docs reconciled" },
+    });
+    fs.writeFileSync(path.join(coordinationDir, "wave-200.jsonl"), "", "utf8");
+
+    const completedState = markWaveCompleted(runStatePath, wave.wave, {
+      detail: "Wave 200 completed after 1 attempt(s).",
+      evidence: {
+        waveFileHash: "abc123",
+      },
+    });
+    expect(completedState).toMatchObject({
+      schemaVersion: 2,
+      kind: "wave-run-state",
+      completedWaves: [7, 200],
+      waves: {
+        200: {
+          currentState: "completed",
+          lastReasonCode: "wave-complete",
+        },
+      },
+    });
+    expect(completedState.history).toMatchObject([
+      {
+        wave: 200,
+        toState: "completed",
+        source: "live-launcher",
+        reasonCode: "wave-complete",
+        evidence: {
+          waveFileHash: "abc123",
+        },
+      },
+    ]);
+
+    fs.writeFileSync(
+      path.join(assignmentsDir, "wave-200.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          kind: "wave-assignment-snapshot",
+          lane: "research",
+          wave: 200,
+          assignments: [
+            {
+              id: "assignment:request-2",
+              requestId: "request-2",
+              assignedAgentId: "A1",
+              blocking: true,
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(dependencySnapshotsDir, "wave-200.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          kind: "wave-dependency-snapshot",
+          lane: "research",
+          wave: 200,
+          requiredInbound: [{ id: "dep-2" }],
+          requiredOutbound: [],
+          unresolvedInboundAssignments: [],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const reconciliation = reconcileRunStateFromStatusFiles([wave], runStatePath, statusDir, {
+      logsDir,
+      coordinationDir,
+      assignmentsDir,
+      dependencySnapshotsDir,
+      requireIntegrationStewardFromWave: 0,
+      laneProfile: {
+        validation: {
+          requireComponentPromotionsFromWave: null,
+          requireIntegrationStewardFromWave: 0,
+          requiredPromptReferences: [],
+        },
+        paths: {
+          benchmarkCatalogPath: "docs/evals/benchmark-catalog.json",
+        },
+      },
+    });
+
+    expect(reconciliation.state.completedWaves).toEqual([7]);
+    expect(reconciliation.state.waves["200"]).toMatchObject({
+      currentState: "blocked",
+      lastSource: "status-reconcile",
+      lastReasonCode: "helper-assignment-open",
+    });
+    expect(reconciliation.state.history).toMatchObject([
+      {
+        wave: 200,
+        toState: "completed",
+        source: "live-launcher",
+      },
+      {
+        wave: 200,
+        fromState: "completed",
+        toState: "blocked",
+        source: "status-reconcile",
+        reasonCode: "helper-assignment-open",
+        evidence: {
+          blockedReasons: expect.arrayContaining([
+            {
+              code: "helper-assignment-open",
+              detail: "Helper assignments remain open (request-2).",
+            },
+            {
+              code: "dependency-open",
+              detail: "Open required dependencies remain (dep-2).",
+            },
+          ]),
+        },
+      },
+    ]);
   });
 
   it("reports missing closure-agent statuses as blocked-from-status reasons", () => {
@@ -1718,17 +2619,18 @@ describe("reconcileRunStateFromStatusFiles", () => {
     fs.mkdirSync(logsDir, { recursive: true });
 
     const wave = makeReconcileWave(tempRoot);
-    const [evaluator, implementation, integration] = wave.agents;
+    const [contQa, implementation, integration] = wave.agents;
     fs.writeFileSync(
-      path.join(REPO_ROOT, wave.evaluatorReportPath),
-      "# Evaluator\n\nVerdict: PASS\n",
+      path.join(REPO_ROOT, wave.contQaReportPath),
+      "# cont-QA\n\nVerdict: PASS\n",
       "utf8",
     );
-    writeStatus(statusDir, evaluator, {
+    writeStatus(statusDir, contQa, {
       code: 0,
-      promptHash: hashAgentPromptFingerprint(evaluator),
+      promptHash: hashAgentPromptFingerprint(contQa),
     });
-    writeSummary(statusDir, evaluator, {
+    writeSummary(statusDir, contQa, {
+      reportPath: wave.contQaReportPath,
       gate: {
         architecture: "pass",
         integration: "pass",
@@ -1758,17 +2660,17 @@ describe("reconcileRunStateFromStatusFiles", () => {
     expect(reconciliation.blockedFromStatus).toMatchObject([
       {
         wave: 200,
-        reasons: [
+        reasons: expect.arrayContaining([
           {
             code: "missing-status",
             detail: "Missing status files for A9.",
           },
-        ],
+        ]),
       },
     ]);
   });
 
-  it("surfaces evaluator artifact and open coordination blockers during reconciliation", () => {
+  it("surfaces cont-QA artifact and open coordination blockers during reconciliation", () => {
     const tempRoot = registerTempPath(
       path.join(REPO_ROOT, ".tmp", `wave-files-test-${Date.now()}-reconcile-reasons`),
     );
@@ -1782,8 +2684,8 @@ describe("reconcileRunStateFromStatusFiles", () => {
 
     const wave = makeReconcileWave(tempRoot);
     fs.writeFileSync(
-      path.join(REPO_ROOT, wave.evaluatorReportPath),
-      "# Evaluator\n\nNotes only.\n",
+      path.join(REPO_ROOT, wave.contQaReportPath),
+      "# cont-QA\n\nNotes only.\n",
       "utf8",
     );
     for (const agent of wave.agents) {
@@ -1792,16 +2694,6 @@ describe("reconcileRunStateFromStatusFiles", () => {
         promptHash: hashAgentPromptFingerprint(agent),
       });
     }
-    writeSummary(statusDir, wave.agents[0], {
-      gate: {
-        architecture: "pass",
-        integration: "pass",
-        durability: "pass",
-        live: "pass",
-        docs: "pass",
-      },
-      verdict: { verdict: "pass", detail: "ready" },
-    });
     writeSummary(statusDir, wave.agents[2], {
       integration: { state: "ready-for-doc-closure", detail: "all lanes landed" },
     });
@@ -1842,12 +2734,134 @@ describe("reconcileRunStateFromStatusFiles", () => {
         wave: 200,
         reasons: expect.arrayContaining([
           {
-            code: "missing-evaluator-verdict",
-            detail: expect.stringContaining("Missing evaluator verdict"),
+            code: "invalid-cont-qa-summary",
+            detail: expect.stringContaining("missing-wave-gate"),
           },
           {
             code: "open-human-escalation",
             detail: "Open human escalation records: escalation-1.",
+          },
+        ]),
+      },
+    ]);
+  });
+
+  it("removes previously completed waves when helper assignments or dependencies stay open", () => {
+    const tempRoot = registerTempPath(
+      path.join(REPO_ROOT, ".tmp", `wave-files-test-${Date.now()}-reconcile-hardening`),
+    );
+    const statusDir = path.join(tempRoot, "status");
+    const logsDir = path.join(tempRoot, "logs");
+    const coordinationDir = path.join(tempRoot, "coordination");
+    const assignmentsDir = path.join(tempRoot, "assignments");
+    const dependencySnapshotsDir = path.join(tempRoot, "dependencies");
+    const runStatePath = path.join(tempRoot, "run-state.json");
+    fs.mkdirSync(statusDir, { recursive: true });
+    fs.mkdirSync(logsDir, { recursive: true });
+    fs.mkdirSync(coordinationDir, { recursive: true });
+    fs.mkdirSync(assignmentsDir, { recursive: true });
+    fs.mkdirSync(dependencySnapshotsDir, { recursive: true });
+
+    const wave = makeReconcileWave(tempRoot);
+    fs.writeFileSync(
+      runStatePath,
+      JSON.stringify({ completedWaves: [200] }, null, 2),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(REPO_ROOT, wave.contQaReportPath),
+      "# cont-QA\n\nVerdict: PASS\n",
+      "utf8",
+    );
+    for (const agent of wave.agents) {
+      writeStatus(statusDir, agent, {
+        code: 0,
+        promptHash: hashAgentPromptFingerprint(agent),
+      });
+    }
+    writeSummary(statusDir, wave.agents[0], {
+      reportPath: wave.contQaReportPath,
+      verdict: { verdict: "pass", detail: "good" },
+      gate: {
+        architecture: "pass",
+        integration: "pass",
+        durability: "pass",
+        live: "pass",
+        docs: "pass",
+        detail: "all clear",
+      },
+    });
+    writeSummary(statusDir, wave.agents[1], {
+      proof: { completion: "contract", durability: "none", proof: "unit", state: "met" },
+      docDelta: { state: "owned", paths: [] },
+    });
+    writeSummary(statusDir, wave.agents[2], {
+      integration: { state: "ready-for-doc-closure", detail: "all lanes landed" },
+    });
+    writeSummary(statusDir, wave.agents[3], {
+      docClosure: { state: "closed", detail: "docs reconciled" },
+    });
+    fs.writeFileSync(path.join(coordinationDir, "wave-200.jsonl"), "", "utf8");
+    fs.writeFileSync(
+      path.join(assignmentsDir, "wave-200.json"),
+      JSON.stringify(
+        [
+          {
+            id: "assignment:request-1",
+            requestId: "request-1",
+            assignedAgentId: "A1",
+            blocking: true,
+          },
+        ],
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(dependencySnapshotsDir, "wave-200.json"),
+      JSON.stringify(
+        {
+          requiredInbound: [{ id: "dep-1" }],
+          requiredOutbound: [],
+          unresolvedInboundAssignments: [],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const reconciliation = reconcileRunStateFromStatusFiles([wave], runStatePath, statusDir, {
+      logsDir,
+      coordinationDir,
+      assignmentsDir,
+      dependencySnapshotsDir,
+      requireIntegrationStewardFromWave: 0,
+      laneProfile: {
+        validation: {
+          requireComponentPromotionsFromWave: null,
+          requireIntegrationStewardFromWave: 0,
+          requiredPromptReferences: [],
+        },
+        paths: {
+          benchmarkCatalogPath: "docs/evals/benchmark-catalog.json",
+        },
+      },
+    });
+
+    expect(reconciliation.state.completedWaves).toEqual([]);
+    expect(reconciliation.blockedFromStatus).toMatchObject([
+      {
+        wave: 200,
+        reasons: expect.arrayContaining([
+          {
+            code: "helper-assignment-open",
+            detail: "Helper assignments remain open (request-1).",
+          },
+          {
+            code: "dependency-open",
+            detail: "Open required dependencies remain (dep-1).",
           },
         ]),
       },

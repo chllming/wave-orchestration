@@ -9,6 +9,7 @@ import {
   readJsonOrNull,
   writeJsonAtomic,
 } from "./shared.mjs";
+import { resolveEvalTargetsAgainstCatalog } from "./evals.mjs";
 
 export const EXIT_CONTRACT_COMPLETION_VALUES = ["contract", "integrated", "authoritative", "live"];
 export const EXIT_CONTRACT_DURABILITY_VALUES = ["none", "ephemeral", "durable"];
@@ -20,6 +21,19 @@ const COMPLETION_ORDER = ORDER(EXIT_CONTRACT_COMPLETION_VALUES);
 const DURABILITY_ORDER = ORDER(EXIT_CONTRACT_DURABILITY_VALUES);
 const PROOF_ORDER = ORDER(EXIT_CONTRACT_PROOF_VALUES);
 const DOC_IMPACT_ORDER = ORDER(EXIT_CONTRACT_DOC_IMPACT_VALUES);
+const COMPONENT_MATURITY_LEVELS = [
+  "inventoried",
+  "contract-frozen",
+  "repo-landed",
+  "baseline-proved",
+  "pilot-live",
+  "qa-proved",
+  "fleet-ready",
+  "cutover-ready",
+  "deprecation-ready",
+];
+const COMPONENT_MATURITY_ORDER = ORDER(COMPONENT_MATURITY_LEVELS);
+const PROOF_CENTRIC_COMPONENT_LEVEL = "pilot-live";
 
 const WAVE_PROOF_REGEX =
   /^\[wave-proof\]\s*completion=(contract|integrated|authoritative|live)\s+durability=(none|ephemeral|durable)\s+proof=(unit|integration|live)\s+state=(met|gap)\s*(?:detail=(.*))?$/gim;
@@ -29,6 +43,10 @@ const WAVE_DOC_CLOSURE_REGEX =
   /^\[wave-doc-closure\]\s*state=(closed|no-change|delta)(?:\s+paths=([^\n]*?))?(?:\s+detail=(.*))?$/gim;
 const WAVE_INTEGRATION_REGEX =
   /^\[wave-integration\]\s*state=(ready-for-doc-closure|needs-more-work)\s+claims=(\d+)\s+conflicts=(\d+)\s+blockers=(\d+)\s*(?:detail=(.*))?$/gim;
+const WAVE_EVAL_REGEX =
+  /^\[wave-eval\]\s*state=(satisfied|needs-more-work|blocked)\s+targets=(\d+)\s+benchmarks=(\d+)\s+regressions=(\d+)(?:\s+target_ids=([^\s]+))?(?:\s+benchmark_ids=([^\s]+))?\s*(?:detail=(.*))?$/gim;
+const WAVE_SECURITY_REGEX =
+  /^\[wave-security\]\s*state=(clear|concerns|blocked)\s+findings=(\d+)\s+approvals=(\d+)\s*(?:detail=(.*))?$/gim;
 const WAVE_GATE_REGEX =
   /^\[wave-gate\]\s*architecture=(pass|concerns|blocked)\s+integration=(pass|concerns|blocked)\s+durability=(pass|concerns|blocked)\s+live=(pass|concerns|blocked)\s+docs=(pass|concerns|blocked)\s*(?:detail=(.*))?$/gim;
 const WAVE_GAP_REGEX =
@@ -98,6 +116,29 @@ function parsePaths(value) {
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function parseIdList(value) {
+  return cleanText(value)
+    .split(",")
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function uniqueSorted(values) {
+  return Array.from(new Set((values || []).map((value) => cleanText(value)).filter(Boolean))).sort();
+}
+
+function sameStringLists(a, b) {
+  if (a.length !== b.length) {
+    return false;
+  }
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i] !== b[i]) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function findLastMatch(text, regex, mapper) {
@@ -197,6 +238,44 @@ function meetsOrExceeds(actual, required, orderMap) {
   return orderMap[actual] >= orderMap[required];
 }
 
+function proofCentricLevelReached(level) {
+  return (
+    COMPONENT_MATURITY_ORDER[String(level || "").trim()] >=
+    COMPONENT_MATURITY_ORDER[PROOF_CENTRIC_COMPONENT_LEVEL]
+  );
+}
+
+function highestAgentComponentTargetLevel(agent) {
+  const levels = Array.isArray(agent?.components)
+    ? agent.components
+        .map((componentId) => agent?.componentTargets?.[componentId] || null)
+        .filter(Boolean)
+    : [];
+  if (levels.length === 0) {
+    return null;
+  }
+  return levels.sort(
+    (left, right) => COMPONENT_MATURITY_ORDER[right] - COMPONENT_MATURITY_ORDER[left],
+  )[0];
+}
+
+function proofArtifactRequiredForAgent(agent, artifact) {
+  if (!artifact) {
+    return false;
+  }
+  const requiredFor = Array.isArray(artifact.requiredFor) ? artifact.requiredFor : [];
+  if (requiredFor.length === 0) {
+    return true;
+  }
+  const highestTarget = highestAgentComponentTargetLevel(agent);
+  if (!highestTarget) {
+    return true;
+  }
+  return requiredFor.some(
+    (level) => COMPONENT_MATURITY_ORDER[highestTarget] >= COMPONENT_MATURITY_ORDER[level],
+  );
+}
+
 export function normalizeExitContract(raw) {
   if (!raw || typeof raw !== "object") {
     return null;
@@ -292,6 +371,21 @@ export function buildAgentExecutionSummary({ agent, statusRecord, logPath, repor
       blockers: Number.parseInt(String(match[4] || "0"), 10) || 0,
       detail: cleanText(match[5]),
     })),
+    eval: findLastMatch(signalText, WAVE_EVAL_REGEX, (match) => ({
+      state: match[1],
+      targets: Number.parseInt(String(match[2] || "0"), 10) || 0,
+      benchmarks: Number.parseInt(String(match[3] || "0"), 10) || 0,
+      regressions: Number.parseInt(String(match[4] || "0"), 10) || 0,
+      targetIds: parseIdList(match[5]),
+      benchmarkIds: parseIdList(match[6]),
+      detail: cleanText(match[7]),
+    })),
+    security: findLastMatch(signalText, WAVE_SECURITY_REGEX, (match) => ({
+      state: match[1],
+      findings: Number.parseInt(String(match[2] || "0"), 10) || 0,
+      approvals: Number.parseInt(String(match[3] || "0"), 10) || 0,
+      detail: cleanText(match[4]),
+    })),
     gate: findLastMatch(signalText, WAVE_GATE_REGEX, (match) => ({
       architecture: match[1],
       integration: match[2],
@@ -309,7 +403,24 @@ export function buildAgentExecutionSummary({ agent, statusRecord, logPath, repor
       ? agent.deliverables.map((deliverable) => ({
           path: deliverable,
           exists: fs.existsSync(path.resolve(REPO_ROOT, deliverable)),
+          modifiedAt:
+            fs.existsSync(path.resolve(REPO_ROOT, deliverable))
+              ? fs.statSync(path.resolve(REPO_ROOT, deliverable)).mtime.toISOString()
+              : null,
         }))
+      : [],
+    proofArtifacts: Array.isArray(agent?.proofArtifacts)
+      ? agent.proofArtifacts.map((artifact) => {
+          const absolutePath = path.resolve(REPO_ROOT, artifact.path);
+          const exists = fs.existsSync(absolutePath);
+          return {
+            path: artifact.path,
+            kind: artifact.kind || null,
+            requiredFor: Array.isArray(artifact.requiredFor) ? artifact.requiredFor : [],
+            exists,
+            modifiedAt: exists ? fs.statSync(absolutePath).mtime.toISOString() : null,
+          };
+        })
       : [],
     verdict: verdict.verdict
       ? {
@@ -453,6 +564,34 @@ export function validateImplementationSummary(agent, summary) {
       }
     }
   }
+  const proofArtifacts = Array.isArray(agent?.proofArtifacts) ? agent.proofArtifacts : [];
+  if (proofArtifacts.length > 0) {
+    const artifactState = new Map(
+      Array.isArray(summary.proofArtifacts)
+        ? summary.proofArtifacts.map((artifact) => [artifact.path, artifact])
+        : [],
+    );
+    for (const proofArtifact of proofArtifacts) {
+      if (!proofArtifactRequiredForAgent(agent, proofArtifact)) {
+        continue;
+      }
+      const artifact = artifactState.get(proofArtifact.path);
+      if (!artifact) {
+        return {
+          ok: false,
+          statusCode: "missing-proof-artifact-summary",
+          detail: `Missing proof artifact presence record for ${agent.agentId} path ${proofArtifact.path}.`,
+        };
+      }
+      if (artifact.exists !== true) {
+        return {
+          ok: false,
+          statusCode: "missing-proof-artifact",
+          detail: `Agent ${agent.agentId} did not land required proof artifact ${proofArtifact.path}.`,
+        };
+      }
+    }
+  }
   return {
     ok: true,
     statusCode: "pass",
@@ -488,6 +627,62 @@ export function validateDocumentationClosureSummary(agent, summary) {
   };
 }
 
+export function validateSecuritySummary(agent, summary) {
+  if (!summary?.security) {
+    return {
+      ok: false,
+      statusCode: "missing-wave-security",
+      detail: appendTerminationHint(
+        `Missing [wave-security] marker for ${agent?.agentId || "A7"}.`,
+        summary,
+      ),
+    };
+  }
+  if (!summary.reportPath) {
+    return {
+      ok: false,
+      statusCode: "missing-security-report",
+      detail: `Missing security review report path for ${agent?.agentId || "A7"}.`,
+    };
+  }
+  if (!fs.existsSync(path.resolve(REPO_ROOT, summary.reportPath))) {
+    return {
+      ok: false,
+      statusCode: "missing-security-report",
+      detail: `Missing security review report at ${summary.reportPath}.`,
+    };
+  }
+  if (
+    summary.security.state === "clear" &&
+    ((summary.security.findings || 0) > 0 || (summary.security.approvals || 0) > 0)
+  ) {
+    return {
+      ok: false,
+      statusCode: "invalid-security-clear-state",
+      detail:
+        "Security review cannot report clear while findings or approvals remain open.",
+    };
+  }
+  if (summary.security.state === "blocked") {
+    return {
+      ok: false,
+      statusCode: "security-blocked",
+      detail:
+        summary.security.detail ||
+        `Security review reported blocked for ${agent?.agentId || "A7"}.`,
+    };
+  }
+  return {
+    ok: true,
+    statusCode: summary.security.state === "concerns" ? "security-concerns" : "pass",
+    detail:
+      summary.security.detail ||
+      (summary.security.state === "concerns"
+        ? "Security review reported advisory concerns."
+        : "Security review reported clear."),
+  };
+}
+
 export function validateIntegrationSummary(agent, summary) {
   if (!summary?.integration) {
     return {
@@ -515,7 +710,148 @@ export function validateIntegrationSummary(agent, summary) {
   };
 }
 
-export function validateEvaluatorSummary(agent, summary) {
+export function validateContEvalSummary(agent, summary, options = {}) {
+  const mode = String(options.mode || "compat").trim().toLowerCase();
+  const strict = mode === "live";
+  if (!summary?.eval) {
+    return {
+      ok: false,
+      statusCode: "missing-wave-eval",
+      detail: appendTerminationHint(
+        `Missing [wave-eval] marker for ${agent?.agentId || "E0"}.`,
+        summary,
+      ),
+    };
+  }
+  if (strict) {
+    if (!summary.reportPath) {
+      return {
+        ok: false,
+        statusCode: "missing-cont-eval-report",
+        detail: `Missing cont-EVAL report path for ${agent?.agentId || "E0"}.`,
+      };
+    }
+  }
+  if (summary.eval.state !== "satisfied") {
+    return {
+      ok: false,
+      statusCode:
+        summary.eval.state === "blocked" ? "cont-eval-blocked" : "cont-eval-needs-more-work",
+      detail:
+        summary.eval.detail ||
+        `cont-EVAL reported ${summary.eval.state}.`,
+    };
+  }
+  if (summary.reportPath && !fs.existsSync(path.resolve(REPO_ROOT, summary.reportPath))) {
+    return {
+      ok: false,
+      statusCode: "missing-cont-eval-report",
+      detail: `Missing cont-EVAL report at ${summary.reportPath}.`,
+    };
+  }
+  if (strict) {
+    const evalTargets = Array.isArray(options.evalTargets) ? options.evalTargets : [];
+    if (evalTargets.length === 0) {
+      return {
+        ok: false,
+        statusCode: "missing-cont-eval-contract",
+        detail: `Missing eval target contract for ${agent?.agentId || "E0"}.`,
+      };
+    }
+    const expectedTargetIds = uniqueSorted(evalTargets.map((target) => target.id));
+    const actualTargetIds = uniqueSorted(summary.eval.targetIds);
+    if (actualTargetIds.length === 0) {
+      return {
+        ok: false,
+        statusCode: "missing-cont-eval-target-ids",
+        detail: `Missing target_ids in [wave-eval] marker for ${agent?.agentId || "E0"}.`,
+      };
+    }
+    if (summary.eval.targets !== actualTargetIds.length) {
+      return {
+        ok: false,
+        statusCode: "cont-eval-target-count-mismatch",
+        detail: `cont-EVAL reported ${summary.eval.targets} targets, but target_ids enumerates ${actualTargetIds.length}.`,
+      };
+    }
+    if (!sameStringLists(actualTargetIds, expectedTargetIds)) {
+      return {
+        ok: false,
+        statusCode: "cont-eval-target-mismatch",
+        detail: `cont-EVAL target_ids must match the declared eval targets (${expectedTargetIds.join(", ")}).`,
+      };
+    }
+    const actualBenchmarkIds = uniqueSorted(summary.eval.benchmarkIds);
+    if (actualBenchmarkIds.length === 0) {
+      return {
+        ok: false,
+        statusCode: "missing-cont-eval-benchmarks",
+        detail: `Missing benchmark_ids in [wave-eval] marker for ${agent?.agentId || "E0"}.`,
+      };
+    }
+    if (summary.eval.benchmarks !== actualBenchmarkIds.length) {
+      return {
+        ok: false,
+        statusCode: "cont-eval-benchmark-count-mismatch",
+        detail: `cont-EVAL reported ${summary.eval.benchmarks} benchmarks, but benchmark_ids enumerates ${actualBenchmarkIds.length}.`,
+      };
+    }
+    if ((summary.eval.regressions || 0) > 0) {
+      return {
+        ok: false,
+        statusCode: "cont-eval-regressions",
+        detail: summary.eval.detail || "cont-EVAL reported unresolved regressions.",
+      };
+    }
+    const resolvedTargets = resolveEvalTargetsAgainstCatalog(evalTargets, {
+      benchmarkCatalogPath: options.benchmarkCatalogPath,
+    });
+    const actualBenchmarkSet = new Set(actualBenchmarkIds);
+    const allowedBenchmarkIds = new Set(
+      resolvedTargets.targets.flatMap((target) => target.allowedBenchmarks || []),
+    );
+    for (const benchmarkId of actualBenchmarkIds) {
+      if (!allowedBenchmarkIds.has(benchmarkId)) {
+        return {
+          ok: false,
+          statusCode: "cont-eval-benchmark-mismatch",
+          detail: `cont-EVAL selected undeclared benchmark "${benchmarkId}".`,
+        };
+      }
+    }
+    for (const target of resolvedTargets.targets) {
+      if (target.selection === "pinned") {
+        const missingPinned = (target.benchmarks || []).filter(
+          (benchmarkId) => !actualBenchmarkSet.has(benchmarkId),
+        );
+        if (missingPinned.length > 0) {
+          return {
+            ok: false,
+            statusCode: "cont-eval-benchmark-mismatch",
+            detail: `cont-EVAL must include pinned benchmarks for ${target.id}: ${missingPinned.join(", ")}.`,
+          };
+        }
+        continue;
+      }
+      if (!(target.allowedBenchmarks || []).some((benchmarkId) => actualBenchmarkSet.has(benchmarkId))) {
+        return {
+          ok: false,
+          statusCode: "cont-eval-benchmark-mismatch",
+          detail: `cont-EVAL must select at least one benchmark from family "${target.benchmarkFamily}" for ${target.id}.`,
+        };
+      }
+    }
+  }
+  return {
+    ok: true,
+    statusCode: "pass",
+    detail: summary.eval.detail || "cont-EVAL reported satisfied targets.",
+  };
+}
+
+export function validateContQaSummary(agent, summary, options = {}) {
+  const mode = String(options.mode || "compat").trim().toLowerCase();
+  const strict = mode === "live";
   if (!summary?.gate) {
     return {
       ok: false,
@@ -526,10 +862,26 @@ export function validateEvaluatorSummary(agent, summary) {
       ),
     };
   }
+  if (strict) {
+    if (!summary.reportPath) {
+      return {
+        ok: false,
+        statusCode: "missing-cont-qa-report",
+        detail: `Missing cont-QA report path for ${agent?.agentId || "A0"}.`,
+      };
+    }
+    if (!fs.existsSync(path.resolve(REPO_ROOT, summary.reportPath))) {
+      return {
+        ok: false,
+        statusCode: "missing-cont-qa-report",
+        detail: `Missing cont-QA report at ${summary.reportPath}.`,
+      };
+    }
+  }
   if (!summary?.verdict?.verdict) {
     return {
       ok: false,
-      statusCode: "missing-evaluator-verdict",
+      statusCode: "missing-cont-qa-verdict",
       detail: appendTerminationHint(
         `Missing Verdict line or [wave-verdict] marker for ${agent?.agentId || "A0"}.`,
         summary,
@@ -539,8 +891,8 @@ export function validateEvaluatorSummary(agent, summary) {
   if (summary.verdict.verdict !== "pass") {
     return {
       ok: false,
-      statusCode: `evaluator-${summary.verdict.verdict}`,
-      detail: summary.verdict.detail || "Verdict read from evaluator report.",
+      statusCode: `cont-qa-${summary.verdict.verdict}`,
+      detail: summary.verdict.detail || "Verdict read from cont-QA report.",
     };
   }
   for (const key of ["architecture", "integration", "durability", "live", "docs"]) {
@@ -550,13 +902,13 @@ export function validateEvaluatorSummary(agent, summary) {
         statusCode: `gate-${key}-${summary.gate[key]}`,
         detail:
           summary.gate.detail ||
-          `Final evaluator gate did not pass ${key}; got ${summary.gate[key]}.`,
+          `Final cont-QA gate did not pass ${key}; got ${summary.gate[key]}.`,
       };
     }
   }
   return {
     ok: true,
     statusCode: "pass",
-    detail: summary.verdict.detail || summary.gate.detail || "Evaluator gate passed.",
+    detail: summary.verdict.detail || summary.gate.detail || "cont-QA gate passed.",
   };
 }

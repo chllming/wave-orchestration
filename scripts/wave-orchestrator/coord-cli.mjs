@@ -18,7 +18,15 @@ import {
   writeCoordinationBoardProjection,
   writeJsonArtifact,
 } from "./coordination-store.mjs";
-import { buildLanePaths, ensureDirectory, parseNonNegativeInt } from "./shared.mjs";
+import { writeAssignmentSnapshot, writeDependencySnapshot } from "./artifact-schemas.mjs";
+import {
+  buildLanePaths,
+  ensureDirectory,
+  parseNonNegativeInt,
+  readJsonOrNull,
+  REPO_ROOT,
+  sanitizeAdhocRunId,
+} from "./shared.mjs";
 import { parseWaveFiles } from "./wave-files.mjs";
 
 function printUsage() {
@@ -27,6 +35,7 @@ function printUsage() {
   wave coord show --lane <lane> --wave <n> [--dry-run] [--json]
   wave coord render --lane <lane> --wave <n> [--dry-run]
   wave coord inbox --lane <lane> --wave <n> --agent <id> [--dry-run]
+  wave coord <subcommand> --run <id> [--wave 0] ...
 `);
 }
 
@@ -36,6 +45,7 @@ function parseArgs(argv) {
   const options = {
     lane: "main",
     wave: null,
+    runId: "",
     dryRun: false,
     agent: "",
     kind: "",
@@ -52,6 +62,8 @@ function parseArgs(argv) {
     const arg = args[i];
     if (arg === "--lane") {
       options.lane = String(args[++i] || "").trim();
+    } else if (arg === "--run") {
+      options.runId = sanitizeAdhocRunId(args[++i]);
     } else if (arg === "--wave") {
       options.wave = parseNonNegativeInt(args[++i], "--wave");
     } else if (arg === "--agent") {
@@ -84,6 +96,11 @@ function parseArgs(argv) {
     throw new Error("Expected subcommand");
   }
   return { subcommand, options };
+}
+
+function resolveLaneForRun(runId, fallbackLane) {
+  const resultPath = path.join(REPO_ROOT, ".wave", "adhoc", "runs", runId, "result.json");
+  return readJsonOrNull(resultPath)?.lane || fallbackLane;
 }
 
 function loadWave(lanePaths, waveNumber) {
@@ -133,9 +150,32 @@ export async function runCoordinationCli(argv) {
     return;
   }
   const { subcommand, options } = parseArgs(argv);
+  if (options.runId) {
+    options.lane = resolveLaneForRun(options.runId, options.lane);
+  }
   const lanePaths = buildLanePaths(options.lane, {
     runVariant: options.dryRun ? "dry-run" : undefined,
+    adhocRunId: options.runId || null,
   });
+  if (options.wave === null && options.runId) {
+    options.wave = 0;
+  }
+  if (options.wave === null) {
+    throw new Error("--wave is required");
+  }
+  const wave = loadWave(lanePaths, options.wave);
+  const logPath = coordinationLogPath(lanePaths, wave.wave);
+  if (subcommand === "show") {
+    const state = readMaterializedCoordinationState(logPath);
+    if (options.json) {
+      console.log(JSON.stringify(serializeCoordinationState(state), null, 2));
+    } else {
+      for (const record of state.latestRecords) {
+        console.log(`${record.updatedAt} ${record.agentId} ${record.kind}/${record.status} ${record.summary}`);
+      }
+    }
+    return;
+  }
   ensureDirectory(lanePaths.coordinationDir);
   ensureDirectory(lanePaths.assignmentsDir);
   ensureDirectory(lanePaths.inboxesDir);
@@ -144,18 +184,14 @@ export async function runCoordinationCli(argv) {
   ensureDirectory(lanePaths.ledgerDir);
   ensureDirectory(lanePaths.integrationDir);
   ensureDirectory(lanePaths.dependencySnapshotsDir);
-  if (options.wave === null) {
-    throw new Error("--wave is required");
-  }
-  const wave = loadWave(lanePaths, options.wave);
-  const logPath = coordinationLogPath(lanePaths, wave.wave);
   updateSeedRecords(logPath, {
     lane: lanePaths.lane,
     wave: wave.wave,
     agents: wave.agents,
     componentPromotions: wave.componentPromotions,
     sharedPlanDocs: lanePaths.sharedPlanDocs,
-    evaluatorAgentId: lanePaths.evaluatorAgentId,
+    contQaAgentId: lanePaths.contQaAgentId,
+    contEvalAgentId: lanePaths.contEvalAgentId,
     integrationAgentId: lanePaths.integrationAgentId,
     documentationAgentId: lanePaths.documentationAgentId,
     feedbackRequests: [],
@@ -214,22 +250,18 @@ export async function runCoordinationCli(argv) {
     ledger,
     capabilityRouting: lanePaths.capabilityRouting,
   });
-  writeJsonArtifact(assignmentsPath(lanePaths, wave.wave), capabilityAssignments);
-  writeJsonArtifact(dependencySnapshotPath(lanePaths, wave.wave), dependencySnapshot);
+  writeAssignmentSnapshot(assignmentsPath(lanePaths, wave.wave), capabilityAssignments, {
+    lane: lanePaths.lane,
+    wave: wave.wave,
+  });
+  writeDependencySnapshot(dependencySnapshotPath(lanePaths, wave.wave), dependencySnapshot, {
+    lane: lanePaths.lane,
+    wave: wave.wave,
+  });
   writeDependencySnapshotMarkdown(
     dependencySnapshotMarkdownPath(lanePaths, wave.wave),
     dependencySnapshot,
   );
-  if (subcommand === "show") {
-    if (options.json) {
-      console.log(JSON.stringify(serializeCoordinationState(state), null, 2));
-    } else {
-      for (const record of state.latestRecords) {
-        console.log(`${record.updatedAt} ${record.agentId} ${record.kind}/${record.status} ${record.summary}`);
-      }
-    }
-    return;
-  }
   if (subcommand === "render") {
     const boardPath = messageBoardPath(lanePaths, wave.wave);
     writeCoordinationBoardProjection(boardPath, {

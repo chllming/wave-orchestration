@@ -27,12 +27,13 @@ function makeLaneProfile() {
     sharedPlanDocs: [],
     roles: {
       rolePromptDir: "docs/agents",
-      evaluatorAgentId: "A0",
+      contQaAgentId: "A0",
       integrationAgentId: "A8",
       documentationAgentId: "A9",
-      evaluatorRolePromptPath: "docs/agents/wave-evaluator-role.md",
+      contQaRolePromptPath: "docs/agents/wave-cont-qa-role.md",
       integrationRolePromptPath: "docs/agents/wave-integration-role.md",
       documentationRolePromptPath: "docs/agents/wave-documentation-role.md",
+      securityRolePromptPath: "docs/agents/wave-security-role.md",
     },
     validation: {
       requiredPromptReferences: [],
@@ -104,7 +105,7 @@ function makeLaneProfile() {
         implementation: "codex",
         integration: "claude",
         documentation: "claude",
-        evaluator: "claude",
+        "cont-qa": "claude",
         research: "opencode",
         infra: "opencode",
         deploy: "opencode",
@@ -166,6 +167,8 @@ File ownership (only touch these paths):
       fallbacks: [],
       tags: [],
       budget: null,
+      retryPolicy: null,
+      allowFallbackOnRetry: null,
       codex: null,
       claude: {
         agent: "reviewer",

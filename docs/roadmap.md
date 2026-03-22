@@ -12,7 +12,7 @@ The repository already has the right runtime substrate:
 
 - lane-scoped state under `.tmp/`
 - wave parsing and validation
-- role-based execution with evaluator, integration, and documentation stewards
+- role-based execution with cont-qa, integration, and documentation stewards
 - executor profiles and lane runtime policy
 - compiled inboxes, ledgers, docs queues, dependency snapshots, and trace bundles
 - orchestrator-first clarification handling and human feedback workflows
@@ -76,14 +76,17 @@ CLI target:
 - `wave adhoc run --task "..." [--task "..."]`
 - `wave adhoc list`
 - `wave adhoc show --run <id>`
+- `wave adhoc promote --run <id> --wave <n>`
 
 Behavior:
 
 - accept one or more free-form task requests
 - normalize them into a single transient plan or spec
-- synthesize the worker roles needed for the request while still preserving evaluator, integration, and documentation closure when relevant
+- synthesize the worker roles needed for the request while still preserving cont-qa, integration, and documentation closure when relevant
 - run that transient plan through the existing launcher, coordination, inbox, ledger, docs queue, integration, and trace machinery
 - keep ad-hoc runs logged, inspectable, and replayable with the same basic operator surfaces as roadmap waves
+- route shared-plan documentation deltas into the canonical shared docs queue, plus an ad-hoc closure report for the run
+- treat only repo-local paths as ownership hints and ignore external references such as URLs
 
 Storage model:
 
@@ -98,6 +101,7 @@ Design constraints:
 - treat ad-hoc as a transient single-run execution unit, not a fake roadmap wave
 - do not let ad-hoc completion mutate normal `completedWaves` lane state
 - give `wave coord`, `wave feedback`, and future replay or reporting flows a way to target `--run <id>`
+- promote numbered roadmap artifacts from the stored ad-hoc spec instead of recomputing them from the current project profile
 
 Why this matters:
 

@@ -14,6 +14,11 @@ import {
   sleepSync,
   toIsoTimestamp,
 } from "./shared.mjs";
+import { resolveEvalTargetsAgainstCatalog } from "./evals.mjs";
+import {
+  isContEvalImplementationOwningAgent,
+  isSecurityReviewAgent,
+} from "./role-helpers.mjs";
 
 export const ENTRY_HEADER_REGEX = /^##\s+(.+?)\s+\|\s+Agent\s+([A-Za-z0-9.]+)\s*$/;
 export const PLACEHOLDER_TIMESTAMP_REGEX = /\$\{(?:ts|TS)\}/;
@@ -191,8 +196,11 @@ export function buildExecutionPrompt({
   inboxText = "",
   context7 = null,
   componentPromotions = null,
+  evalTargets = null,
+  benchmarkCatalogPath = null,
   sharedPlanDocs = null,
-  evaluatorAgentId = "A0",
+  contQaAgentId = "A0",
+  contEvalAgentId = "E0",
   integrationAgentId = "A8",
   documentationAgentId = "A9",
 }) {
@@ -211,16 +219,39 @@ export function buildExecutionPrompt({
           `${lanePlansDir}/migration.md`,
         ];
   const sharedPlanDocList = resolvedSharedPlanDocs.map((docPath) => `\`${docPath}\``).join(", ");
-  const evaluatorRequirements =
-    agent.agentId === evaluatorAgentId
+  const contEvalImplementationOwning = isContEvalImplementationOwningAgent(agent, {
+    contEvalAgentId,
+  });
+  const resolvedEvalTargets = (() => {
+    try {
+      return resolveEvalTargetsAgainstCatalog(evalTargets, { benchmarkCatalogPath }).targets;
+    } catch {
+      return Array.isArray(evalTargets) ? evalTargets : [];
+    }
+  })();
+  const contQaRequirements =
+    agent.agentId === contQaAgentId
       ? [
-          `- Because you are Agent ${evaluatorAgentId}, your evaluator report must end with exactly one standalone line in the form \`Verdict: PASS\`, \`Verdict: CONCERNS\`, or \`Verdict: BLOCKED\`.`,
+          `- Because you are Agent ${contQaAgentId}, your cont-QA report must end with exactly one standalone line in the form \`Verdict: PASS\`, \`Verdict: CONCERNS\`, or \`Verdict: BLOCKED\`.`,
           "- Also emit one matching structured marker in your terminal output: `[wave-verdict] pass`, `[wave-verdict] concerns`, or `[wave-verdict] blocked`.",
           "- Emit one final structured gate marker: `[wave-gate] architecture=<pass|concerns|blocked> integration=<pass|concerns|blocked> durability=<pass|concerns|blocked> live=<pass|concerns|blocked> docs=<pass|concerns|blocked> detail=<short-note>`.",
           "- Only use `Verdict: PASS` when the wave is coherent enough to unblock the next wave.",
           `- Do not declare PASS until the documentation gate is closed: impacted implementation-owned docs must exist, ${sharedPlanDocList} must reflect plan-affecting outcomes, and no unresolved architecture-versus-plans drift remains.`,
           "- If shared-plan reconciliation is still active inside the wave, require the exact remaining doc delta and an explicit `closed` or `no-change` note from the documentation steward or named owner before finalizing. Do not treat ownership handoff alone as the blocker.",
-          "- Treat the last evaluator section and last structured gate marker as authoritative. Earlier concerns may remain in the append-only report history but do not control final completion if the closure sweep resolves them.",
+          "- Treat the last cont-QA section and last structured gate marker as authoritative. Earlier concerns may remain in the append-only report history but do not control final completion if the closure sweep resolves them.",
+        ]
+      : [];
+  const contEvalRequirements =
+    agent.agentId === contEvalAgentId
+      ? [
+          `- Because you are Agent ${contEvalAgentId}, you own the wave's iterative eval tuning loop.`,
+          contEvalImplementationOwning
+            ? "- You also own explicit non-report files in this wave. For those files, satisfy the same proof, doc-delta, and component-marker obligations as an implementation owner."
+            : "- You are report-only in this wave unless the prompt explicitly assigns additional non-report files. Do not edit product code outside explicit ownership; route exact follow-up work to the owning role.",
+          "- Read the wave's declared eval targets before selecting benchmarks or making tuning changes.",
+          "- Leave an append-only cont-EVAL report that records the selected benchmarks, commands run, observed gaps, regressions, and final disposition.",
+          "- Emit one final structured eval marker: `[wave-eval] state=<satisfied|needs-more-work|blocked> targets=<n> benchmarks=<n> regressions=<n> target_ids=<csv> benchmark_ids=<csv> detail=<short-note>`.",
+          "- Use `satisfied` only when observed outputs or benchmark results meet the declared target, not when the code merely looks better.",
         ]
       : [];
   const docStewardRequirements =
@@ -230,8 +261,18 @@ export function buildExecutionPrompt({
           "- If implementation work is still landing, any early closure note is provisional. Your final closure marker must reflect the post-implementation state seen during the closure sweep.",
         ]
       : [];
+  const securityRequirements = isSecurityReviewAgent(agent)
+    ? [
+        "- You are the wave's security reviewer. Default to report-only work and route fixes to the owning agent instead of editing product code.",
+        "- Leave a security review report with these sections in order: `Threat Model`, `Risky Surfaces`, `Findings`, `Required Approvals`, `Requested Fixes`, and `Final Disposition`.",
+        "- Emit one final structured security marker: `[wave-security] state=<clear|concerns|blocked> findings=<n> approvals=<n> detail=<short-note>`.",
+        "- Use `clear` only when no unresolved findings or approvals remain. Use `blocked` only when the wave must stop before integration.",
+      ]
+    : [];
   const implementationRequirements =
-    ![evaluatorAgentId, documentationAgentId].includes(agent.agentId)
+    ![contQaAgentId, documentationAgentId].includes(agent.agentId) &&
+    !isSecurityReviewAgent(agent) &&
+    (agent.agentId !== contEvalAgentId || contEvalImplementationOwning)
       ? [
           "- Emit one final structured proof marker: `[wave-proof] completion=<contract|integrated|authoritative|live> durability=<none|ephemeral|durable> proof=<unit|integration|live> state=<met|gap> detail=<short-note>`.",
           "- Emit one final structured documentation marker: `[wave-doc-delta] state=<none|owned|shared-plan> paths=<comma-separated-paths> detail=<short-note>`.",
@@ -328,8 +369,22 @@ export function buildExecutionPrompt({
           "",
         ]
       : [];
+  const evalTargetLines =
+    resolvedEvalTargets.length > 0
+      ? [
+          "Eval targets for this wave:",
+          ...(benchmarkCatalogPath ? [`- Benchmark catalog: ${benchmarkCatalogPath}`] : []),
+          ...resolvedEvalTargets.map((target) =>
+            target.selection === "delegated"
+              ? `- ${target.id}: delegated family=${target.benchmarkFamily} allowed-benchmarks=${(target.allowedBenchmarks || []).join(", ")} objective=${target.objective} threshold=${target.threshold}`
+              : `- ${target.id}: pinned benchmarks=${(target.benchmarks || []).join(", ")} objective=${target.objective} threshold=${target.threshold}`,
+          ),
+          "",
+        ]
+      : [];
   const ownedComponentLines =
-    ![evaluatorAgentId, documentationAgentId].includes(agent.agentId) &&
+    ![contQaAgentId, documentationAgentId].includes(agent.agentId) &&
+    (agent.agentId !== contEvalAgentId || contEvalImplementationOwning) &&
     Array.isArray(agent.components) &&
     agent.components.length > 0
       ? [
@@ -346,6 +401,20 @@ export function buildExecutionPrompt({
       ? [
           "Deliverables required for this agent:",
           ...agent.deliverables.map((deliverablePath) => `- ${deliverablePath}`),
+          "",
+        ]
+      : [];
+  const proofArtifactLines =
+    Array.isArray(agent.proofArtifacts) && agent.proofArtifacts.length > 0
+      ? [
+          "Proof artifacts required for this agent:",
+          ...agent.proofArtifacts.map((artifact) => {
+            const requiredFor =
+              Array.isArray(artifact.requiredFor) && artifact.requiredFor.length > 0
+                ? ` required-for=${artifact.requiredFor.join(",")}`
+                : "";
+            return `- ${artifact.path}${artifact.kind ? ` kind=${artifact.kind}` : ""}${requiredFor}`;
+          }),
           "",
         ]
       : [];
@@ -371,7 +440,8 @@ export function buildExecutionPrompt({
     "Role model for this run:",
     "- Wave Orchestrator role: create wave files, initiate wave runs, and manage execution end-to-end.",
     "- WAVE Executor role (you): deliver the assigned outcome end-to-end within your scope and coordinate through the Wave coordination log every turn.",
-    `- Evaluator agent id: ${evaluatorAgentId}`,
+    `- cont-QA agent id: ${contQaAgentId}`,
+    `- cont-EVAL agent id: ${contEvalAgentId}`,
     `- Integration steward agent id: ${integrationAgentId}`,
     `- Documentation steward agent id: ${documentationAgentId}`,
     `- Resolved executor: ${executorId}`,
@@ -397,8 +467,10 @@ export function buildExecutionPrompt({
     "- Emit explicit progress markers in your output: `[wave-phase] coding`, `[wave-phase] validating`, `[wave-phase] deploying`, `[wave-phase] finalizing`.",
     "- During deployment checks, emit structured deployment markers: `[deploy-status] service=<service-name> state=<deploying|healthy|failed|rolledover> detail=<short-note>`.",
     "- If your task touches machine validation, workload identity, node admission, deployment bootstrap, or approved machine actions, emit structured infra markers: `[infra-status] kind=<conformance|role-drift|dependency|identity|admission|action> target=<machine-or-surface> state=<checking|setup-required|setup-in-progress|conformant|drift|blocked|failed|action-required|action-approved|action-complete> detail=<short-note>`.",
-    ...evaluatorRequirements,
+    ...contQaRequirements,
+    ...contEvalRequirements,
     ...docStewardRequirements,
+    ...securityRequirements,
     ...implementationRequirements,
     `- Update docs impacted by your implementation. If your work changes status, sequencing, ownership, or explicit proof expectations, update the relevant docs. If shared plan docs need changes outside your owned files, post the exact doc paths and exact delta needed for ${sharedPlanDocList} as a coordination record instead of leaving documentation drift for later cleanup.`,
     "- If the wave defines a documentation steward or other explicit owner for shared plan docs, coordinate those updates through that owner, notify them as soon as the delta is known, and stay engaged until they confirm `closed` or `no-change`. Do not treat the ownership boundary as the definition of done.",
@@ -426,8 +498,10 @@ export function buildExecutionPrompt({
       : []),
     ...exitContractLines,
     ...promotedComponentLines,
+    ...evalTargetLines,
     ...ownedComponentLines,
     ...deliverableLines,
+    ...proofArtifactLines,
     ...skillLines,
     ...context7PromptLines,
     "Assigned implementation prompt:",

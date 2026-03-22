@@ -9,17 +9,21 @@
     "orchestratorStateDir": ".tmp/wave-orchestrator",
     "terminalsPath": ".vscode/terminals.json",
     "context7BundleIndexPath": "docs/context7/bundles.json",
+    "benchmarkCatalogPath": "docs/evals/benchmark-catalog.json",
     "componentCutoverMatrixDocPath": "docs/plans/component-cutover-matrix.md",
     "componentCutoverMatrixJsonPath": "docs/plans/component-cutover-matrix.json"
   },
   "roles": {
     "rolePromptDir": "docs/agents",
-    "evaluatorAgentId": "A0",
+    "contQaAgentId": "A0",
+    "contEvalAgentId": "E0",
     "integrationAgentId": "A8",
     "documentationAgentId": "A9",
-    "evaluatorRolePromptPath": "docs/agents/wave-evaluator-role.md",
+    "contQaRolePromptPath": "docs/agents/wave-cont-qa-role.md",
+    "contEvalRolePromptPath": "docs/agents/wave-cont-eval-role.md",
     "integrationRolePromptPath": "docs/agents/wave-integration-role.md",
-    "documentationRolePromptPath": "docs/agents/wave-documentation-role.md"
+    "documentationRolePromptPath": "docs/agents/wave-documentation-role.md",
+    "securityRolePromptPath": "docs/agents/wave-security-role.md"
   },
   "executors": {
     "default": "codex",
@@ -40,12 +44,31 @@
           "minutes": 30
         }
       },
+      "eval-tuning": {
+        "id": "codex",
+        "tags": ["eval", "tuning"],
+        "budget": {
+          "turns": 14,
+          "minutes": 45
+        }
+      },
       "docs-pass": {
         "id": "claude",
         "tags": ["documentation"],
         "budget": {
           "turns": 8,
           "minutes": 20
+        }
+      },
+      "security-review": {
+        "id": "claude",
+        "tags": ["security", "review"],
+        "budget": {
+          "turns": 8,
+          "minutes": 20
+        },
+        "claude": {
+          "allowedTools": ["Read", "Edit", "Write", "Bash", "Grep", "Glob"]
         }
       },
       "ops-triage": {
@@ -78,7 +101,9 @@
       "implementation": ["role-implementation"],
       "integration": ["role-integration"],
       "documentation": ["role-documentation"],
-      "evaluator": ["role-evaluator"],
+      "cont-qa": ["role-cont-qa"],
+      "cont-eval": ["role-cont-eval"],
+      "security": ["role-security"],
       "infra": ["role-infra"],
       "deploy": ["role-deploy"],
       "research": ["role-research"]
@@ -94,6 +119,8 @@
       "railway-mcp": ["provider-railway"],
       "docker-compose": ["provider-docker-compose"],
       "kubernetes": ["provider-kubernetes"],
+      "aws": ["provider-aws"],
+      "github-release": ["provider-github-release"],
       "ssh-manual": ["provider-ssh-manual"],
       "custom": ["provider-custom-deploy"]
     }
@@ -123,14 +150,16 @@
       "runtimePolicy": {
         "runtimeMixTargets": {
           "codex": 3,
-          "claude": 3,
+          "claude": 4,
           "opencode": 2
         },
         "defaultExecutorByRole": {
           "implementation": "codex",
           "integration": "claude",
           "documentation": "claude",
-          "evaluator": "claude",
+          "cont-qa": "claude",
+          "cont-eval": "codex",
+          "security": "claude",
           "research": "opencode",
           "infra": "opencode",
           "deploy": "opencode"
