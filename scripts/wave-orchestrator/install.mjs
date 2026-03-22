@@ -1,10 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import {
   applyContext7SelectionsToWave,
   loadContext7BundleIndex,
 } from "./context7.mjs";
 import { buildLanePaths, ensureDirectory, PACKAGE_ROOT, readJsonOrNull, REPO_ROOT, writeJsonAtomic } from "./shared.mjs";
+import { fetchLatestPackageVersion } from "./package-update-notice.mjs";
+import {
+  compareVersions,
+  readInstalledPackageMetadata,
+  WAVE_PACKAGE_NAME,
+} from "./package-version.mjs";
 import { loadWaveConfig } from "./config.mjs";
 import { applyExecutorSelectionsToWave, parseWaveFiles, validateWaveDefinition } from "./wave-files.mjs";
 import { validateLaneSkillConfiguration } from "./skills.mjs";
@@ -14,7 +21,7 @@ export const INSTALL_STATE_DIR = ".wave";
 export const INSTALL_STATE_PATH = path.join(REPO_ROOT, INSTALL_STATE_DIR, "install-state.json");
 export const UPGRADE_HISTORY_DIR = path.join(REPO_ROOT, INSTALL_STATE_DIR, "upgrade-history");
 export const CHANGELOG_MANIFEST_PATH = path.join(PACKAGE_ROOT, "releases", "manifest.json");
-export const PACKAGE_METADATA_PATH = path.join(PACKAGE_ROOT, "package.json");
+export const WORKSPACE_PACKAGE_JSON_PATH = path.join(REPO_ROOT, "package.json");
 export const STARTER_TEMPLATE_PATHS = [
   "wave.config.json",
   "docs/README.md",
@@ -69,11 +76,7 @@ function collectDeclaredDeployKinds(waves = []) {
 }
 
 function packageMetadata() {
-  const payload = readJsonOrNull(PACKAGE_METADATA_PATH);
-  if (!payload?.name || !payload?.version) {
-    throw new Error(`Invalid package metadata: ${PACKAGE_METADATA_PATH}`);
-  }
-  return payload;
+  return readInstalledPackageMetadata();
 }
 
 function readInstallState() {
@@ -147,25 +150,6 @@ function nextHistoryRecord(existingState, entry) {
   const history = Array.isArray(existingState?.history) ? existingState.history.slice(0, 50) : [];
   history.push(entry);
   return history;
-}
-
-function normalizeVersionParts(version) {
-  return String(version || "")
-    .split(".")
-    .map((part) => Number.parseInt(part.replace(/[^0-9].*$/, ""), 10) || 0);
-}
-
-function compareVersions(a, b) {
-  const left = normalizeVersionParts(a);
-  const right = normalizeVersionParts(b);
-  const length = Math.max(left.length, right.length);
-  for (let index = 0; index < length; index += 1) {
-    const diff = (left[index] || 0) - (right[index] || 0);
-    if (diff !== 0) {
-      return diff;
-    }
-  }
-  return 0;
 }
 
 function readChangelogManifest() {
@@ -478,6 +462,186 @@ export function upgradeWorkspace() {
   };
 }
 
+function readWorkspacePackageManifest(workspaceRoot = REPO_ROOT) {
+  const payload = readJsonOrNull(path.join(workspaceRoot, "package.json"));
+  if (!payload || typeof payload !== "object") {
+    throw new Error(`Missing package.json at ${path.join(workspaceRoot, "package.json")}`);
+  }
+  return payload;
+}
+
+function readInstallStateForWorkspace(workspaceRoot = REPO_ROOT) {
+  const payload = readJsonOrNull(path.join(workspaceRoot, INSTALL_STATE_DIR, "install-state.json"));
+  return payload && typeof payload === "object" ? payload : null;
+}
+
+function parsePackageManagerId(value) {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+  if (normalized.startsWith("pnpm@")) {
+    return "pnpm";
+  }
+  if (normalized.startsWith("npm@")) {
+    return "npm";
+  }
+  if (normalized.startsWith("yarn@")) {
+    return "yarn";
+  }
+  if (normalized.startsWith("bun@")) {
+    return "bun";
+  }
+  return null;
+}
+
+export function detectWorkspacePackageManager(workspaceRoot = REPO_ROOT) {
+  const manifest = readWorkspacePackageManifest(workspaceRoot);
+  const packageManagerFromManifest = parsePackageManagerId(manifest.packageManager);
+  if (packageManagerFromManifest) {
+    return {
+      id: packageManagerFromManifest,
+      source: "packageManager",
+      raw: manifest.packageManager,
+    };
+  }
+  for (const [fileName, id] of [
+    ["pnpm-lock.yaml", "pnpm"],
+    ["package-lock.json", "npm"],
+    ["npm-shrinkwrap.json", "npm"],
+    ["yarn.lock", "yarn"],
+    ["bun.lockb", "bun"],
+    ["bun.lock", "bun"],
+  ]) {
+    if (fs.existsSync(path.join(workspaceRoot, fileName))) {
+      return {
+        id,
+        source: "lockfile",
+        raw: fileName,
+      };
+    }
+  }
+  return {
+    id: "npm",
+    source: "default",
+    raw: null,
+  };
+}
+
+function packageManagerCommands(managerId, packageName = WAVE_PACKAGE_NAME) {
+  if (managerId === "pnpm") {
+    return {
+      install: ["pnpm", ["add", "-D", `${packageName}@latest`]],
+      execWave: (args) => ["pnpm", ["exec", "wave", ...args]],
+    };
+  }
+  if (managerId === "npm") {
+    return {
+      install: ["npm", ["install", "--save-dev", `${packageName}@latest`]],
+      execWave: (args) => ["npm", ["exec", "--", "wave", ...args]],
+    };
+  }
+  if (managerId === "yarn") {
+    return {
+      install: ["yarn", ["add", "-D", `${packageName}@latest`]],
+      execWave: (args) => ["yarn", ["exec", "wave", ...args]],
+    };
+  }
+  if (managerId === "bun") {
+    return {
+      install: ["bun", ["add", "-d", `${packageName}@latest`]],
+      execWave: (args) => ["bun", ["x", "wave", ...args]],
+    };
+  }
+  throw new Error(`Unsupported package manager: ${managerId}`);
+}
+
+function runCommandOrThrow(command, args, options = {}) {
+  const spawnImpl = options.spawnImpl || spawnSync;
+  const result = spawnImpl(command, args, {
+    cwd: options.workspaceRoot || REPO_ROOT,
+    stdio: options.stdio || "inherit",
+    env: options.env || process.env,
+    encoding: "utf8",
+  });
+  const status = Number.isInteger(result?.status) ? result.status : 1;
+  if (status !== 0) {
+    throw new Error(`${command} ${args.join(" ")} failed with status ${status}`);
+  }
+  return result;
+}
+
+export async function selfUpdateWorkspace(options = {}) {
+  const workspaceRoot = options.workspaceRoot || REPO_ROOT;
+  const metadata = options.packageMetadata || packageMetadata();
+  const installState = readInstallStateForWorkspace(workspaceRoot);
+  const packageManager = detectWorkspacePackageManager(workspaceRoot);
+  const commands = packageManagerCommands(packageManager.id, metadata.name || WAVE_PACKAGE_NAME);
+  const emit = options.emit || console.log;
+  let latestVersion = null;
+
+  try {
+    latestVersion = await fetchLatestPackageVersion(metadata.name || WAVE_PACKAGE_NAME, {
+      fetchImpl: options.fetchImpl,
+      timeoutMs: options.timeoutMs,
+    });
+  } catch {
+    latestVersion = null;
+  }
+
+  const currentVersion = String(metadata.version || "").trim();
+  const recordedVersion = String(installState?.installedVersion || "").trim() || null;
+  const needsUpgradeOnly = recordedVersion && compareVersions(currentVersion, recordedVersion) !== 0;
+
+  emit(`[wave:self-update] package_manager=${packageManager.id}`);
+
+  if (latestVersion && compareVersions(latestVersion, currentVersion) <= 0) {
+    if (!needsUpgradeOnly) {
+      emit(`[wave:self-update] ${metadata.name} is already current at ${currentVersion}.`);
+      return {
+        mode: "already-current",
+        packageManager: packageManager.id,
+        currentVersion,
+        latestVersion,
+      };
+    }
+    emit(
+      `[wave:self-update] dependency is already at ${currentVersion}; recording workspace upgrade state.`,
+    );
+    const [upgradeCommand, upgradeArgs] = commands.execWave(["upgrade"]);
+    runCommandOrThrow(upgradeCommand, upgradeArgs, options);
+    return {
+      mode: "upgrade-only",
+      packageManager: packageManager.id,
+      currentVersion,
+      latestVersion,
+    };
+  }
+
+  emit(
+    `[wave:self-update] updating ${metadata.name} from ${currentVersion}${latestVersion ? ` to ${latestVersion}` : " to the latest published version"}.`,
+  );
+  const [installCommand, installArgs] = commands.install;
+  runCommandOrThrow(installCommand, installArgs, options);
+
+  emit("[wave:self-update] release notes since the recorded install:");
+  const [changelogCommand, changelogArgs] = commands.execWave(["changelog", "--since-installed"]);
+  runCommandOrThrow(changelogCommand, changelogArgs, options);
+
+  emit("[wave:self-update] recording install-state and upgrade report:");
+  const [upgradeCommand, upgradeArgs] = commands.execWave(["upgrade"]);
+  runCommandOrThrow(upgradeCommand, upgradeArgs, options);
+
+  return {
+    mode: "updated",
+    packageManager: packageManager.id,
+    currentVersion,
+    latestVersion,
+  };
+}
+
 function printJson(payload) {
   console.log(JSON.stringify(payload, null, 2));
 }
@@ -486,6 +650,7 @@ function printHelp() {
   console.log(`Usage:
   wave init [--adopt-existing] [--json]
   wave upgrade [--json]
+  wave self-update
   wave changelog [--since-installed] [--json]
   wave doctor [--json]
 `);
@@ -559,6 +724,14 @@ export async function runInstallCli(argv) {
         console.error(`[wave:upgrade] error: ${error}`);
       }
     }
+    return;
+  }
+
+  if (subcommand === "self-update") {
+    if (options.json) {
+      throw new Error("`wave self-update` does not support --json.");
+    }
+    await selfUpdateWorkspace();
     return;
   }
 

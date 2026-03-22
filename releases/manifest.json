@@ -3,6 +3,21 @@
   "packageName": "@chllming/wave-orchestration",
   "releases": [
     {
+      "version": "0.6.3",
+      "date": "2026-03-22",
+      "summary": "Runtime npmjs update notices plus a one-command self-update flow for downstream repos.",
+      "features": [
+        "Top-level runtime entrypoints now perform a best-effort npmjs version check, cache the result under `.wave/package-update-check.json`, and emit a non-blocking stderr notice when a newer `@chllming/wave-orchestration` release is available.",
+        "New `wave self-update` detects the workspace package manager, updates the package dependency to the latest published release, prints the changelog delta since the recorded install, and then runs `wave upgrade`.",
+        "Autonomous and ad-hoc flows now suppress nested update notices so operators see at most one banner per top-level run, while structured stdout such as `wave adhoc run --json` remains parseable."
+      ],
+      "manualSteps": [
+        "No migration is required. If you prefer not to check npmjs at runtime on a workstation, set `WAVE_SKIP_UPDATE_CHECK=1` in that shell environment.",
+        "After upgrading, try `pnpm exec wave self-update` once in an adopted repo to confirm the workspace package manager and install-state workflow behave the way you expect."
+      ],
+      "breaking": false
+    },
+    {
       "version": "0.6.2",
       "date": "2026-03-22",
       "summary": "Runtime preview visibility, dashboard/operator UX fixes, dry-run cleanup, and safer shared-component retries.",

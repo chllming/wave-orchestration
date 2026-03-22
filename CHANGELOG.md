@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.6.3 - 2026-03-22
+
+- Added a best-effort npmjs update notice on `wave launch`, `wave autonomous`, and `wave adhoc run`, with cached lookup state under `.wave/package-update-check.json` and opt-out via `WAVE_SKIP_UPDATE_CHECK=1`.
+- Added `wave self-update`, which detects the workspace package manager, updates `@chllming/wave-orchestration`, prints the changelog delta since the recorded install, and then runs `wave upgrade`.
+- Suppressed duplicate notices for nested launcher calls so autonomous and ad-hoc runs announce at most once, while keeping JSON-oriented stdout surfaces clean by emitting notices on stderr.
+- Documented the new update flow and added regression coverage for notice caching, package-manager-aware self-update, and nested-launch suppression.
+
 ## 0.6.2 - 2026-03-22
 
 - Added first-class `claude.effort` support across config profiles, lane overrides, and per-agent `### Executor` blocks, and now emit `--effort` in Claude launch previews and live runs.

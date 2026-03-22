@@ -2,7 +2,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  detectWorkspacePackageManager,
+  selfUpdateWorkspace,
+} from "../../scripts/wave-orchestrator/install.mjs";
 import { PACKAGE_ROOT, REPO_ROOT } from "../../scripts/wave-orchestrator/shared.mjs";
 
 const tempDirs = [];
@@ -43,6 +47,7 @@ function runWaveCli(args, options = {}) {
     cwd: options.cwd || REPO_ROOT,
     env: {
       ...process.env,
+      WAVE_SKIP_UPDATE_CHECK: "1",
       ...(options.env || {}),
     },
     encoding: "utf8",
@@ -53,6 +58,7 @@ afterEach(() => {
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+  vi.restoreAllMocks();
 });
 
 describe("wave init", () => {
@@ -272,5 +278,103 @@ describe("wave doctor", () => {
         "Missing recommended .gitignore entry: .vscode/terminals.json",
       ]),
     );
+  });
+});
+
+describe("workspace package manager detection", () => {
+  it("prefers packageManager from package.json", () => {
+    const repoDir = makeTempRepo();
+    fs.writeFileSync(
+      path.join(repoDir, "package.json"),
+      JSON.stringify({ name: "fixture-repo", private: true, packageManager: "pnpm@10.23.0" }, null, 2),
+      "utf8",
+    );
+
+    expect(detectWorkspacePackageManager(repoDir)).toMatchObject({
+      id: "pnpm",
+      source: "packageManager",
+    });
+  });
+});
+
+describe("wave self-update", () => {
+  it("runs only `wave upgrade` when the dependency is already current but install-state is behind", async () => {
+    const repoDir = makeTempRepo();
+    fs.writeFileSync(
+      path.join(repoDir, "package.json"),
+      JSON.stringify({ name: "fixture-repo", private: true, packageManager: "pnpm@10.23.0" }, null, 2),
+      "utf8",
+    );
+    fs.mkdirSync(path.join(repoDir, ".wave"), { recursive: true });
+    fs.writeFileSync(
+      path.join(repoDir, ".wave", "install-state.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          packageName: "@chllming/wave-orchestration",
+          installedVersion: "0.6.1",
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    const calls = [];
+    const spawnImpl = vi.fn((command, args) => {
+      calls.push([command, args]);
+      return { status: 0 };
+    });
+
+    const result = await selfUpdateWorkspace({
+      workspaceRoot: repoDir,
+      packageMetadata: {
+        name: "@chllming/wave-orchestration",
+        version: CURRENT_PACKAGE_VERSION,
+      },
+      fetchImpl: async () => ({
+        ok: true,
+        json: async () => ({ version: CURRENT_PACKAGE_VERSION }),
+      }),
+      spawnImpl,
+      emit: () => {},
+    });
+
+    expect(result.mode).toBe("upgrade-only");
+    expect(calls).toEqual([["pnpm", ["exec", "wave", "upgrade"]]]);
+  });
+
+  it("updates the dependency, shows changelog delta, and records the upgrade", async () => {
+    const repoDir = makeTempRepo();
+    fs.writeFileSync(
+      path.join(repoDir, "package.json"),
+      JSON.stringify({ name: "fixture-repo", private: true, packageManager: "pnpm@10.23.0" }, null, 2),
+      "utf8",
+    );
+    const calls = [];
+    const spawnImpl = vi.fn((command, args) => {
+      calls.push([command, args]);
+      return { status: 0 };
+    });
+
+    const result = await selfUpdateWorkspace({
+      workspaceRoot: repoDir,
+      packageMetadata: {
+        name: "@chllming/wave-orchestration",
+        version: CURRENT_PACKAGE_VERSION,
+      },
+      fetchImpl: async () => ({
+        ok: true,
+        json: async () => ({ version: "9.9.9" }),
+      }),
+      spawnImpl,
+      emit: () => {},
+    });
+
+    expect(result.mode).toBe("updated");
+    expect(calls).toEqual([
+      ["pnpm", ["add", "-D", "@chllming/wave-orchestration@latest"]],
+      ["pnpm", ["exec", "wave", "changelog", "--since-installed"]],
+      ["pnpm", ["exec", "wave", "upgrade"]],
+    ]);
   });
 });
