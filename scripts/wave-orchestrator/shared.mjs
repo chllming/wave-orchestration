@@ -93,6 +93,22 @@ export function sanitizeAdhocRunId(value) {
   return id;
 }
 
+export function buildWorkspaceTmuxToken(workspaceRoot = REPO_ROOT) {
+  const repoBase =
+    path
+      .basename(path.resolve(String(workspaceRoot || REPO_ROOT)))
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "")
+      .slice(0, 12) || "repo";
+  const repoHash = crypto
+    .createHash("sha1")
+    .update(path.resolve(String(workspaceRoot || REPO_ROOT)))
+    .digest("hex")
+    .slice(0, 8);
+  return `${repoBase}_${repoHash}`;
+}
+
 export function buildLanePaths(laneInput = DEFAULT_WAVE_LANE, options = {}) {
   const config = options.config || loadWaveConfig();
   const baseLaneProfile = resolveLaneProfile(config, laneInput || config.defaultLane);
@@ -116,6 +132,7 @@ export function buildLanePaths(laneInput = DEFAULT_WAVE_LANE, options = {}) {
   if (runVariant && runVariant !== "dry-run") {
     throw new Error(`Unsupported lane path variant: ${options.runVariant}`);
   }
+  const workspaceTmuxToken = buildWorkspaceTmuxToken(REPO_ROOT);
   const docsDir = path.join(REPO_ROOT, laneProfile.docsDir);
   const plansDir = path.join(REPO_ROOT, laneProfile.plansDir);
   const preferredWavesDir = path.join(REPO_ROOT, laneProfile.wavesDir);
@@ -214,10 +231,10 @@ export function buildLanePaths(laneInput = DEFAULT_WAVE_LANE, options = {}) {
     terminalNamePrefix: `${lane}-wave`,
     dashboardTerminalNamePrefix: `${lane}-wave-dashboard`,
     globalDashboardTerminalName: `${lane}-wave-dashboard-global`,
-    tmuxSessionPrefix: `oc_${laneTmux}_wave`,
-    tmuxDashboardSessionPrefix: `oc_${laneTmux}_wave_dashboard`,
-    tmuxGlobalDashboardSessionPrefix: `oc_${laneTmux}_wave_dashboard_global`,
-    tmuxSocketName: `oc_${laneTmux}_waves`,
+    tmuxSessionPrefix: `oc_${laneTmux}_${workspaceTmuxToken}_wave`,
+    tmuxDashboardSessionPrefix: `oc_${laneTmux}_${workspaceTmuxToken}_wave_dashboard`,
+    tmuxGlobalDashboardSessionPrefix: `oc_${laneTmux}_${workspaceTmuxToken}_wave_dashboard_global`,
+    tmuxSocketName: `oc_${laneTmux}_${workspaceTmuxToken}_waves`,
     orchestratorStateDir,
     defaultOrchestratorBoardPath: path.join(
       orchestratorStateDir,
