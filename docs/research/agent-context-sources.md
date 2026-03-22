@@ -7,6 +7,8 @@ summary: "Primary external sources used as inspiration for planning, harness des
 
 This repository does not commit converted paper/article caches. Keep any hydrated local copies under `docs/research/agent-context-cache/` or another ignored cache directory.
 
+For a narrative synthesis of the most relevant MAS failure modes and how Wave responds to them, start with [coordination-failure-review.md](./coordination-failure-review.md) and then use this page as the bibliography.
+
 ## Practice Articles
 
 - [Harness engineering: leveraging Codex in an agent-first world](https://openai.com/index/harness-engineering/)

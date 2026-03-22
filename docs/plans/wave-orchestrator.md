@@ -4,6 +4,14 @@ The Wave Orchestrator coordinates repository work as bounded execution waves.
 
 For the broader docs map, concept pages, and workflow guides, start at [docs/README.md](../README.md).
 
+This runbook is the operational view of the architecture:
+
+- one wave contract defines goals, ownership, proof, and closure
+- one canonical coordination log acts as the shared blackboard state
+- generated board, shared summary, inboxes, ledger, and integration outputs are projections over that state
+- executor adapters preserve Claude, Codex, and OpenCode-specific runtime features at the edge
+- closure makes completion depend on integrated proof and shared state, not on free-form agent narration
+
 ## What It Does
 
 - parses wave plans from `docs/plans/waves/`

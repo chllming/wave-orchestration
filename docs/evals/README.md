@@ -16,6 +16,8 @@ The catalog is reference metadata, not a run-history database. It tells the wave
 
 For a full authored wave example that uses these patterns, see [docs/reference/sample-waves.md](../reference/sample-waves.md).
 
+These benchmark families are also Wave's operator-facing vocabulary for common MAS failure modes. For the research-side framing and the current architectural gaps, see [docs/research/coordination-failure-review.md](../research/coordination-failure-review.md).
+
 ## Migrating From Legacy Evaluator Waves
 
 If your `0.5.4`-era repo still talks about a single `evaluator` role, split that surface before adopting `0.6.1`:
