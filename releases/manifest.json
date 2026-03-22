@@ -3,6 +3,24 @@
   "packageName": "@chllming/wave-orchestration",
   "releases": [
     {
+      "version": "0.6.0",
+      "date": "2026-03-22",
+      "summary": "Closure-role split, benchmark-governed cont-EVAL, security review, ad-hoc runs, and expanded skills and docs.",
+      "features": [
+        "The closure model now treats `cont-EVAL` (`E0`) as an optional first-class eval stage before integration and keeps `cont-QA` (`A0`) as the final release verdict owner, with dedicated validation and report requirements for each role.",
+        "Wave authoring now includes a benchmark catalog under `docs/evals/benchmark-catalog.json`, wave-level `## Eval targets`, and planner, launcher, and validation support for delegated versus pinned eval contracts.",
+        "Optional report-only security review now has its own role prompt, validation path, `[wave-security]` marker, security summaries, and closure-stage sequencing.",
+        "Operators can now run transient ad-hoc work through `wave adhoc plan|run|show|promote`, with generated specs, launcher-compatible markdown, isolated runtime state, and promotion back into numbered roadmap artifacts.",
+        "The starter docs and skills surface now ship richer role, runtime, deploy-kind, provider, and proof-first guidance across the package-owned `docs/` and `skills/` trees."
+      ],
+      "manualSteps": [
+        "After upgrading, update any repo-owned `evaluator` role references to the new `cont-QA` plus optional `cont-EVAL` split before running live waves.",
+        "If a wave uses `cont-EVAL`, declare `## Eval targets` at the wave level and keep benchmark ids inside `docs/evals/benchmark-catalog.json`.",
+        "Run `pnpm exec wave doctor` and `pnpm exec wave launch --lane main --dry-run --no-dashboard` after upgrading so the stricter closure, skill, and security validation paths can fail fast before live execution."
+      ],
+      "breaking": false
+    },
+    {
       "version": "0.5.4",
       "date": "2026-03-22",
       "summary": "Planner foundation, cross-runtime skills, and clearer docs and reconcile output.",
