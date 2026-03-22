@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## 0.6.3 - 2026-03-22
+
+- Added a best-effort npmjs update notice on `wave launch`, `wave autonomous`, and `wave adhoc run`, with cached lookup state under `.wave/package-update-check.json` and opt-out via `WAVE_SKIP_UPDATE_CHECK=1`.
+- Added `wave self-update`, which detects the workspace package manager, updates `@chllming/wave-orchestration`, prints the changelog delta since the recorded install, and then runs `wave upgrade`.
+- Suppressed duplicate notices for nested launcher calls so autonomous and ad-hoc runs announce at most once, while keeping JSON-oriented stdout surfaces clean by emitting notices on stderr.
+- Documented the new update flow and added regression coverage for notice caching, package-manager-aware self-update, and nested-launch suppression.
+
+## 0.6.2 - 2026-03-22
+
+- Added first-class `claude.effort` support across config profiles, lane overrides, and per-agent `### Executor` blocks, and now emit `--effort` in Claude launch previews and live runs.
+- Clarified operator runtime visibility with additive `launch-preview.json` `limits` metadata, including explicit known turn ceilings for Claude/OpenCode and explicit Codex opacity when Wave does not emit a turn-limit flag.
+- Clarified dashboard and terminal UX: global wave counts now distinguish done, active, pending, and failed agents; the current-wave dashboard keeps a stable terminal name; and TTY dashboards use simple color cues for faster scanning.
+- Pruned stale dry-run executor preview directories when wave agent sets shrink, so manual inspection of `.tmp/.../dry-run/executors/` matches the current manifest.
+- Preserved already-landed implementation slices for shared promoted components by retrying only the sibling owners that still owe closure proof instead of blindly replaying the landed owner.
+- Added release-surface alignment regression coverage and updated the shipped docs so README, runtime-config references, changelog, and release metadata match the `0.6.2` package surface.
+
 ## 0.6.1 - 2026-03-22
 
 - Published the post-merge `main` source as `0.6.1` so the default branch, tagged source, and package docs all agree on the current release.

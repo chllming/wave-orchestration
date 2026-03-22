@@ -26,7 +26,10 @@ function runWaveCli(args, cwd) {
   return spawnSync("node", [path.join(PACKAGE_ROOT, "scripts", "wave.mjs"), ...args], {
     cwd,
     encoding: "utf8",
-    env: process.env,
+    env: {
+      ...process.env,
+      WAVE_SKIP_UPDATE_CHECK: "1",
+    },
   });
 }
 

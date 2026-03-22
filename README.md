@@ -75,17 +75,16 @@ Wave is built to mitigate those failures with canonical shared state, generated 
 
 Current release:
 
-- `@chllming/wave-orchestration@0.6.1`
-- Release tag: [`v0.6.1`](https://github.com/chllming/wave-orchestration/releases/tag/v0.6.1)
+- `@chllming/wave-orchestration@0.6.3`
+- Release tag: [`v0.6.3`](https://github.com/chllming/wave-orchestration/releases/tag/v0.6.3)
 - Public install path: npmjs
 - Authenticated fallback: GitHub Packages
 
-Highlights in `0.6.1`:
+Highlights in `0.6.3`:
 
-- `cont-EVAL` (`E0`) is now a first-class optional eval stage before integration, separate from final `cont-QA` closure.
-- Optional security review now has a dedicated role, report path, and `[wave-security]` closure marker.
-- `wave adhoc plan|run|show|promote` now supports transient operator requests on the same launcher substrate.
-- Starter docs and skills now cover the current `0.6.1` closure, benchmark, security, and provider surfaces.
+- Runtime launch entrypoints now check npmjs for a newer published package in the background, cache the result under `.wave/package-update-check.json`, and warn on stderr when the workspace is behind.
+- `wave self-update` now gives downstream repos a one-command update path that detects the workspace package manager, updates the dependency, shows the changelog delta, and records the workspace upgrade report.
+- Autonomous and ad-hoc flows suppress nested notices so operators see at most one update banner per top-level run, and structured stdout remains clean for JSON consumers.
 
 Requirements:
 
@@ -113,6 +112,8 @@ pnpm exec wave init --adopt-existing
 
 Fresh init also seeds a starter `skills/` library plus `docs/evals/benchmark-catalog.json`. The launcher projects those skill bundles into Codex, Claude, OpenCode, and local executor overlays after the final runtime for each agent is resolved, and waves that include `cont-EVAL` can declare `## Eval targets` against that catalog.
 
+When runtime launch commands detect a newer npmjs release, Wave prints a non-blocking update notice on stderr. The fast path is `pnpm exec wave self-update`, which updates the dependency, prints the changelog delta, and then records the workspace upgrade report.
+
 ## Common Commands
 
 ```bash
@@ -129,6 +130,9 @@ pnpm exec wave dep show --lane main --wave 0 --json
 
 # Run autonomous mode after the wave set is stable
 pnpm exec wave autonomous --lane main --executor codex --codex-sandbox danger-full-access
+
+# Pull the latest published package and record the workspace upgrade
+pnpm exec wave self-update
 ```
 
 ## Develop This Package

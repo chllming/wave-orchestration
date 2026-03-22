@@ -26,6 +26,7 @@ function runWaveCli(args, options = {}) {
     timeout: options.timeout || 60000,
     env: {
       ...process.env,
+      WAVE_SKIP_UPDATE_CHECK: "1",
       ...(options.env || {}),
     },
   });
