@@ -3,6 +3,23 @@
   "packageName": "@chllming/wave-orchestration",
   "releases": [
     {
+      "version": "0.5.1",
+      "date": "2026-03-22",
+      "summary": "Phase 4 fix release plus npmjs trusted-publishing bootstrap support.",
+      "features": [
+        "Final lane completion now stays blocked on unresolved human feedback and escalation tickets from completed waves, matching the intended Phase 4 barrier behavior.",
+        "Hermetic trace fixtures now rewrite seeded per-agent executor blocks so local replay coverage cannot accidentally launch live Codex, Claude Code, or OpenCode sessions.",
+        "A dedicated npmjs publish workflow now exists alongside the GitHub Packages workflow, with `package.json` publish metadata updated so each workflow can target its own registry cleanly.",
+        "Install and maintainer docs now distinguish the current GitHub Packages path from the future zero-token npmjs path and document trusted-publishing bootstrap."
+      ],
+      "manualSteps": [
+        "Push `main` and tag `v0.5.1` before publishing, so the npm tarball matches the tagged source exactly.",
+        "For the first npmjs release, authenticate locally and run `npm publish --access public --registry=https://registry.npmjs.org` from the `0.5.1` checkout.",
+        "After the first npmjs release exists, configure npm trusted publishing for `chllming / wave-orchestration / publish-npm.yml` so later tagged releases no longer need manual npm auth."
+      ],
+      "breaking": false
+    },
+    {
       "version": "0.5.0",
       "date": "2026-03-22",
       "summary": "Phase 4 helper assignment routing, cross-lane dependency workflows, and publish-ready package metadata.",

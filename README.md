@@ -17,9 +17,9 @@ It includes:
 ## Quick Start
 
 Published package:
-- `@chllming/wave-orchestration@0.5.0`
+- `@chllming/wave-orchestration@0.5.1`
 - Current release registry: `https://npm.pkg.github.com`
-- Release: [v0.5.0](https://github.com/chllming/wave-orchestration/releases/tag/v0.5.0)
+- Release: [v0.5.1](https://github.com/chllming/wave-orchestration/releases/tag/v0.5.1)
 - npmjs trusted publishing workflow: [publish-npm.yml](./.github/workflows/publish-npm.yml)
 
 Install after configuring the current GitHub Packages path from [github-packages-setup.md](./docs/reference/github-packages-setup.md):
@@ -37,6 +37,12 @@ If your repo already has Wave config, docs, or waves you want to keep:
 ```bash
 pnpm exec wave init --adopt-existing
 ```
+
+## New In 0.5.1
+
+- Phase 4 finalization now correctly stays blocked on unresolved human feedback and escalation items from completed waves.
+- Hermetic trace fixtures now force local executor coverage for seeded control-plane agents, so replay tests cannot accidentally launch real Codex, Claude Code, or OpenCode sessions.
+- npmjs trusted publishing is now wired in parallel with GitHub Packages, with maintainer docs for the first public npmjs release bootstrap.
 
 ## New In 0.5.0
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.1 - 2026-03-22
+
+- Fixed the Phase 4 autonomous finalization barrier so completed lanes still block on unresolved human feedback or escalation tickets from earlier waves.
+- Fixed the launcher-generated trace tests to rewrite seeded agent executor blocks for local-only replay fixtures, preventing accidental live Codex, Claude Code, or OpenCode launches during hermetic trace coverage.
+- Added a dedicated npmjs trusted-publishing workflow alongside the existing GitHub Packages workflow, and updated package metadata so `npm publish` targets can be selected by workflow instead of being hardwired in `package.json`.
+- Added maintainer documentation for the npmjs bootstrap path and clarified that GitHub Packages remains the current authenticated install path until the first npmjs release is published.
+
 ## 0.5.0 - 2026-03-22
 
 - Added Phase 4 runtime coordination: capability-targeted requests now become explicit helper assignments with deterministic assignee selection, assignment snapshots, ledger coverage, inbox visibility, and closure barriers.
