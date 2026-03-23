@@ -12,11 +12,15 @@
         "Wave Control telemetry: local-first event queueing with best-effort batch delivery, configurable report modes, selective artifact upload, and per-category capture toggles.",
         "Live-wave orchestration refresh that keeps coordination surfaces, clarification triage, and dashboard metrics current during active execution.",
         "Resident orchestrator support via `--resident-orchestrator` for long-running non-owning monitoring sessions.",
-        "Native and external benchmark telemetry with failure-review validity classification and config attestation hashing."
+        "Native and external benchmark telemetry with failure-review validity classification and config attestation hashing.",
+        "Stable dashboard reattach via `wave dashboard --attach current|global`, plus live `launch-preview.json` artifacts that preserve observed Codex turn ceilings without pretending Wave set them.",
+        "Historical `reconcile-status` now preserves previously authoritative completed waves as completed-with-drift when the only mismatch is prompt-hash drift.",
+        "Fresh live launches now clear stale auto-generated relaunch plans by default, while `wave control status` treats the active attempt as the authoritative fan-out instead of replaying stale relaunch state."
       ],
       "manualSteps": [
         "Existing `wave coord`, `wave retry`, and `wave proof` commands remain available as compatibility surfaces. No migration required, but new operator docs prefer `wave control`.",
-        "To enable Wave Control telemetry, add a `waveControl` section to `wave.config.json` with at minimum an `endpoint` and `workspaceId`. Pass `--no-telemetry` to disable for a single run."
+        "To enable Wave Control telemetry, add a `waveControl` section to `wave.config.json` with at minimum an `endpoint` and `workspaceId`. Pass `--no-telemetry` to disable for a single run.",
+        "If an adopted `0.6.x` repo fails `wave doctor` after the `0.7.x` upgrade, sync the repo-owned planner starter surface (`docs/agents/wave-planner-role.md`, `skills/role-planner/`, `docs/context7/planner-agent/`, `docs/reference/wave-planning-lessons.md`, and the `planner-agentic` bundle entry) before relying on planner-aware validation."
       ],
       "breaking": false
     },
