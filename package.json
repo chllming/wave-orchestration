@@ -6,11 +6,11 @@
   "packageManager": "pnpm@10.23.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/chllming/wave-orchestration.git"
+    "url": "git+https://github.com/chllming/agent-wave-orchestrator.git"
   },
-  "homepage": "https://github.com/chllming/wave-orchestration#readme",
+  "homepage": "https://github.com/chllming/agent-wave-orchestrator#readme",
   "bugs": {
-    "url": "https://github.com/chllming/wave-orchestration/issues"
+    "url": "https://github.com/chllming/agent-wave-orchestrator/issues"
   },
   "publishConfig": {
     "access": "public"

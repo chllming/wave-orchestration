@@ -18,7 +18,7 @@ The current `0.7.0` release procedure publishes through a repository Actions sec
    - package or scope access for `@chllming/wave-orchestration`
    - `Read and write` permission
    - `Bypass 2FA` enabled
-2. In the GitHub repo `chllming/wave-orchestration`, add that token as an Actions secret named `NPM_TOKEN`.
+2. In the GitHub repo `chllming/agent-wave-orchestrator`, add that token as an Actions secret named `NPM_TOKEN`.
 3. Rotate or revoke the token when no longer needed.
 
 ## GitHub Workflow Behavior

@@ -80,7 +80,7 @@ Wave is built to mitigate those failures with canonical shared state, generated 
 Current release:
 
 - `@chllming/wave-orchestration@0.7.0`
-- Release tag: [`v0.7.0`](https://github.com/chllming/wave-orchestration/releases/tag/v0.7.0)
+- Release tag: [`v0.7.0`](https://github.com/chllming/agent-wave-orchestrator/releases/tag/v0.7.0)
 - Public install path: npmjs
 - Authenticated fallback: GitHub Packages
 
