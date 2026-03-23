@@ -308,13 +308,9 @@ The launcher entrypoint in `scripts/wave-orchestrator/launcher.mjs` now delegate
   [claude.md](../reference/runtime-config/claude.md),
   [opencode.md](../reference/runtime-config/opencode.md).
 
-## Benchmark CLI
+## CLI Reference
 
-- `wave benchmark list` lists local benchmark cases from the catalog.
-- `wave benchmark show --case <id>` shows a single case definition.
-- `wave benchmark run --case <id>` executes a local deterministic case.
-- `wave benchmark adapters` lists available external benchmark adapters.
-- `wave benchmark external-list|external-show|external-run|external-pilots` manage external benchmark targets (e.g., SWE-bench Pro).
+For the complete syntax of every command, flag, and subcommand, see [docs/reference/cli-reference.md](../reference/cli-reference.md).
 
 ## Executor Modes
 
