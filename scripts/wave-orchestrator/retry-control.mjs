@@ -5,6 +5,12 @@ import {
   readRelaunchPlan,
   writeRetryOverride,
 } from "./artifact-schemas.mjs";
+import {
+  appendWaveControlEvent,
+  readWaveControlPlaneState,
+  syncWaveControlPlaneProjections,
+} from "./control-plane.mjs";
+import { isSecurityReviewAgent } from "./role-helpers.mjs";
 import { ensureDirectory, parseNonNegativeInt } from "./shared.mjs";
 
 function uniqueAgentIds(values) {
@@ -26,22 +32,95 @@ export function waveRelaunchPlanPath(lanePaths, waveNumber) {
 }
 
 export function readWaveRetryOverride(lanePaths, waveNumber) {
+  const state = readWaveControlPlaneState(lanePaths, waveNumber);
+  const activeRequest = state.activeRerunRequest;
+  if (!activeRequest && state.rerunRequests.length === 0) {
+    return readRetryOverride(waveRetryOverridePath(lanePaths, waveNumber), {
+      lane: lanePaths?.lane || null,
+      wave: waveNumber,
+    });
+  }
+  if (!activeRequest) {
+    return null;
+  }
   return readRetryOverride(waveRetryOverridePath(lanePaths, waveNumber), {
     lane: lanePaths?.lane || null,
     wave: waveNumber,
-  });
+  }) || {
+    lane: lanePaths?.lane || null,
+    wave: waveNumber,
+    selectedAgentIds: activeRequest.selectedAgentIds,
+    clearReusableAgentIds: activeRequest.clearReusableAgentIds,
+    preserveReusableAgentIds: activeRequest.preserveReusableAgentIds,
+    resumePhase: activeRequest.resumeCursor || null,
+    requestedBy: activeRequest.requestedBy || "human-operator",
+    reason: activeRequest.reason || null,
+    applyOnce: activeRequest.applyOnce !== false,
+    createdAt: activeRequest.createdAt,
+  };
 }
 
 export function writeWaveRetryOverride(lanePaths, waveNumber, payload) {
   const filePath = waveRetryOverridePath(lanePaths, waveNumber);
   ensureDirectory(path.dirname(filePath));
-  return writeRetryOverride(filePath, payload, {
+  const requestId =
+    String(payload?.requestId || "").trim() ||
+    `rerun-wave-${parseNonNegativeInt(waveNumber, "wave")}-${Date.now()}`;
+  appendWaveControlEvent(lanePaths, waveNumber, {
+    entityType: "rerun_request",
+    entityId: requestId,
+    action: "requested",
+    source: "operator",
+    actor: String(payload?.requestedBy || "human-operator"),
+    data: {
+      requestId,
+      state: "active",
+      selectedAgentIds: uniqueAgentIds(payload?.selectedAgentIds),
+      resumeCursor: String(payload?.resumeCursor || payload?.resumePhase || "").trim() || null,
+      reuseAttemptIds: uniqueAgentIds(payload?.reuseAttemptIds),
+      reuseProofBundleIds: uniqueAgentIds(payload?.reuseProofBundleIds),
+      reuseDerivedSummaries: payload?.reuseDerivedSummaries !== false,
+      invalidateComponentIds: uniqueAgentIds(payload?.invalidateComponentIds),
+      clearReusableAgentIds: uniqueAgentIds(payload?.clearReusableAgentIds),
+      preserveReusableAgentIds: uniqueAgentIds(payload?.preserveReusableAgentIds),
+      requestedBy: String(payload?.requestedBy || "human-operator"),
+      reason: String(payload?.reason || "").trim() || null,
+      applyOnce: payload?.applyOnce !== false,
+      createdAt: String(payload?.createdAt || "") || undefined,
+    },
+  });
+  const projections = syncWaveControlPlaneProjections(
+    lanePaths,
+    waveNumber,
+    readWaveControlPlaneState(lanePaths, waveNumber),
+  );
+  return writeRetryOverride(filePath, projections.retryOverride, {
     lane: lanePaths?.lane || null,
     wave: waveNumber,
   });
 }
 
 export function clearWaveRetryOverride(lanePaths, waveNumber) {
+  const activeRequest = readWaveControlPlaneState(lanePaths, waveNumber).activeRerunRequest;
+  if (activeRequest?.requestId) {
+    appendWaveControlEvent(lanePaths, waveNumber, {
+      entityType: "rerun_request",
+      entityId: activeRequest.requestId,
+      action: "cleared",
+      source: "operator",
+      actor: "human-operator",
+      data: {
+        ...activeRequest,
+        state: "cleared",
+        updatedAt: undefined,
+      },
+    });
+    syncWaveControlPlaneProjections(
+      lanePaths,
+      waveNumber,
+      readWaveControlPlaneState(lanePaths, waveNumber),
+    );
+  }
   try {
     fs.rmSync(waveRetryOverridePath(lanePaths, waveNumber), { force: true });
   } catch {
@@ -77,8 +156,8 @@ export function resolveRetryOverrideAgentIds(waveDefinition, lanePaths, override
   );
   if (resumePhase === "implementation") {
     return agents
-      .map((agent) => agent.agentId)
-      .filter((agentId) => agentId && !closureAgentIds.has(agentId));
+      .filter((agent) => agent?.agentId && !closureAgentIds.has(agent.agentId) && !isSecurityReviewAgent(agent))
+      .map((agent) => agent.agentId);
   }
   if (resumePhase === "integrating") {
     return [lanePaths?.integrationAgentId || "A8"];

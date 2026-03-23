@@ -24,6 +24,7 @@ function printHelp() {
   wave feedback [feedback options]
   wave dashboard [dashboard options]
   wave local [local executor options]
+  wave control [control-plane options]
   wave coord [coordination options]
   wave retry [retry control options]
   wave proof [proof registry options]
@@ -100,6 +101,14 @@ if (["init", "upgrade", "self-update", "changelog", "doctor"].includes(subcomman
   const { runLocalExecutorCli } = await import("./wave-orchestrator/local-executor.mjs");
   try {
     runLocalExecutorCli(rest);
+  } catch (error) {
+    console.error(`[wave] ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  }
+} else if (subcommand === "control") {
+  try {
+    const { runControlCli } = await import("./wave-orchestrator/control-cli.mjs");
+    await runControlCli(rest);
   } catch (error) {
     console.error(`[wave] ${error instanceof Error ? error.message : String(error)}`);
     process.exit(1);

@@ -145,6 +145,7 @@ import {
   resolveRetryOverrideRuns,
   waveRelaunchPlanPath,
 } from "./retry-control.mjs";
+import { appendWaveControlEvent } from "./control-plane.mjs";
 import { buildQualityMetrics, writeTraceBundle } from "./traces.mjs";
 import { triageClarificationRequests } from "./clarification-triage.mjs";
 import { readProjectProfile, resolveDefaultTerminalSurface } from "./project-profile.mjs";
@@ -2358,14 +2359,14 @@ function monitorWaveHumanFeedback({
         `[human-feedback] wave=${waveNumber} agent=${request.agentId} request=${request.id} pending: ${question}`,
       );
       console.warn(
-        `[human-feedback] respond with: pnpm exec wave-feedback respond --id ${request.id} --response "<answer>" --operator "<name>"`,
+        `[human-feedback] respond with: pnpm exec wave control task act answer --lane ${lanePaths.lane} --wave ${waveNumber} --id ${request.id} --response "<answer>" --operator "<name>"`,
       );
       appendCoordination({
         event: "human_feedback_requested",
         waves: [waveNumber],
         status: "waiting-human",
         details: `request_id=${request.id}; agent=${request.agentId}; question=${question}${context}`,
-        actionRequested: `Launcher operator should ask or answer in the parent session, then run: pnpm exec wave-feedback respond --id ${request.id} --response "<answer>" --operator "<name>"`,
+        actionRequested: `Launcher operator should ask or answer in the parent session, then run: pnpm exec wave control task act answer --lane ${lanePaths.lane} --wave ${waveNumber} --id ${request.id} --response "<answer>" --operator "<name>"`,
       });
       if (coordinationLogPath) {
         appendCoordinationRecord(coordinationLogPath, {
@@ -3965,6 +3966,23 @@ export async function runLauncherCli(argv) {
         let traceAttempt = 1;
         let completionGateSnapshot = null;
         let completionTraceDir = null;
+        const recordAttemptState = (attemptNumber, state, data = {}) =>
+          appendWaveControlEvent(lanePaths, wave.wave, {
+            entityType: "attempt",
+            entityId: `wave-${wave.wave}-attempt-${attemptNumber}`,
+            action: state,
+            source: "launcher",
+            actor: "launcher",
+            data: {
+              attemptId: `wave-${wave.wave}-attempt-${attemptNumber}`,
+              attemptNumber,
+              state,
+              selectedAgentIds: data.selectedAgentIds || [],
+              detail: data.detail || null,
+              updatedAt: toIsoTimestamp(),
+              ...(data.createdAt ? { createdAt: data.createdAt } : {}),
+            },
+          });
 
         while (attempt <= options.maxRetriesPerWave + 1) {
           refreshDerivedState(attempt - 1);
@@ -3975,6 +3993,11 @@ export async function runLauncherCli(argv) {
           flushDashboards();
           recordCombinedEvent({
             message: `Attempt ${attempt}/${options.maxRetriesPerWave + 1}; launching agents: ${runsToLaunch.map((run) => run.agent.agentId).join(", ") || "none"}`,
+          });
+          recordAttemptState(attempt, "running", {
+            selectedAgentIds: runsToLaunch.map((run) => run.agent.agentId),
+            detail: `Launching ${runsToLaunch.map((run) => run.agent.agentId).join(", ") || "no"} agents.`,
+            createdAt: toIsoTimestamp(),
           });
 
           const launchedImplementationRuns = runsToLaunch.filter(
@@ -4575,6 +4598,7 @@ export async function runLauncherCli(argv) {
             integrationSummary: derivedState.integrationSummary,
             integrationMarkdownPath: derivedState.integrationMarkdownPath,
             proofRegistryPath: waveProofRegistryPath(lanePaths, wave.wave),
+            controlPlanePath: path.join(lanePaths.controlPlaneDir, `wave-${wave.wave}.jsonl`),
             clarificationTriage: derivedState.clarificationTriage,
             agentRuns,
             structuredSignals,
@@ -4606,6 +4630,10 @@ export async function runLauncherCli(argv) {
             wave,
           );
           if (sharedComponentContinuationRuns.length > 0) {
+            recordAttemptState(attempt, "completed", {
+              selectedAgentIds: runsToLaunch.map((run) => run.agent.agentId),
+              detail: `Attempt completed; continuing with sibling owners ${sharedComponentContinuationRuns.map((run) => run.agent.agentId).join(", ")}.`,
+            });
             runsToLaunch = sharedComponentContinuationRuns;
             const nextAgentIds = runsToLaunch.map((run) => run.agent.agentId);
             const nextAgentSummary = nextAgentIds.join(", ");
@@ -4648,6 +4676,10 @@ export async function runLauncherCli(argv) {
           }
 
           if (failures.length === 0) {
+            recordAttemptState(attempt, "completed", {
+              selectedAgentIds: runsToLaunch.map((run) => run.agent.agentId),
+              detail: "Wave gates passed for this attempt.",
+            });
             dashboardState.status = "completed";
             recordCombinedEvent({ message: `Wave ${wave.wave} completed successfully.` });
             refreshWaveDashboardAgentStates(dashboardState, agentRuns, new Set(), (event) =>
@@ -4659,6 +4691,12 @@ export async function runLauncherCli(argv) {
           }
 
           if (attempt >= options.maxRetriesPerWave + 1) {
+            recordAttemptState(attempt, "failed", {
+              selectedAgentIds: runsToLaunch.map((run) => run.agent.agentId),
+              detail: failures
+                .map((failure) => `${failure.agentId || "wave"}:${failure.statusCode}`)
+                .join(", "),
+            });
             dashboardState.status = timedOut ? "timed_out" : "failed";
             for (const failure of failures) {
               setWaveDashboardAgent(dashboardState, failure.agentId, {
@@ -4690,6 +4728,12 @@ export async function runLauncherCli(argv) {
 
           const failedAgentIds = new Set(failures.map((failure) => failure.agentId));
           const failedList = Array.from(failedAgentIds).join(", ");
+          recordAttemptState(attempt, "failed", {
+            selectedAgentIds: runsToLaunch.map((run) => run.agent.agentId),
+            detail: failures
+              .map((failure) => `${failure.agentId || "wave"}:${failure.statusCode}`)
+              .join(", "),
+          });
           console.warn(
             `[retry] Wave ${wave.wave} had failures for agents: ${failedList}. Evaluating safe relaunch targets.`,
           );

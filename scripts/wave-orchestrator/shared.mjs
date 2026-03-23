@@ -180,6 +180,7 @@ export function buildLanePaths(laneInput = DEFAULT_WAVE_LANE, options = {}) {
     dashboardsDir: path.join(stateDir, "dashboards"),
     coordinationDir: path.join(stateDir, "coordination"),
     controlDir: path.join(stateDir, "control"),
+    controlPlaneDir: path.join(stateDir, "control-plane"),
     assignmentsDir: path.join(stateDir, "assignments"),
     inboxesDir: path.join(stateDir, "inboxes"),
     ledgerDir: path.join(stateDir, "ledger"),

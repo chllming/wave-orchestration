@@ -4,6 +4,11 @@ import {
   readProofRegistry,
   writeProofRegistry,
 } from "./artifact-schemas.mjs";
+import {
+  appendWaveControlEvent,
+  readWaveControlPlaneState,
+  syncWaveControlPlaneProjections,
+} from "./control-plane.mjs";
 import { REPO_ROOT, ensureDirectory, hashText, toIsoTimestamp } from "./shared.mjs";
 
 function cloneJson(value) {
@@ -120,7 +125,12 @@ function mergeProofArtifacts(summary, artifacts) {
 
 function latestAuthoritativeEntry(proofRegistry, agentId) {
   return safeArray(proofRegistry?.entries)
-    .filter((entry) => entry?.authoritative === true && entry?.agentId === agentId)
+    .filter(
+      (entry) =>
+        entry?.authoritative === true &&
+        entry?.agentId === agentId &&
+        !["revoked", "superseded"].includes(String(entry?.state || "").trim().toLowerCase()),
+    )
     .sort((left, right) => Date.parse(left.recordedAt || "") - Date.parse(right.recordedAt || ""))
     .at(-1) || null;
 }
@@ -130,7 +140,19 @@ export function waveProofRegistryPath(lanePaths, waveNumber) {
 }
 
 export function readWaveProofRegistry(lanePaths, waveNumber) {
-  return readProofRegistry(waveProofRegistryPath(lanePaths, waveNumber), {
+  const controlState = readWaveControlPlaneState(lanePaths, waveNumber);
+  if (controlState.proofBundles.length === 0) {
+    return readProofRegistry(waveProofRegistryPath(lanePaths, waveNumber), {
+      lane: lanePaths?.lane || null,
+      wave: waveNumber,
+    });
+  }
+  const registry = syncWaveControlPlaneProjections(
+    lanePaths,
+    waveNumber,
+    controlState,
+  ).proofRegistry;
+  return registry || readProofRegistry(waveProofRegistryPath(lanePaths, waveNumber), {
     lane: lanePaths?.lane || null,
     wave: waveNumber,
   });
@@ -160,11 +182,6 @@ export function registerWaveProofBundle({
   detail = "",
   recordedBy = "human-operator",
 }) {
-  const registry = readWaveProofRegistry(lanePaths, wave.wave) || {
-    lane: lanePaths.lane,
-    wave: wave.wave,
-    entries: [],
-  };
   const recordedAt = toIsoTimestamp();
   const normalizedArtifacts = Array.from(
     new Set(safeArray(artifactPaths).map((value) => String(value || "").trim()).filter(Boolean)),
@@ -211,9 +228,35 @@ export function registerWaveProofBundle({
     components: normalizedComponents,
     artifacts: normalizedArtifacts,
   };
-  registry.entries = [...safeArray(registry.entries), entry];
-  registry.updatedAt = recordedAt;
-  const normalized = writeWaveProofRegistry(lanePaths, wave.wave, registry);
+  appendWaveControlEvent(lanePaths, wave.wave, {
+    entityType: "proof_bundle",
+    entityId: entry.id,
+    action: "registered",
+    source: "operator",
+    actor: recordedBy,
+    data: {
+      proofBundleId: entry.id,
+      agentId: entry.agentId,
+      state: "active",
+      authoritative: entry.authoritative,
+      recordedAt: entry.recordedAt,
+      recordedBy: entry.recordedBy,
+      detail: entry.detail,
+      summary: entry.summary,
+      satisfyOwnedComponents: entry.satisfyOwnedComponents,
+      proof: entry.proof,
+      docDelta: entry.docDelta,
+      components: entry.components,
+      artifacts: entry.artifacts,
+      scope: "wave",
+      satisfies: normalizedComponents.map((component) => component.componentId),
+    },
+  });
+  const normalized = syncWaveControlPlaneProjections(
+    lanePaths,
+    wave.wave,
+    readWaveControlPlaneState(lanePaths, wave.wave),
+  ).proofRegistry;
   return {
     registry: normalized,
     entry: cloneJson(entry),
@@ -228,9 +271,7 @@ export function augmentSummaryWithProofRegistry(agent, summary, proofRegistry) {
   const next = cloneJson(summary) || {
     agentId: agent?.agentId || null,
   };
-  if (!next.proof && authoritativeEntry.proof) {
-    next.proof = cloneJson(authoritativeEntry.proof);
-  } else if (next.proof?.state !== "met" && authoritativeEntry.proof?.state === "met") {
+  if (authoritativeEntry.proof?.state === "met") {
     next.proof = {
       completion:
         authoritativeEntry.proof.completion ||
@@ -254,7 +295,7 @@ export function augmentSummaryWithProofRegistry(agent, summary, proofRegistry) {
         "Satisfied by authoritative proof registry.",
     };
   }
-  if (!next.docDelta && authoritativeEntry.docDelta) {
+  if (authoritativeEntry.docDelta) {
     next.docDelta = cloneJson(authoritativeEntry.docDelta);
   }
   mergeProofArtifacts(next, authoritativeEntry.artifacts);

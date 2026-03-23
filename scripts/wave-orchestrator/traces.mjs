@@ -7,6 +7,7 @@ import {
   readCoordinationLog,
   serializeCoordinationState,
 } from "./coordination-store.mjs";
+import { readControlPlaneEvents } from "./control-plane.mjs";
 import {
   isContEvalReportOnlyAgent,
   isSecurityReviewAgent,
@@ -780,6 +781,7 @@ export function writeTraceBundle({
   integrationSummary,
   integrationMarkdownPath,
   proofRegistryPath = null,
+  controlPlanePath = null,
   clarificationTriage,
   agentRuns,
   quality,
@@ -855,6 +857,12 @@ export function writeTraceBundle({
     dir,
     proofRegistryPath,
     path.join(dir, "proof-registry.json"),
+    false,
+  );
+  const controlPlaneArtifact = copyArtifactDescriptor(
+    dir,
+    controlPlanePath,
+    path.join(dir, "control-plane.raw.jsonl"),
     false,
   );
   const qualityArtifact = writeArtifactDescriptor(
@@ -998,6 +1006,7 @@ export function writeTraceBundle({
       integration: integrationArtifact,
       integrationMarkdown: integrationMarkdownArtifact,
       proofRegistry: proofRegistryArtifact,
+      controlPlane: controlPlaneArtifact,
       componentMatrix: componentMatrixArtifact,
       componentMatrixMarkdown: componentMatrixMarkdownArtifact,
       outcome: outcomeArtifact,
@@ -1032,6 +1041,7 @@ export function loadTraceBundle(dir) {
     manifest,
     coordinationState,
     coordinationRecords,
+    controlPlaneEvents: readControlPlaneEvents(path.join(dir, "control-plane.raw.jsonl")),
     ledger: readJsonOrNull(path.join(dir, "ledger.json")),
     docsQueue: readJsonOrNull(path.join(dir, "docs-queue.json")),
     capabilityAssignments: readJsonOrNull(path.join(dir, "capability-assignments.json")),

@@ -146,7 +146,7 @@ At this point A1 can be locally done.
 Example:
 
 ```bash
-pnpm exec wave coord post \
+pnpm exec wave control task create \
   --lane main \
   --wave 4 \
   --agent A1 \
@@ -237,9 +237,9 @@ Important implication:
 - operators can now inspect and intervene through one command surface:
 
 ```bash
-pnpm exec wave coord explain --lane main --wave 10 --agent A7 --json
-pnpm exec wave coord act reroute --lane main --wave 10 --id clarify-a7-rollout --to A1
-pnpm exec wave coord act resolve --lane main --wave 10 --id escalation-clarify-a7-rollout --detail "Published command surface covers this question."
+pnpm exec wave control status --lane main --wave 10 --agent A7 --json
+pnpm exec wave control task act reassign --lane main --wave 10 --id clarify-a7-rollout --to A1
+pnpm exec wave control task act resolve --lane main --wave 10 --id escalation-clarify-a7-rollout --detail "Published command surface covers this question."
 ```
 
 That keeps clarification routing, dismissal, escalation, and human-answer handling inside the canonical coordination state instead of forcing ad hoc file edits.
@@ -404,11 +404,11 @@ That is why the system can safely reuse already-valid implementation slices whil
 Operators now have a first-class override path for that recovery flow:
 
 ```bash
-pnpm exec wave retry show --lane main --wave 10 --json
-pnpm exec wave retry apply --lane main --wave 10 --agent A2 --agent A7 --clear-reuse A2 --reason "Resume sibling-owned component closure"
+pnpm exec wave control rerun get --lane main --wave 10 --json
+pnpm exec wave control rerun request --lane main --wave 10 --agent A2 --agent A7 --clear-reuse A2 --reason "Resume sibling-owned component closure"
 ```
 
-The override is written under `.tmp/<lane>-wave-launcher/control/`, consumed by the launcher on the next retry decision, and then cleared by default after one application. This is the supported path for:
+The canonical rerun request is written under `.tmp/<lane>-wave-launcher/control-plane/`, projected to `.tmp/<lane>-wave-launcher/control/` for compatibility, consumed by the launcher on the next retry decision, and then cleared by default after one application. This is the supported path for:
 
 - rerunning only specific owners
 - clearing reuse for selected agents without wiping the whole wave state

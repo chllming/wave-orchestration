@@ -33,6 +33,8 @@ describe("proof registry", () => {
 
     const lanePaths = {
       lane: "main",
+      controlDir: path.join(proofDir, "control"),
+      controlPlaneDir: path.join(proofDir, "control-plane"),
       proofDir,
     };
     const wave = { wave: 8 };
@@ -106,5 +108,82 @@ describe("proof registry", () => {
         exists: true,
       }),
     ]);
+  });
+
+  it("upgrades an already-met but weaker summary when authoritative live proof arrives", () => {
+    const repoRoot = process.cwd();
+    const proofDir = trackFile(path.join(repoRoot, ".tmp", "proof-registry-upgrade-test"));
+    const artifactPath = ".tmp/proof-registry-upgrade-test/live-status.json";
+    fs.mkdirSync(path.join(repoRoot, ".tmp", "proof-registry-upgrade-test"), { recursive: true });
+    fs.writeFileSync(path.join(repoRoot, artifactPath), "{\"ok\":true}\n", "utf8");
+
+    const lanePaths = {
+      lane: "main",
+      controlDir: path.join(proofDir, "control"),
+      controlPlaneDir: path.join(proofDir, "control-plane"),
+      proofDir,
+    };
+    const wave = { wave: 9 };
+    const agent = {
+      agentId: "A6",
+      exitContract: {
+        completion: "live",
+        durability: "durable",
+        proof: "live",
+        docImpact: "owned",
+      },
+      proofArtifacts: [
+        {
+          path: artifactPath,
+          kind: "live-status",
+          requiredFor: ["pilot-live"],
+        },
+      ],
+    };
+
+    const { registry } = registerWaveProofBundle({
+      lanePaths,
+      wave,
+      agent,
+      artifactPaths: [artifactPath],
+      authoritative: true,
+      completion: "live",
+      durability: "durable",
+      proofLevel: "live",
+      docDeltaState: "owned",
+      detail: "Operator captured stronger live evidence.",
+      recordedBy: "tester",
+    });
+
+    const augmented = augmentSummaryWithProofRegistry(
+      agent,
+      {
+        agentId: "A6",
+        proof: {
+          state: "met",
+          completion: "integrated",
+          durability: "durable",
+          proof: "integration",
+          detail: "Earlier integration-only validation.",
+        },
+        docDelta: {
+          state: "none",
+          detail: "Earlier summary claimed no doc delta.",
+        },
+      },
+      registry,
+    );
+
+    expect(augmented).toMatchObject({
+      proof: {
+        state: "met",
+        completion: "live",
+        durability: "durable",
+        proof: "live",
+      },
+      docDelta: {
+        state: "owned",
+      },
+    });
   });
 });

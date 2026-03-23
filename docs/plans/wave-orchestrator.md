@@ -49,14 +49,14 @@ This runbook is the operational view of the architecture:
 - `pnpm exec wave launch --lane main --start-wave 0 --end-wave 0 --executor opencode`
 - `pnpm exec wave autonomous --lane main --executor codex --codex-sandbox danger-full-access`
 - `pnpm exec wave feedback list --lane main --pending`
-- `pnpm exec wave coord show --lane main --wave 0 --dry-run`
-- `pnpm exec wave coord explain --lane main --wave 0 --agent A1 --json`
+- `pnpm exec wave control status --lane main --wave 0 --json`
+- `pnpm exec wave control status --lane main --wave 0 --agent A1 --json`
 - `pnpm exec wave coord inbox --lane main --wave 0 --agent A1 --dry-run`
-- `pnpm exec wave coord post --lane main --wave 0 --agent A1 --kind blocker --summary "Need repository decision"`
-- `pnpm exec wave coord act reroute --lane main --wave 0 --id <coordination-id> --to A2`
-- `pnpm exec wave retry show --lane main --wave 0 --json`
-- `pnpm exec wave retry apply --lane main --wave 0 --agent A2 --agent A7 --clear-reuse A2 --reason "resume sibling-owned shared component closure"`
-- `pnpm exec wave proof register --lane main --wave 9 --agent A7 --artifact .tmp/wave-9-proof/live-status.json --authoritative --completion live --durability durable --proof-level live`
+- `pnpm exec wave control task create --lane main --wave 0 --agent A1 --kind blocker --summary "Need repository decision"`
+- `pnpm exec wave control task act reassign --lane main --wave 0 --id <task-id> --to A2`
+- `pnpm exec wave control rerun get --lane main --wave 0 --json`
+- `pnpm exec wave control rerun request --lane main --wave 0 --agent A2 --agent A7 --clear-reuse A2 --reason "resume sibling-owned shared component closure"`
+- `pnpm exec wave control proof register --lane main --wave 9 --agent A7 --artifact .tmp/wave-9-proof/live-status.json --authoritative --completion live --durability durable --proof-level live`
 - `pnpm exec wave local --prompt .tmp/main-wave-launcher/prompts/wave-0-A1.md --log .tmp/main-wave-launcher/logs/wave-0-A1.log --status .tmp/main-wave-launcher/status/wave-0-A1.json`
 - `pnpm exec wave dep show --lane main --wave 0 --json`
 - `pnpm exec wave dep post --owner-lane main --requester-lane release --owner-wave 0 --requester-wave 2 --agent launcher --summary "Need shared-plan reconciliation" --target capability:docs-shared-plan --required`
@@ -131,16 +131,20 @@ pnpm exec wave launch --lane main --start-wave 0 --end-wave 0 --executor codex -
 
 ## Coordination Surfaces
 
-- `wave coord show` is a read-only view of the materialized coordination state for a wave.
-- `wave coord explain` renders a machine-readable "why blocked / why retrying" view for the wave or a single agent, including open coordination, helper assignments, dependencies, retry overrides, relaunch plans, and registered proof bundles.
+- `wave control status` is the read-only projection for "why blocked / why retrying" at wave or agent scope. It returns blocking edges, logical agent state, tasks, dependencies, rerun intent, active proof bundles, and next timers from one materialized control-plane view.
+- `wave control task create|get|list|act` is the operator task surface for blockers, handoffs, clarification chains, human-input tickets, and escalations.
+- `wave control rerun request|get|clear` manages targeted rerun intent under `.tmp/<lane>-wave-launcher/control-plane/` and projects compatible retry overrides under `.tmp/<lane>-wave-launcher/control/`.
+- `wave control proof register|get|supersede|revoke` manages authoritative proof bundles in the same control-plane log and projects compatible proof registries under `.tmp/<lane>-wave-launcher/proof/`.
 - `wave coord render` regenerates the markdown board projection from the canonical coordination log.
 - `wave coord inbox` writes the compiled shared summary plus the selected agent inbox.
-- `wave coord post` appends a structured record to the coordination log. This is the machine-readable path for blockers, handoffs, evidence, targeted requests, and clarification requests.
-- `wave coord act` is the operator intervention surface for clarifications and escalations. It can resolve, dismiss, reroute, reassign, escalate, and answer human-feedback requests without editing launcher state by hand.
-- `wave retry show|apply|clear` manages targeted retry overrides under `.tmp/<lane>-wave-launcher/control/`. Use it when you need to resume with specific agents, clear reuse for selected owners only, or keep a live wave moving without archiving runtime state by hand.
-- `wave proof show|register` manages authoritative proof bundles under `.tmp/<lane>-wave-launcher/proof/`. Use it to register operator-captured live evidence and make that evidence visible to integration, cont-QA, and retry decisions.
+
+Compatibility note:
+
+- `wave coord`, `wave retry`, and `wave proof` remain available as compatibility surfaces, but new operator docs and runbooks should prefer `wave control`.
 
 The canonical state is the JSONL log under `.tmp/<lane>-wave-launcher/coordination/`. The markdown board is a generated projection for humans, not the scheduler's source of truth.
+
+Control-plane facts that drive reruns, proof, attempt state, and operator tasks are appended separately under `.tmp/<lane>-wave-launcher/control-plane/`. Legacy proof and retry files remain derived projections for compatibility, not the source of truth.
 
 Capability-targeted requests now become deterministic helper assignments. The launcher resolves the assignee from explicit targets, `capabilityRouting.preferredAgents`, then least-busy matching capability owners, writes that assignment into `.tmp/<lane>-wave-launcher/assignments/`, mirrors the decision into coordination state, and keeps the wave blocked until the linked follow-up resolves.
 
@@ -156,11 +160,12 @@ During live runs, the launcher now keeps an active orchestration loop while agen
 
 If you opt into `--resident-orchestrator`, the launcher also starts a long-running non-owning orchestrator session for the wave. That session can inspect the same coordination artifacts and intervene through coordination records, but the launcher remains the scheduler truth and closure authority.
 
-Retry intent and proof injection are now first-class control-plane artifacts rather than manual file surgery:
+Retry intent, operator tasks, attempt lifecycle, and proof injection are now first-class control-plane artifacts rather than manual file surgery:
 
-- targeted retry overrides live under `.tmp/<lane>-wave-launcher/control/`
-- authoritative proof bundles live under `.tmp/<lane>-wave-launcher/proof/`
-- live traces copy the proof registry so replay stays hermetic when external proof satisfied a wave
+- canonical control events live under `.tmp/<lane>-wave-launcher/control-plane/`
+- projected retry overrides still live under `.tmp/<lane>-wave-launcher/control/`
+- projected proof registries still live under `.tmp/<lane>-wave-launcher/proof/`
+- live traces now copy the control-plane log alongside the proof registry so replay keeps the same operator-visible facts
 
 For a full end-to-end explainer of helper assignments, deliverables, integration, and why an agent can be locally done while the wave stays blocked, see [docs/reference/coordination-and-closure.md](../reference/coordination-and-closure.md).
 

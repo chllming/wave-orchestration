@@ -66,7 +66,7 @@
 - Live closure is strict: `cont-EVAL` must prove the declared eval contract with exact target and benchmark ids, and `cont-QA` must provide both final verdict and final gate artifacts. Legacy evaluator-era shapes remain replay-only compatibility inputs.
 - Proof-centric waves can now declare `### Proof artifacts`, and implementation proof validation can require those machine-visible local artifacts in addition to deliverables and structured proof markers.
 - Routed clarifications remain blocking until the linked follow-up request or escalation is fully resolved.
-- Operators can now use `wave coord explain|act`, `wave retry show|apply|clear`, and `wave proof show|register` as supported control surfaces during a live wave instead of editing runtime files by hand.
+- Operators can now use `wave control status`, `wave control task`, `wave control rerun`, and `wave control proof` as the preferred supported control surfaces during a live wave instead of editing runtime files by hand. Legacy `wave coord`, `wave retry`, and `wave proof` commands remain as compatibility paths.
 - Required inbound cross-lane dependency tickets under `.tmp/wave-orchestrator/dependencies/` block both autonomous wave launch and lane finalization while they remain unresolved.
 - Cross-lane dependency workflows now include:
   - `wave dep post|show|resolve|render`

@@ -196,6 +196,16 @@ function recordTargetsAgent(record, agentId) {
   );
 }
 
+function isLauncherSeedRequest(record) {
+  return (
+    record?.source === "launcher" &&
+    record?.kind === "request" &&
+    /^wave-\d+-agent-[^-]+-request$/.test(String(record?.id || "")) &&
+    (!Array.isArray(record?.dependsOn) || record.dependsOn.length === 0) &&
+    !String(record?.closureCondition || "").trim()
+  );
+}
+
 function summarizeExplainPayload({
   lanePaths,
   wave,
@@ -230,7 +240,11 @@ function summarizeExplainPayload({
     agentId ? entry.agentId === agentId : true,
   );
   const blockedBy = [];
-  if ((state?.clarifications || []).some((record) => isOpenCoordinationStatus(record.status))) {
+  if (
+    scopedOpenRecords.some(
+      (record) => record.kind === "clarification-request" && isOpenCoordinationStatus(record.status),
+    )
+  ) {
     blockedBy.push("open clarification chain");
   }
   if (scopedAssignments.some((assignment) => assignment.blocking)) {
@@ -251,7 +265,10 @@ function summarizeExplainPayload({
   }
   if (
     scopedOpenRecords.some(
-      (record) => record.kind === "request" && isOpenCoordinationStatus(record.status),
+      (record) =>
+        record.kind === "request" &&
+        isOpenCoordinationStatus(record.status) &&
+        !isLauncherSeedRequest(record),
     )
   ) {
     blockedBy.push("targeted open request");
@@ -364,7 +381,7 @@ export async function runCoordinationCli(argv) {
       ledger,
       capabilityAssignments,
       dependencySnapshot,
-      feedbackRequests: [],
+      feedbackRequests,
       relaunchPlan: readWaveRelaunchPlanSnapshot(lanePaths, wave.wave),
       retryOverride: readWaveRetryOverride(lanePaths, wave.wave),
       proofRegistry: readWaveProofRegistry(lanePaths, wave.wave),
@@ -396,7 +413,13 @@ export async function runCoordinationCli(argv) {
     contEvalAgentId: lanePaths.contEvalAgentId,
     integrationAgentId: lanePaths.integrationAgentId,
     documentationAgentId: lanePaths.documentationAgentId,
-    feedbackRequests: [],
+    feedbackRequests: readWaveHumanFeedbackRequests({
+      feedbackRequestsDir: lanePaths.feedbackRequestsDir,
+      lane: lanePaths.lane,
+      waveNumber: wave.wave,
+      agentIds: wave.agents.map((agent) => agent.agentId),
+      orchestratorId: "",
+    }),
   });
   if (subcommand === "post") {
     if (!options.agent || !options.kind || !options.summary) {

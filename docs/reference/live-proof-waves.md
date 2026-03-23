@@ -153,7 +153,7 @@ Typical pattern:
 2. operator can register that bundle directly:
 
 ```bash
-pnpm exec wave proof register \
+pnpm exec wave control proof register \
   --lane main \
   --wave 8 \
   --agent A6 \
@@ -172,7 +172,7 @@ pnpm exec wave proof register \
 4. any stale integration or closure owner reruns if needed
 5. already-valid implementation slices stay reused
 
-Authoritative proof registration is the supported way to make operator-produced evidence visible to A8, A0, retry control, and hermetic traces without forcing an implementation agent to rediscover the same local artifacts in a fresh session.
+Authoritative proof registration is the supported way to make operator-produced evidence visible to A8, A0, rerun control, and hermetic traces without forcing an implementation agent to rediscover the same local artifacts in a fresh session. The canonical proof bundle now lands in `.tmp/<lane>-wave-launcher/control-plane/` and is projected into `.tmp/<lane>-wave-launcher/proof/` for compatibility.
 
 ## Suggested Eval Targets For Live-Proof Waves
 
