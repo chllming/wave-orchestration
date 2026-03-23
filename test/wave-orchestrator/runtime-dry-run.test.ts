@@ -255,9 +255,11 @@ File ownership (only touch these paths):
     expect(codexPreview.limits).toMatchObject({
       attemptTimeoutMinutes: null,
       knownTurnLimit: null,
+      effectiveTurnLimit: null,
       turnLimitSource: "not-set-by-wave",
+      effectiveTurnLimitSource: "unknown-external",
     });
-    expect(codexPreview.limits.notes[0]).toContain("Wave emits no Codex turn-limit flag");
+    expect(codexPreview.limits.notes[0]).toContain("effectiveTurnLimit remains unknown");
     expect(codexPreview.skills.ids).toContain("runtime-codex");
     expect(
       fs.existsSync(path.join(dryRunRoot, "executors", "wave-0", "0-a0", "skills.resolved.md")),

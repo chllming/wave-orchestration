@@ -2366,6 +2366,10 @@ describe("reconcileRunStateFromStatusFiles", () => {
     );
   }
 
+  function repoRelativePath(filePath) {
+    return path.relative(REPO_ROOT, filePath).split(path.sep).join("/");
+  }
+
   it("does not mark waves complete from legacy plain-int status files without metadata", () => {
     const tempRoot = registerTempPath(
       path.join(REPO_ROOT, ".tmp", `wave-files-test-${Date.now()}-reconcile`),
@@ -2796,6 +2800,234 @@ describe("reconcileRunStateFromStatusFiles", () => {
         },
       },
     });
+  });
+
+  it("backfills missing deliverable and proof-artifact summary fields during reconciliation", () => {
+    const tempRoot = registerTempPath(
+      path.join(REPO_ROOT, ".tmp", `wave-files-test-${Date.now()}-reconcile-summary-backfill`),
+    );
+    const statusDir = path.join(tempRoot, "status");
+    const logsDir = path.join(tempRoot, "logs");
+    const coordinationDir = path.join(tempRoot, "coordination");
+    const runStatePath = path.join(tempRoot, "run-state.json");
+    fs.mkdirSync(statusDir, { recursive: true });
+    fs.mkdirSync(logsDir, { recursive: true });
+    fs.mkdirSync(coordinationDir, { recursive: true });
+
+    const wave = makeReconcileWave(tempRoot);
+    const implementation = {
+      ...wave.agents[1],
+      exitContract: {
+        completion: "contract",
+        durability: "none",
+        proof: "unit",
+        docImpact: "owned",
+      },
+      deliverables: [repoRelativePath(path.join(tempRoot, "wave-200-implementation.txt"))],
+      proofArtifacts: [
+        {
+          path: repoRelativePath(path.join(tempRoot, "wave-200-proof.json")),
+          kind: "state-snapshot",
+        },
+      ],
+    };
+    wave.agents[1] = implementation;
+
+    fs.writeFileSync(path.join(REPO_ROOT, wave.contQaReportPath), "# cont-QA\n\nVerdict: PASS\n", "utf8");
+    fs.writeFileSync(path.join(REPO_ROOT, implementation.deliverables[0]), "landed\n", "utf8");
+    fs.writeFileSync(
+      path.join(REPO_ROOT, implementation.proofArtifacts[0].path),
+      JSON.stringify({ ok: true }, null, 2),
+      "utf8",
+    );
+
+    writeStatus(statusDir, wave.agents[0], {
+      code: 0,
+    });
+    writeStatus(statusDir, implementation, {
+      code: 0,
+      promptHash: hashText("old-prompt-hash"),
+    });
+    writeStatus(statusDir, wave.agents[2], {
+      code: 0,
+      promptHash: hashAgentPromptFingerprint(wave.agents[2]),
+    });
+    writeStatus(statusDir, wave.agents[3], {
+      code: 0,
+      promptHash: hashAgentPromptFingerprint(wave.agents[3]),
+    });
+    writeSummary(statusDir, wave.agents[0], {
+      reportPath: wave.contQaReportPath,
+      verdict: { verdict: "pass", detail: "good" },
+      gate: {
+        architecture: "pass",
+        integration: "pass",
+        durability: "pass",
+        live: "pass",
+        docs: "pass",
+        detail: "all clear",
+      },
+    });
+    writeSummary(statusDir, implementation, {
+      proof: { completion: "contract", durability: "none", proof: "unit", state: "met" },
+      docDelta: { state: "owned", paths: [] },
+    });
+    writeSummary(statusDir, wave.agents[2], {
+      integration: { state: "ready-for-doc-closure", detail: "all lanes landed" },
+    });
+    writeSummary(statusDir, wave.agents[3], {
+      docClosure: { state: "closed", detail: "docs reconciled" },
+    });
+    fs.writeFileSync(path.join(coordinationDir, "wave-200.jsonl"), "", "utf8");
+    markWaveCompleted(runStatePath, wave.wave, {
+      detail: "Wave 200 completed after 1 attempt(s).",
+      evidence: {
+        waveFileHash: "wave-200-hash",
+      },
+    });
+
+    const reconciliation = reconcileRunStateFromStatusFiles([wave], runStatePath, statusDir, {
+      logsDir,
+      coordinationDir,
+      requireIntegrationStewardFromWave: 0,
+      laneProfile: {
+        validation: {
+          requireComponentPromotionsFromWave: null,
+          requireIntegrationStewardFromWave: 0,
+          requiredPromptReferences: [],
+        },
+        paths: {
+          benchmarkCatalogPath: "docs/evals/benchmark-catalog.json",
+        },
+      },
+    });
+
+    expect(reconciliation.blockedFromStatus).toEqual([]);
+    expect(reconciliation.preservedWithDrift).toHaveLength(1);
+    expect(reconciliation.state.completedWaves).toEqual([200]);
+    const normalizedSummary = JSON.parse(
+      fs.readFileSync(path.join(statusDir, `wave-200-${implementation.slug}.summary.json`), "utf8"),
+    );
+    expect(normalizedSummary.deliverables).toEqual([
+      expect.objectContaining({
+        path: implementation.deliverables[0],
+        exists: true,
+      }),
+    ]);
+    expect(normalizedSummary.proofArtifacts).toEqual([
+      expect.objectContaining({
+        path: implementation.proofArtifacts[0].path,
+        exists: true,
+      }),
+    ]);
+  });
+
+  it("still blocks reconciliation when a backfilled proof artifact is actually missing", () => {
+    const tempRoot = registerTempPath(
+      path.join(REPO_ROOT, ".tmp", `wave-files-test-${Date.now()}-reconcile-missing-proof`),
+    );
+    const statusDir = path.join(tempRoot, "status");
+    const logsDir = path.join(tempRoot, "logs");
+    const coordinationDir = path.join(tempRoot, "coordination");
+    const runStatePath = path.join(tempRoot, "run-state.json");
+    fs.mkdirSync(statusDir, { recursive: true });
+    fs.mkdirSync(logsDir, { recursive: true });
+    fs.mkdirSync(coordinationDir, { recursive: true });
+
+    const wave = makeReconcileWave(tempRoot);
+    const implementation = {
+      ...wave.agents[1],
+      exitContract: {
+        completion: "contract",
+        durability: "none",
+        proof: "unit",
+        docImpact: "owned",
+      },
+      proofArtifacts: [
+        {
+          path: repoRelativePath(path.join(tempRoot, "wave-200-proof.json")),
+          kind: "state-snapshot",
+        },
+      ],
+    };
+    wave.agents[1] = implementation;
+
+    fs.writeFileSync(path.join(REPO_ROOT, wave.contQaReportPath), "# cont-QA\n\nVerdict: PASS\n", "utf8");
+
+    writeStatus(statusDir, wave.agents[0], {
+      code: 0,
+    });
+    writeStatus(statusDir, implementation, {
+      code: 0,
+      promptHash: hashText("old-prompt-hash"),
+    });
+    writeStatus(statusDir, wave.agents[2], {
+      code: 0,
+      promptHash: hashAgentPromptFingerprint(wave.agents[2]),
+    });
+    writeStatus(statusDir, wave.agents[3], {
+      code: 0,
+      promptHash: hashAgentPromptFingerprint(wave.agents[3]),
+    });
+    writeSummary(statusDir, wave.agents[0], {
+      reportPath: wave.contQaReportPath,
+      verdict: { verdict: "pass", detail: "good" },
+      gate: {
+        architecture: "pass",
+        integration: "pass",
+        durability: "pass",
+        live: "pass",
+        docs: "pass",
+        detail: "all clear",
+      },
+    });
+    writeSummary(statusDir, implementation, {
+      proof: { completion: "contract", durability: "none", proof: "unit", state: "met" },
+      docDelta: { state: "owned", paths: [] },
+    });
+    writeSummary(statusDir, wave.agents[2], {
+      integration: { state: "ready-for-doc-closure", detail: "all lanes landed" },
+    });
+    writeSummary(statusDir, wave.agents[3], {
+      docClosure: { state: "closed", detail: "docs reconciled" },
+    });
+    fs.writeFileSync(path.join(coordinationDir, "wave-200.jsonl"), "", "utf8");
+    markWaveCompleted(runStatePath, wave.wave, {
+      detail: "Wave 200 completed after 1 attempt(s).",
+      evidence: {
+        waveFileHash: "wave-200-hash",
+      },
+    });
+
+    const reconciliation = reconcileRunStateFromStatusFiles([wave], runStatePath, statusDir, {
+      logsDir,
+      coordinationDir,
+      requireIntegrationStewardFromWave: 0,
+      laneProfile: {
+        validation: {
+          requireComponentPromotionsFromWave: null,
+          requireIntegrationStewardFromWave: 0,
+          requiredPromptReferences: [],
+        },
+        paths: {
+          benchmarkCatalogPath: "docs/evals/benchmark-catalog.json",
+        },
+      },
+    });
+
+    expect(reconciliation.completedFromStatus).toEqual([]);
+    expect(reconciliation.preservedWithDrift).toEqual([]);
+    expect(reconciliation.blockedFromStatus).toMatchObject([
+      {
+        wave: 200,
+        reasons: expect.arrayContaining([
+          expect.objectContaining({
+            code: "invalid-implementation-summary",
+            detail: expect.stringContaining("missing-proof-artifact"),
+          }),
+        ]),
+      },
+    ]);
   });
 
   it("surfaces cont-QA artifact and open coordination blockers during reconciliation", () => {

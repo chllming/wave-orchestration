@@ -594,6 +594,8 @@ function materializeAgentExecutionSummaryForRun(wave, runInfo) {
       if (Number.isFinite(observedTurnLimit) && observedTurnLimit > 0) {
         nextLimits.observedTurnLimit = observedTurnLimit;
         nextLimits.observedTurnLimitSource = "runtime-log";
+        nextLimits.effectiveTurnLimit = observedTurnLimit;
+        nextLimits.effectiveTurnLimitSource = "runtime-log";
         if (runInfo.agent.executorResolved?.id === "codex") {
           const existingNotes = Array.isArray(nextLimits.notes) ? nextLimits.notes.slice() : [];
           const observedNote = `Observed runtime stop at ${observedTurnLimit} turns from executor log output.`;

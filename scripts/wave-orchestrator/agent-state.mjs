@@ -198,7 +198,7 @@ function detectTermination(agent, logText, statusRecord) {
       if (pattern.reason === "max-turns" && agent?.executorResolved?.id === "codex") {
         return {
           reason: pattern.reason,
-          hint: `${baseHint}. Wave does not set a Codex turn-limit flag; inspect launch-preview.json limits for any profile or upstream-runtime ceiling notes.`,
+          hint: `${baseHint}. Wave does not set a Codex turn-limit flag; inspect launch-preview.json limits.effectiveTurnLimitSource and notes for any profile or upstream-runtime ceiling clues.`,
           observedTurnLimit,
         };
       }

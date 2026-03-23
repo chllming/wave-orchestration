@@ -1204,7 +1204,11 @@ function materializeLiveExecutionSummaryIfMissing({
 }) {
   const existing = readAgentExecutionSummary(statusPath);
   if (existing) {
-    return existing;
+    const normalized = normalizeHistoricalExecutionSummary(existing, agent);
+    if (normalized.changed) {
+      writeAgentExecutionSummary(statusPath, normalized.summary);
+    }
+    return normalized.summary;
   }
   const logPath = logsDir ? path.join(logsDir, `wave-${wave.wave}-${agent.slug}.log`) : null;
   if (!statusRecord || !logPath || !fs.existsSync(logPath)) {
@@ -1221,6 +1225,59 @@ function materializeLiveExecutionSummaryIfMissing({
   });
   writeAgentExecutionSummary(statusPath, summary);
   return summary;
+}
+
+function summarizeDeliverablePresence(agent) {
+  return Array.isArray(agent?.deliverables)
+    ? agent.deliverables.map((deliverable) => {
+        const absolutePath = path.resolve(REPO_ROOT, deliverable);
+        const exists = fs.existsSync(absolutePath);
+        return {
+          path: deliverable,
+          exists,
+          modifiedAt: exists ? fs.statSync(absolutePath).mtime.toISOString() : null,
+        };
+      })
+    : [];
+}
+
+function summarizeProofArtifactPresence(agent) {
+  return Array.isArray(agent?.proofArtifacts)
+    ? agent.proofArtifacts.map((artifact) => {
+        const absolutePath = path.resolve(REPO_ROOT, artifact.path);
+        const exists = fs.existsSync(absolutePath);
+        return {
+          path: artifact.path,
+          kind: artifact.kind || null,
+          requiredFor: Array.isArray(artifact.requiredFor) ? artifact.requiredFor : [],
+          exists,
+          modifiedAt: exists ? fs.statSync(absolutePath).mtime.toISOString() : null,
+        };
+      })
+    : [];
+}
+
+function normalizeHistoricalExecutionSummary(summary, agent) {
+  if (!summary || typeof summary !== "object" || Array.isArray(summary)) {
+    return {
+      summary,
+      changed: false,
+    };
+  }
+  let changed = false;
+  const nextSummary = { ...summary };
+  if (!Array.isArray(nextSummary.deliverables)) {
+    nextSummary.deliverables = summarizeDeliverablePresence(agent);
+    changed = true;
+  }
+  if (!Array.isArray(nextSummary.proofArtifacts)) {
+    nextSummary.proofArtifacts = summarizeProofArtifactPresence(agent);
+    changed = true;
+  }
+  return {
+    summary: changed ? nextSummary : summary,
+    changed,
+  };
 }
 
 function normalizeMatrixStringArray(values, label, filePath) {

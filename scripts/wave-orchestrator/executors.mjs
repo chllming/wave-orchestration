@@ -310,7 +310,9 @@ function buildLaunchLimitsMetadata(agent) {
     return {
       attemptTimeoutMinutes,
       knownTurnLimit: executor?.claude?.maxTurns ?? null,
+      effectiveTurnLimit: executor?.claude?.maxTurns ?? null,
       turnLimitSource: source,
+      effectiveTurnLimitSource: source,
       notes:
         source === "budget.turns"
           ? ["Known turn limit was derived from generic budget.turns."]
@@ -322,7 +324,9 @@ function buildLaunchLimitsMetadata(agent) {
     return {
       attemptTimeoutMinutes,
       knownTurnLimit: executor?.opencode?.steps ?? null,
+      effectiveTurnLimit: executor?.opencode?.steps ?? null,
       turnLimitSource: source,
+      effectiveTurnLimitSource: source,
       notes:
         source === "budget.turns"
           ? ["Known turn limit was derived from generic budget.turns."]
@@ -336,16 +340,20 @@ function buildLaunchLimitsMetadata(agent) {
     return {
       attemptTimeoutMinutes,
       knownTurnLimit: null,
+      effectiveTurnLimit: null,
       turnLimitSource: "not-set-by-wave",
+      effectiveTurnLimitSource: "unknown-external",
       notes: [
-        `Wave emits no Codex turn-limit flag; any effective ceiling may come from the selected Codex profile${profileNote} or the upstream Codex runtime.`,
+        `Wave emits no Codex turn-limit flag; effectiveTurnLimit remains unknown unless it can be inferred from the selected Codex profile${profileNote} or later observed from the upstream Codex runtime.`,
       ],
     };
   }
   return {
     attemptTimeoutMinutes,
     knownTurnLimit: null,
+    effectiveTurnLimit: null,
     turnLimitSource: "not-applicable",
+    effectiveTurnLimitSource: "not-applicable",
     notes: ["Local executor does not use model turn limits."],
   };
 }

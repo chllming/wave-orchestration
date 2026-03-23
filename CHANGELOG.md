@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Fixed And Hardened
+
+- `reconcile-status` now backfills missing `deliverables` and `proofArtifacts` arrays in older agent summaries before validation, so previously authoritative completed waves can survive summary-schema drift without weakening live closure.
+- Codex launch previews now expose `effectiveTurnLimit` and `effectiveTurnLimitSource`, making unresolved external turn ceilings machine-readable before the runtime later reports an observed limit.
+
 ## 0.7.1 - 2026-03-23
 
 ### Changed

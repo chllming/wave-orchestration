@@ -459,9 +459,11 @@ describe("buildExecutorLaunchSpec", () => {
     expect(spec.limits).toMatchObject({
       attemptTimeoutMinutes: null,
       knownTurnLimit: null,
+      effectiveTurnLimit: null,
       turnLimitSource: "not-set-by-wave",
+      effectiveTurnLimitSource: "unknown-external",
     });
-    expect(spec.limits.notes[0]).toContain("Wave emits no Codex turn-limit flag");
+    expect(spec.limits.notes[0]).toContain("effectiveTurnLimit remains unknown");
   });
 
   it("writes a Claude overlay file and builds a headless invocation", () => {

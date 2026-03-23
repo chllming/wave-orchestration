@@ -161,7 +161,7 @@ Runtime-specific delivery:
 - OpenCode injects the compact catalog into `opencode.json` and attaches `skill.json`, `SKILL.md`, the selected adapter, and recursive `references/**` files through `--file`.
 - Local keeps skills prompt-only.
 
-`launch-preview.json` also records the resolved skill metadata plus a `limits` section. For Claude and OpenCode, that section reports the known turn ceiling and whether it came from the runtime-specific setting or generic `budget.turns`. For Codex, it explicitly records that Wave emitted no turn-limit flag and that any effective ceiling may come from the selected Codex profile or upstream runtime. If a live Codex run later terminates with a visible `Reached max turns (N)` log line, Wave appends that observed ceiling back into the live `launch-preview.json` as runtime evidence rather than pretending Wave set it.
+`launch-preview.json` also records the resolved skill metadata plus a `limits` section. For Claude and OpenCode, that section reports both `knownTurnLimit` and `effectiveTurnLimit` plus the runtime-specific or `budget.turns` source. For Codex, it explicitly records that Wave emitted no turn-limit flag, sets `effectiveTurnLimit` to `null`, and marks `effectiveTurnLimitSource: "unknown-external"` unless a live run later reveals the ceiling. If a live Codex run terminates with a visible `Reached max turns (N)` log line, Wave appends that observed ceiling back into the live `launch-preview.json` as runtime evidence rather than pretending Wave set it up front.
 
 ## Recommended Validation Path
 

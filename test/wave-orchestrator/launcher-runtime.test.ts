@@ -189,6 +189,8 @@ describe("launchAgentSession", () => {
       useRateLimitRetries: true,
       invocationLines: expect.any(Array),
       limits: {
+        effectiveTurnLimit: null,
+        effectiveTurnLimitSource: "unknown-external",
         turnLimitSource: "not-set-by-wave",
       },
     });

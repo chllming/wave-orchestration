@@ -116,6 +116,8 @@ pnpm exec wave launch --lane main --dry-run --no-dashboard
 pnpm exec wave launch --lane main --reconcile-status
 ```
 
+`--reconcile-status` now backfills missing `deliverables` and `proofArtifacts` arrays in older agent summary files before validation. That preserves authoritative older waves through summary-schema drift while still blocking if the actual files or coordination evidence are missing.
+
 3. Inspect pending feedback:
 
 ```bash

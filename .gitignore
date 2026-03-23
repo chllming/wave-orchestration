@@ -1,6 +1,7 @@
 node_modules/
 .tmp/
 .wave/
+.claude/worktrees/
 .railway/
 .vscode/terminals.json
 dist/
