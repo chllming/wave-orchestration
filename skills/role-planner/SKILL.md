@@ -18,11 +18,12 @@ For each proposed wave, answer these explicitly:
 2. Which exact components are being promoted?
 3. Which implementation owners map to those promoted components?
 4. Which exact deliverables prove each owned slice?
-5. Which exact proof artifacts are required, if any?
+5. Which exact proof artifacts are required? Declare them in `### Proof artifacts` for machine-visible validation.
 6. Who owns live proof, if the target is `pilot-live` or above?
 7. What must A8, A9, and A0 reject if the wave lands incompletely?
 8. Which shared-plan docs must change when the wave closes?
 9. Which executor, model, budget, retry policy, and Context7 settings reduce avoidable failure?
+10. Does this work require cross-lane dependency tickets?
 
 ## Maturity Rules
 

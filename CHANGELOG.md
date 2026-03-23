@@ -24,6 +24,7 @@
 - Added `docs/reference/wave-control.md` documenting the Wave Control telemetry contract, entity types, artifact upload policies, and local-first delivery model.
 - Added `docs/reference/proof-metrics.md` mapping README failure cases to concrete telemetry signals and success criteria.
 - Added `docs/evals/wave-benchmark-program.md` enhancements for native benchmarking mode with deterministic coordination-substrate tests.
+- Added a showcase-first `repo-landed` rollout-fidelity sample wave plus refreshed sample-wave docs so `0.7.0` includes both a dense proof-first example and a narrower closure-ready authoring reference.
 - Added resident orchestrator support via `--resident-orchestrator`, with a standing role prompt at `docs/agents/wave-orchestrator-role.md` and explicit non-owning session boundaries.
 - Added live-wave orchestration refresh that keeps shared summaries, inboxes, clarification triage, and dashboard coordination metrics current while agents are still running, including overdue acknowledgement tracking and stale clarification rerouting.
 - Added `docs/reference/runtime-config/README.md` section for `waveControl` configuration with defaults and artifact-kind filtering.
@@ -37,6 +38,7 @@
 - Proof bundles now carry lifecycle state so revoked or superseded operator evidence cannot keep satisfying closure gates.
 - Rerun requests now support explicit reuse selectors, component invalidation, resume cursors, and clear-or-preserve reuse lists alongside the existing agent selection.
 - Coordination store, feedback, clarification triage, traces, and benchmark modules now publish telemetry events when Wave Control capture is enabled.
+- Wave Control storage and queries now support durable Postgres-backed filtering by `workspaceId`, `projectId`, `orchestratorId`, and `runtimeVersion`.
 - Skill resolution description and documentation now accurately reflects the merge-then-resolve code path (base → role → runtime → deploy-kind → explicit).
 - Updated all documentation to reflect `0.7.0` release surface, including the operational runbook, coordination reference, sample waves, and live-proof examples.
 

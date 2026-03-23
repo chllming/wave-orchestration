@@ -154,6 +154,7 @@
         "docs/plans/master-plan.md",
         "docs/plans/wave-orchestrator.md",
         "docs/reference/sample-waves.md",
+        "docs/plans/examples/wave-example-rollout-fidelity.md",
         "docs/plans/examples/wave-example-live-proof.md",
         "docs/reference/live-proof-waves.md",
         "docs/plans/component-cutover-matrix.md",

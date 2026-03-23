@@ -88,7 +88,7 @@ Highlights in `0.7.0`:
 
 - Unified `wave control` operator CLI with `status`, `task`, `rerun`, `proof`, and `telemetry` surfaces, replacing the separate `wave coord`/`wave retry`/`wave proof` commands (which remain as compatibility surfaces).
 - Canonical control-plane event log under `.tmp/<lane>-wave-launcher/control-plane/` with event-sourced materialization for proof bundles, rerun requests, operator tasks, and attempt lifecycle.
-- Wave Control telemetry: local-first event queueing with best-effort batch delivery to a Railway-hosted analysis endpoint, configurable report modes, and selective artifact upload.
+- Wave Control telemetry: local-first event queueing with best-effort batch delivery to a Railway-hosted analysis endpoint, configurable report modes, selective artifact upload, and durable Postgres-backed querying by workspace, project, orchestrator, and runtime version.
 - Live-wave orchestration refresh that keeps coordination surfaces current during execution, including overdue acknowledgement tracking and stale clarification rerouting.
 - Resident orchestrator support via `--resident-orchestrator` for long-running non-owning monitoring sessions.
 
@@ -179,6 +179,8 @@ codex mcp list
 - [docs/concepts/context7-vs-skills.md](./docs/concepts/context7-vs-skills.md): compiled context, external truth, and repo-owned operating knowledge
 - [docs/guides/planner.md](./docs/guides/planner.md): `wave project` and `wave draft` workflow
 - [docs/guides/terminal-surfaces.md](./docs/guides/terminal-surfaces.md): tmux, VS Code terminal registry, and dry-run surfaces
+- [docs/reference/sample-waves.md](./docs/reference/sample-waves.md): showcase-first authored waves, including a high-fidelity repo-landed rollout example
+- [docs/plans/examples/wave-example-rollout-fidelity.md](./docs/plans/examples/wave-example-rollout-fidelity.md): concrete example of what good wave fidelity looks like for a narrow, closure-ready outcome
 - [docs/plans/wave-orchestrator.md](./docs/plans/wave-orchestrator.md): operator runbook
 - [docs/plans/context7-wave-orchestrator.md](./docs/plans/context7-wave-orchestrator.md): Context7 setup and bundle authoring
 - [docs/reference/runtime-config/README.md](./docs/reference/runtime-config/README.md): executor, runtime, and skill-projection configuration
