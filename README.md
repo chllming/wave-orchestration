@@ -181,6 +181,7 @@ codex mcp list
 - [docs/guides/terminal-surfaces.md](./docs/guides/terminal-surfaces.md): tmux, VS Code terminal registry, and dry-run surfaces
 - [docs/reference/sample-waves.md](./docs/reference/sample-waves.md): showcase-first authored waves, including a high-fidelity repo-landed rollout example
 - [docs/plans/examples/wave-example-rollout-fidelity.md](./docs/plans/examples/wave-example-rollout-fidelity.md): concrete example of what good wave fidelity looks like for a narrow, closure-ready outcome
+- [docs/reference/cli-reference.md](./docs/reference/cli-reference.md): complete CLI syntax for all commands and flags
 - [docs/plans/wave-orchestrator.md](./docs/plans/wave-orchestrator.md): operator runbook
 - [docs/plans/context7-wave-orchestrator.md](./docs/plans/context7-wave-orchestrator.md): Context7 setup and bundle authoring
 - [docs/reference/runtime-config/README.md](./docs/reference/runtime-config/README.md): executor, runtime, and skill-projection configuration
