@@ -94,6 +94,7 @@ describe("release surface alignment", () => {
   it("documents the adopted-repo planner migration surface", () => {
     const plannerGuide = fs.readFileSync(path.join(repoRoot, "docs", "guides", "planner.md"), "utf8");
     const migrationGuide = fs.readFileSync(path.join(repoRoot, "docs", "plans", "migration.md"), "utf8");
+    const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));
     const manifest = JSON.parse(
       fs.readFileSync(path.join(repoRoot, "releases", "manifest.json"), "utf8"),
     );
@@ -103,7 +104,7 @@ describe("release surface alignment", () => {
     expect(plannerGuide).toContain("docs/context7/planner-agent/");
     expect(plannerGuide).toContain("docs/reference/wave-planning-lessons.md");
     expect(plannerGuide).toContain("planner-agentic");
-    expect(migrationGuide).toContain("## Upgrading From 0.6.x To 0.7.0");
+    expect(migrationGuide).toContain(`## Upgrading From 0.6.x To ${packageJson.version}`);
     expect(migrationGuide).toContain("wave dashboard --lane <lane> --attach current");
     expect(JSON.stringify(manifest.releases[0])).toContain("planner-agentic");
   });

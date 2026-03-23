@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+## 0.7.1 - 2026-03-23
+
+### Changed
+
+- Updated the shipped package metadata, release manifest, README, migration guide, sample-wave docs, and npm publishing runbook to advertise `0.7.1` as the current release surface.
+- Clarified the adopted-repo `0.7.x` upgrade path with explicit planner-corpus remediation, stable dashboard reattach guidance, and current-release examples that match the package tag.
+
+### Fixed And Hardened
+
+- Fresh live launches now clear stale auto-generated relaunch plans by default, with `--resume-control-state` as the explicit opt-in when an operator intentionally wants to preserve prior relaunch intent.
+- Fixed `wave control status` so an already-running attempt remains the authoritative live fan-out instead of letting stale relaunch metadata or unrelated closure blockers dominate the wave-level view.
+- Fixed `reconcile-status` so waves with prior authoritative closure stay complete as `completed_with_drift` when the only mismatch is historical prompt-hash drift.
+- Fixed live executor overlays so `launch-preview.json` is written for real runs as well as dry-runs, and Codex previews record observed turn ceilings when the runtime logs one.
+- Updated dashboard, CLI reference, and terminal-surface docs to consistently point operators at the shipped `wave dashboard --attach current|global` surface.
+
+### Testing And Validation
+
+- Updated release-surface regression coverage so package metadata, README, changelog, release manifest, migration guidance, and CLI docs all stay aligned on the current release version.
+
 ## 0.7.0 - 2026-03-23
 
 ### Added

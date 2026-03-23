@@ -3,6 +3,24 @@
   "packageName": "@chllming/wave-orchestration",
   "releases": [
     {
+      "version": "0.7.1",
+      "date": "2026-03-23",
+      "summary": "Run-control hardening, completed-with-drift reconcile preservation, live Codex ceiling visibility, and 0.7.1 release-surface alignment.",
+      "features": [
+        "Fresh live launches now clear stale auto-generated relaunch plans by default, so explicit wave starts recompute the implementation fan-out unless `--resume-control-state` is passed.",
+        "`wave control status` now treats the active attempt as the authoritative live fan-out instead of replaying stale rerun intent or unrelated closure blockers.",
+        "Historical `reconcile-status` now preserves previously authoritative completed waves as `completed_with_drift` when the only mismatch is prompt-hash drift.",
+        "Live executor overlays now always write `launch-preview.json`, and Codex summaries record an observed turn ceiling when the runtime reports one.",
+        "Shipped package docs, migration guidance, sample-wave references, and npm publishing instructions now point at the `0.7.1` release surface."
+      ],
+      "manualSteps": [
+        "If you intentionally want to reuse a prior auto-generated relaunch selection on a fresh live start, pass `--resume-control-state` explicitly.",
+        "Use `pnpm exec wave dashboard --lane <lane> --attach current` or `--attach global` to reattach to live tmux-backed dashboards without resolving sockets or session names by hand.",
+        "If an adopted `0.6.x` repo fails `wave doctor` after the `0.7.x` upgrade, sync the repo-owned planner starter surface (`docs/agents/wave-planner-role.md`, `skills/role-planner/`, `docs/context7/planner-agent/`, `docs/reference/wave-planning-lessons.md`, and the `planner-agentic` bundle entry) before relying on planner-aware validation."
+      ],
+      "breaking": false
+    },
+    {
       "version": "0.7.0",
       "date": "2026-03-23",
       "summary": "Unified wave control operator CLI, canonical control-plane event log, Wave Control telemetry, live-wave orchestration refresh, and resident orchestrator support.",
