@@ -6,7 +6,15 @@ import {
 } from "./coordination-store.mjs";
 import { buildRequestAssignments } from "./routing-state.mjs";
 import { loadBenchmarkCases, loadExternalBenchmarkAdapters } from "./benchmark-cases.mjs";
-import { REPO_ROOT, ensureDirectory, toIsoTimestamp, writeJsonAtomic, writeTextAtomic } from "./shared.mjs";
+import {
+  DEFAULT_WAVE_LANE,
+  REPO_ROOT,
+  buildLanePaths,
+  ensureDirectory,
+  toIsoTimestamp,
+  writeJsonAtomic,
+  writeTextAtomic,
+} from "./shared.mjs";
 import {
   loadExternalArmTemplates,
   loadExternalCommandConfig,
@@ -14,6 +22,12 @@ import {
   loadExternalPilotManifests,
   runExternalBenchmarkPilot,
 } from "./benchmark-external.mjs";
+import {
+  buildWaveControlArtifactFromPath,
+  flushWaveControlQueue,
+  safeQueueWaveControlEvent,
+} from "./wave-control-client.mjs";
+import { buildWaveControlConfigAttestationHash } from "./wave-control-schema.mjs";
 
 const DEFAULT_OUTPUT_DIR = ".tmp/wave-benchmarks/latest";
 const BASELINE_ARM = "single-agent";
@@ -28,6 +42,106 @@ function normalizeId(value, label) {
     throw new Error(`${label} must match /^[a-z0-9][a-z0-9._-]*$/`);
   }
   return normalized;
+}
+
+function benchmarkTelemetryLanePaths() {
+  try {
+    return buildLanePaths(DEFAULT_WAVE_LANE);
+  } catch {
+    return null;
+  }
+}
+
+function localBenchmarkRunId(output) {
+  return `bench-local-${String(output.generatedAt || toIsoTimestamp()).replace(/[-:.TZ]/g, "").slice(0, 14)}`;
+}
+
+function publishLocalBenchmarkTelemetry({ output, outputDir }) {
+  const lanePaths = benchmarkTelemetryLanePaths();
+  if (!lanePaths || lanePaths.waveControl?.captureBenchmarkRuns === false) {
+    return null;
+  }
+  const benchmarkRunIdValue = localBenchmarkRunId(output);
+  const attestation = {
+    suite: output.suite,
+    cases: output.cases.map((benchmarkCase) => benchmarkCase.id),
+    familySummary: output.familySummary,
+    comparisons: output.comparisons,
+  };
+  safeQueueWaveControlEvent(lanePaths, {
+    category: "benchmark",
+    entityType: "benchmark_run",
+    entityId: benchmarkRunIdValue,
+    action: "completed",
+    source: "benchmark-runner",
+    actor: "wave benchmark run",
+    recordedAt: output.generatedAt,
+    identity: {
+      runKind: "benchmark",
+      benchmarkRunId: benchmarkRunIdValue,
+    },
+    tags: ["local-benchmark-suite"],
+    attestation,
+    data: {
+      suite: output.suite,
+      familySummary: output.familySummary,
+      comparisons: output.comparisons,
+      configHash: buildWaveControlConfigAttestationHash(attestation),
+    },
+    artifacts: [
+      {
+        ...buildWaveControlArtifactFromPath(path.join(outputDir, "results.json"), {
+          kind: "benchmark-results",
+          uploadPolicy: "selected",
+        }),
+        sourcePath: path.join(outputDir, "results.json"),
+      },
+      {
+        ...buildWaveControlArtifactFromPath(path.join(outputDir, "results.md"), {
+          kind: "benchmark-results-markdown",
+          uploadPolicy: "metadata-only",
+        }),
+        sourcePath: path.join(outputDir, "results.md"),
+      },
+    ],
+  });
+  for (const benchmarkCase of output.cases || []) {
+    for (const [arm, armResult] of Object.entries(benchmarkCase.arms || {})) {
+      safeQueueWaveControlEvent(lanePaths, {
+        category: "benchmark",
+        entityType: "benchmark_item",
+        entityId: `${benchmarkCase.id}:${arm}`,
+        action: armResult.passed ? "passed" : "failed",
+        source: "benchmark-runner",
+        actor: "wave benchmark run",
+        recordedAt: output.generatedAt,
+        identity: {
+          runKind: "benchmark",
+          benchmarkRunId: benchmarkRunIdValue,
+          benchmarkItemId: `${benchmarkCase.id}:${arm}`,
+        },
+        tags: [benchmarkCase.familyId, benchmarkCase.benchmarkId, arm],
+        data: {
+          id: benchmarkCase.id,
+          title: benchmarkCase.title,
+          familyId: benchmarkCase.familyId,
+          benchmarkId: benchmarkCase.benchmarkId,
+          primaryMetric: benchmarkCase.primaryMetric,
+          arm,
+          score: armResult.score,
+          alignedScore: armResult.alignedScore,
+          passed: armResult.passed,
+          direction: armResult.direction,
+          threshold: armResult.threshold,
+          metrics: armResult.metrics,
+          details: armResult.details,
+          artifacts: armResult.artifacts,
+        },
+      });
+    }
+  }
+  void flushWaveControlQueue(lanePaths);
+  return benchmarkRunIdValue;
 }
 
 function containsFact(text, fact) {
@@ -87,15 +201,18 @@ function scoreAssignments(assignments, expectedAssignments) {
   };
 }
 
+function renderCoordinationLine(record) {
+  return `- ${record.kind} ${record.id}: ${record.summary || record.detail || record.id}`;
+}
+
+function singleAgentVisibleRecords(benchmarkCase) {
+  const primaryAgentId = benchmarkCase.fixture.primaryAgentId;
+  return benchmarkCase.fixture.state.latestRecords.filter((record) => record.agentId === primaryAgentId);
+}
+
 function renderSingleAgentSummary(benchmarkCase) {
   const primaryAgentId = benchmarkCase.fixture.primaryAgentId;
-  const lines = benchmarkCase.fixture.state.latestRecords
-    .filter(
-      (record) =>
-        record.agentId === primaryAgentId ||
-        (Array.isArray(record.targets) && record.targets.includes(`agent:${primaryAgentId}`)),
-    )
-    .map((record) => `- ${record.kind}: ${record.summary || record.detail || record.id}`);
+  const lines = singleAgentVisibleRecords(benchmarkCase).map(renderCoordinationLine);
   return [
     `# Single Agent Local View`,
     "",
@@ -128,13 +245,7 @@ function renderSingleAgentInbox(benchmarkCase, agent) {
   if (agent.agentId !== benchmarkCase.fixture.primaryAgentId) {
     return `# Inbox unavailable for ${agent.agentId}\n\n- This arm does not compile targeted inboxes.\n`;
   }
-  const records = benchmarkCase.fixture.state.latestRecords
-    .filter(
-      (record) =>
-        record.agentId === agent.agentId ||
-        (Array.isArray(record.targets) && record.targets.includes(`agent:${agent.agentId}`)),
-    )
-    .map((record) => `- ${record.kind}: ${record.summary || record.detail || record.id}`);
+  const records = singleAgentVisibleRecords(benchmarkCase).map(renderCoordinationLine);
   return [
     `# Local Inbox For ${agent.agentId}`,
     "",
@@ -200,18 +311,50 @@ function buildArmArtifacts(benchmarkCase, arm) {
   };
 }
 
-function buildVisibleText(artifacts) {
+function renderAssignmentLine(assignment) {
+  return [
+    assignment.requestId,
+    assignment.summary || "",
+    assignment.target,
+    assignment.assignedAgentId || "unassigned",
+    assignment.assignmentReason || "",
+    assignment.assignmentDetail || "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function buildArtifactUnionText(artifacts) {
   return [artifacts.sharedSummary, ...Object.values(artifacts.inboxes || {}), ...(artifacts.assignments || []).map(
-    (assignment) =>
-      `${assignment.requestId} ${assignment.target} ${assignment.assignedAgentId || "unassigned"} ${assignment.assignmentReason || ""}`,
+    (assignment) => renderAssignmentLine(assignment),
+  )]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function integrationAgentIds(benchmarkCase) {
+  return benchmarkCase.fixture.agents
+    .filter((agent) => Array.isArray(agent.capabilities) && agent.capabilities.includes("integration"))
+    .map((agent) => agent.agentId);
+}
+
+function buildIntegrationVisibleText(benchmarkCase, artifacts) {
+  const integrationIds = integrationAgentIds(benchmarkCase);
+  const integrationInboxes =
+    integrationIds.length > 0
+      ? integrationIds.map((agentId) => artifacts.inboxes?.[agentId] || "")
+      : [];
+  return [artifacts.sharedSummary, ...integrationInboxes, ...(artifacts.assignments || []).map(
+    (assignment) => renderAssignmentLine(assignment),
   )]
     .filter(Boolean)
     .join("\n");
 }
 
 function scoreProjectionCase(benchmarkCase, arm, artifacts) {
-  const visibleText = buildVisibleText(artifacts);
-  const globalFacts = scoreFactRecall(visibleText, benchmarkCase.expectations.globalFacts);
+  const integrationVisibleText = buildIntegrationVisibleText(benchmarkCase, artifacts);
+  const artifactUnionText = buildArtifactUnionText(artifacts);
+  const globalFacts = scoreFactRecall(integrationVisibleText, benchmarkCase.expectations.globalFacts);
   const summaryFacts = scoreFactRecall(artifacts.sharedSummary, benchmarkCase.expectations.summaryFacts);
   const targetedInboxes = scoreTargetedInboxes(
     artifacts.inboxes,
@@ -225,7 +368,7 @@ function scoreProjectionCase(benchmarkCase, arm, artifacts) {
     (artifacts.assignments || []).map((assignment) => assignment.assignedAgentId).filter(Boolean),
   ).size;
   const clarificationRecall = scoreFactRecall(
-    visibleText,
+    artifactUnionText,
     benchmarkCase.expectations.clarificationRequestIds,
   );
   const metrics = {
@@ -269,6 +412,7 @@ function scoreProjectionCase(benchmarkCase, arm, artifacts) {
       globalFacts,
       summaryFacts,
       targetedInboxes,
+      clarificationRecall,
       assignmentPrecision,
       distinctAssignedAgents,
       blockingGuard: artifacts.blockingGuard,
@@ -330,6 +474,11 @@ function metricPasses(direction, actual, threshold) {
   return direction === "lower-is-better" ? actual <= threshold : actual >= threshold;
 }
 
+function alignMetricScore(direction, score) {
+  const numeric = Number(score || 0);
+  return Number((direction === "lower-is-better" ? 100 - numeric : numeric).toFixed(2));
+}
+
 function evaluateBenchmarkCaseArm(benchmarkCase, arm, catalog) {
   const artifacts = buildArmArtifacts(benchmarkCase, arm);
   const scoring = scoreProjectionCase(benchmarkCase, arm, artifacts);
@@ -340,6 +489,7 @@ function evaluateBenchmarkCaseArm(benchmarkCase, arm, catalog) {
   return {
     arm,
     score: primaryScore,
+    alignedScore: alignMetricScore(direction, primaryScore),
     passed: metricPasses(direction, primaryScore, threshold),
     direction,
     threshold,
@@ -365,8 +515,8 @@ function aggregateByFamily(caseResults) {
     };
     entry.cases += 1;
     for (const [arm, armResult] of Object.entries(caseResult.arms)) {
-      const armEntry = entry.arms[arm] || { totalScore: 0, passed: 0, cases: 0 };
-      armEntry.totalScore += armResult.score;
+      const armEntry = entry.arms[arm] || { totalAlignedScore: 0, passed: 0, cases: 0 };
+      armEntry.totalAlignedScore += armResult.alignedScore;
       armEntry.passed += armResult.passed ? 1 : 0;
       armEntry.cases += 1;
       entry.arms[arm] = armEntry;
@@ -381,7 +531,7 @@ function aggregateByFamily(caseResults) {
       Object.entries(entry.arms).map(([arm, value]) => [
         arm,
         {
-          meanScore: Number((value.totalScore / value.cases).toFixed(2)),
+          meanScore: Number((value.totalAlignedScore / value.cases).toFixed(2)),
           passRate: percent(value.passed, value.cases),
           cases: value.cases,
         },
@@ -403,7 +553,7 @@ function buildComparisons(caseResults, catalog) {
       if (!baseline || !candidate) {
         continue;
       }
-      overallDeltas.push(candidate.score - baseline.score);
+      overallDeltas.push(candidate.alignedScore - baseline.alignedScore);
     }
     if (overallDeltas.length > 0) {
       const ci = bootstrapMeanConfidenceInterval(overallDeltas, `overall:${challenger}`);
@@ -428,7 +578,7 @@ function buildComparisons(caseResults, catalog) {
         .map((caseResult) => {
           const baseline = caseResult.arms[BASELINE_ARM];
           const candidate = caseResult.arms[challenger];
-          return baseline && candidate ? candidate.score - baseline.score : null;
+          return baseline && candidate ? candidate.alignedScore - baseline.alignedScore : null;
         })
         .filter((value) => typeof value === "number");
       if (deltas.length === 0) {
@@ -463,8 +613,12 @@ function renderCaseMarkdown(caseResult) {
     `- Primary metric: \`${caseResult.primaryMetric}\``,
   ];
   for (const [arm, armResult] of Object.entries(caseResult.arms)) {
+    const scoreLabel =
+      armResult.alignedScore === armResult.score
+        ? `score=${armResult.score}`
+        : `score=${armResult.score} aligned=${armResult.alignedScore}`;
     lines.push(
-      `- ${arm}: score=${armResult.score} pass=${armResult.passed ? "yes" : "no"} threshold=${armResult.threshold ?? "n/a"}`,
+      `- ${arm}: ${scoreLabel} pass=${armResult.passed ? "yes" : "no"} threshold=${armResult.threshold ?? "n/a"}`,
     );
   }
   lines.push("");
@@ -485,7 +639,7 @@ function renderMarkdownReport(output) {
       `### ${family.familyTitle}`,
       ...Object.entries(family.arms).map(
         ([arm, stats]) =>
-          `- ${arm}: mean=${stats.meanScore} pass_rate=${stats.passRate}% cases=${stats.cases}`,
+          `- ${arm}: aligned_mean=${stats.meanScore} pass_rate=${stats.passRate}% cases=${stats.cases}`,
       ),
       "",
     ]),
@@ -496,7 +650,7 @@ function renderMarkdownReport(output) {
             comparison.scope === "overall"
               ? "overall"
               : `${comparison.familyTitle || comparison.familyId}`;
-          return `- ${scope}: ${comparison.challengerArm} vs ${comparison.baselineArm} delta=${comparison.meanDelta} ci=[${comparison.confidenceInterval.low}, ${comparison.confidenceInterval.high}] confident=${comparison.statisticallyConfident ? "yes" : "no"}`;
+          return `- ${scope}: ${comparison.challengerArm} vs ${comparison.baselineArm} aligned_delta=${comparison.meanDelta} ci=[${comparison.confidenceInterval.low}, ${comparison.confidenceInterval.high}] confident=${comparison.statisticallyConfident ? "yes" : "no"}`;
         })
       : ["- None."]),
     "",
@@ -564,6 +718,7 @@ export function runBenchmarkSuite(options = {}) {
     ensureDirectory(outputDir);
     writeJsonAtomic(path.join(outputDir, "results.json"), output);
     writeTextAtomic(path.join(outputDir, "results.md"), `${renderMarkdownReport(output)}\n`);
+    publishLocalBenchmarkTelemetry({ output, outputDir });
     output.outputDir = path.relative(REPO_ROOT, outputDir).replaceAll(path.sep, "/");
   }
   return output;

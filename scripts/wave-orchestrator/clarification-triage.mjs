@@ -430,6 +430,7 @@ function escalateClarificationToHuman({
     orchestratorId,
     question: record.summary || "Clarification requested",
     context: record.detail || "",
+    recordTelemetry: true,
   });
   const escalationId = `escalation-${humanRequest.requestId}`;
   const escalationRecord = {

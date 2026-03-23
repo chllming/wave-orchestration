@@ -24,6 +24,10 @@ import {
   writeTextAtomic,
 } from "./shared.mjs";
 import { summarizeResolvedSkills } from "./skills.mjs";
+import {
+  buildWaveControlArtifactFromPath,
+  safeQueueWaveControlEvent,
+} from "./wave-control-client.mjs";
 
 export const TRACE_VERSION = 2;
 const LEGACY_TRACE_VERSION = 1;
@@ -1026,7 +1030,82 @@ export function writeTraceBundle({
     present: true,
     sha256: null,
   };
-  writeJsonAtomic(path.join(dir, "run-metadata.json"), metadata);
+  const runMetadataPath = path.join(dir, "run-metadata.json");
+  writeJsonAtomic(runMetadataPath, metadata);
+  if (lanePaths?.waveControl?.captureTraceBundles !== false) {
+    safeQueueWaveControlEvent(lanePaths, {
+      category: "trace",
+      entityType: "artifact",
+      entityId: `wave-${wave.wave}-attempt-${attempt}-trace-bundle`,
+      action: "bundle-written",
+      source: "launcher",
+      actor: "launcher",
+      recordedAt: metadata.capturedAt,
+      identity: {
+        lane: lanePaths?.lane || null,
+        wave: wave.wave,
+        attempt,
+        runKind: lanePaths?.runKind || "roadmap",
+        runId: lanePaths?.runId || null,
+      },
+      tags: ["trace", "attempt-bundle"],
+      data: {
+        traceDir: relativePathOrNull(dir, REPO_ROOT),
+        finalRecommendation: quality?.finalRecommendation || null,
+        gate: normalizedGateSnapshot?.overall?.gate || null,
+      },
+      artifacts: [
+        {
+          ...buildWaveControlArtifactFromPath(runMetadataPath, {
+            kind: "trace-run-metadata",
+            required: true,
+            uploadPolicy: "selected",
+          }),
+          sourcePath: runMetadataPath,
+        },
+        {
+          ...buildWaveControlArtifactFromPath(path.join(dir, "quality.json"), {
+            kind: "trace-quality",
+            required: true,
+            uploadPolicy: "selected",
+          }),
+          sourcePath: path.join(dir, "quality.json"),
+        },
+        {
+          ...buildWaveControlArtifactFromPath(path.join(dir, "outcome.json"), {
+            kind: "trace-outcome",
+            required: true,
+            uploadPolicy: "selected",
+          }),
+          sourcePath: path.join(dir, "outcome.json"),
+        },
+        {
+          ...buildWaveControlArtifactFromPath(path.join(dir, "integration.json"), {
+            kind: "integration-summary",
+            required: true,
+            uploadPolicy: "selected",
+          }),
+          sourcePath: path.join(dir, "integration.json"),
+        },
+        {
+          ...buildWaveControlArtifactFromPath(path.join(dir, "proof-registry.json"), {
+            kind: "proof-registry",
+            required: false,
+            uploadPolicy: "selected",
+          }),
+          sourcePath: path.join(dir, "proof-registry.json"),
+        },
+        {
+          ...buildWaveControlArtifactFromPath(path.join(dir, "control-plane.raw.jsonl"), {
+            kind: "control-plane-log",
+            required: false,
+            uploadPolicy: "metadata-only",
+          }),
+          sourcePath: path.join(dir, "control-plane.raw.jsonl"),
+        },
+      ],
+    });
+  }
   return dir;
 }
 

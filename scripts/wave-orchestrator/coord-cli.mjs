@@ -457,6 +457,7 @@ export async function runCoordinationCli(argv) {
         response: options.response,
         operator: options.operator,
         force: true,
+        recordTelemetry: true,
       });
       console.log(JSON.stringify(answered, null, 2));
       return;

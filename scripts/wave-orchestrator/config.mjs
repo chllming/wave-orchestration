@@ -11,6 +11,7 @@ import {
   mergeSkillsConfig,
   normalizeSkillsConfig,
 } from "./skills.mjs";
+import { normalizeWaveControlReportMode } from "./wave-control-schema.mjs";
 
 const REPO_ROOT = WORKSPACE_ROOT;
 
@@ -70,6 +71,26 @@ export const DEFAULT_CODEX_SANDBOX_MODE = "danger-full-access";
 export const CODEX_SANDBOX_MODES = ["read-only", "workspace-write", "danger-full-access"];
 export const DEFAULT_CLAUDE_COMMAND = "claude";
 export const DEFAULT_OPENCODE_COMMAND = "opencode";
+export const DEFAULT_WAVE_CONTROL_AUTH_TOKEN_ENV_VAR = "WAVE_CONTROL_AUTH_TOKEN";
+export const DEFAULT_WAVE_CONTROL_REPORT_MODE = "metadata-plus-selected";
+export const DEFAULT_WAVE_CONTROL_REQUEST_TIMEOUT_MS = 5000;
+export const DEFAULT_WAVE_CONTROL_FLUSH_BATCH_SIZE = 25;
+export const DEFAULT_WAVE_CONTROL_MAX_PENDING_EVENTS = 1000;
+export const DEFAULT_WAVE_CONTROL_SELECTED_ARTIFACT_KINDS = [
+  "trace-run-metadata",
+  "trace-quality",
+  "trace-outcome",
+  "integration-summary",
+  "proof-registry",
+  "agent-summary",
+  "control-plane-log",
+  "benchmark-results",
+  "benchmark-failure-review",
+  "verification-stdout",
+  "verification-stderr",
+  "verification-output-manifest",
+  "benchmark-patch-manifest",
+];
 const LEGACY_EVALUATOR_ROLE_KEYS = new Map([
   ["evaluatorAgentId", "contQaAgentId"],
   ["evaluatorRolePromptPath", "contQaRolePromptPath"],
@@ -509,6 +530,61 @@ function normalizeRuntimePolicy(rawRuntimePolicy = {}) {
   };
 }
 
+function normalizeWaveControl(rawWaveControl = {}, label = "waveControl") {
+  const waveControl =
+    rawWaveControl && typeof rawWaveControl === "object" && !Array.isArray(rawWaveControl)
+      ? rawWaveControl
+      : {};
+  const reportMode = normalizeWaveControlReportMode(
+    waveControl.reportMode,
+    `${label}.reportMode`,
+    DEFAULT_WAVE_CONTROL_REPORT_MODE,
+  );
+  const enabled =
+    reportMode !== "disabled" && normalizeOptionalBoolean(waveControl.enabled, true);
+  return {
+    enabled,
+    endpoint: normalizeOptionalString(waveControl.endpoint, null),
+    workspaceId: normalizeOptionalString(waveControl.workspaceId, null),
+    authTokenEnvVar:
+      normalizeOptionalString(waveControl.authTokenEnvVar, DEFAULT_WAVE_CONTROL_AUTH_TOKEN_ENV_VAR) ||
+      DEFAULT_WAVE_CONTROL_AUTH_TOKEN_ENV_VAR,
+    reportMode,
+    uploadArtifactKinds: normalizeOptionalStringArray(
+      waveControl.uploadArtifactKinds,
+      DEFAULT_WAVE_CONTROL_SELECTED_ARTIFACT_KINDS,
+    ),
+    requestTimeoutMs:
+      normalizeOptionalPositiveInt(
+        waveControl.requestTimeoutMs,
+        `${label}.requestTimeoutMs`,
+        DEFAULT_WAVE_CONTROL_REQUEST_TIMEOUT_MS,
+      ) || DEFAULT_WAVE_CONTROL_REQUEST_TIMEOUT_MS,
+    flushBatchSize:
+      normalizeOptionalPositiveInt(
+        waveControl.flushBatchSize,
+        `${label}.flushBatchSize`,
+        DEFAULT_WAVE_CONTROL_FLUSH_BATCH_SIZE,
+      ) || DEFAULT_WAVE_CONTROL_FLUSH_BATCH_SIZE,
+    maxPendingEvents:
+      normalizeOptionalPositiveInt(
+        waveControl.maxPendingEvents,
+        `${label}.maxPendingEvents`,
+        DEFAULT_WAVE_CONTROL_MAX_PENDING_EVENTS,
+      ) || DEFAULT_WAVE_CONTROL_MAX_PENDING_EVENTS,
+    captureCoordinationRecords: normalizeOptionalBoolean(
+      waveControl.captureCoordinationRecords,
+      true,
+    ),
+    captureControlPlaneEvents: normalizeOptionalBoolean(
+      waveControl.captureControlPlaneEvents,
+      true,
+    ),
+    captureTraceBundles: normalizeOptionalBoolean(waveControl.captureTraceBundles, true),
+    captureBenchmarkRuns: normalizeOptionalBoolean(waveControl.captureBenchmarkRuns, true),
+  };
+}
+
 function normalizeLaneSkills(rawSkills = {}, lane = "skills", options = {}) {
   return normalizeSkillsConfig(rawSkills, lane, options);
 }
@@ -903,6 +979,7 @@ export function loadWaveConfig(configPath = DEFAULT_WAVE_CONFIG_PATH) {
     skills: normalizeLaneSkills(rawConfig.skills, "skills"),
     capabilityRouting: normalizeCapabilityRouting(rawConfig.capabilityRouting),
     runtimePolicy: normalizeRuntimePolicy(rawConfig.runtimePolicy),
+    waveControl: normalizeWaveControl(rawConfig.waveControl, "waveControl"),
     sharedPlanDocs,
     lanes,
     configPath,
@@ -956,6 +1033,13 @@ export function resolveLaneProfile(config, laneInput = config.defaultLane) {
       ? { fallbackExecutorOrder: laneConfig.fallbackExecutorOrder }
       : {}),
   });
+  const waveControl = normalizeWaveControl(
+    {
+      ...config.waveControl,
+      ...(laneConfig.waveControl || {}),
+    },
+    `${lane}.waveControl`,
+  );
   return {
     lane,
     docsDir,
@@ -971,6 +1055,7 @@ export function resolveLaneProfile(config, laneInput = config.defaultLane) {
     skills,
     capabilityRouting,
     runtimePolicy,
+    waveControl,
     paths: {
       terminalsPath: normalizeRepoRelativePath(
         laneConfig.terminalsPath || config.paths.terminalsPath,

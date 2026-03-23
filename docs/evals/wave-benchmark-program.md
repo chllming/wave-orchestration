@@ -92,6 +92,115 @@ The local case corpus follows these constraints:
 
 The first corpus deliberately exercises projection, routing, and closure logic before attempting expensive live multi-executor runs.
 
+## Native Benchmarking Mode
+
+`wave benchmark run` is the native deterministic benchmarking mode.
+
+This mode is intentionally narrow:
+
+- it tests the Wave substrate, not generic model capability
+- it holds the coordination fixture constant and varies only the arm behavior
+- it uses current Wave machinery to compile summaries, inboxes, assignments, and closure guards
+- it is cheap and reproducible enough to run in local development and CI
+
+What it is meant to prove:
+
+- the blackboard projections preserve decision-changing state
+- targeted inboxes reduce silos instead of creating them
+- capability routing sends the right work to the right owner
+- contradiction handling becomes explicit repair work
+- closure guards resist premature PASS
+
+What it does not prove by itself:
+
+- raw coding ability on live repos
+- leaderboard-ready external benchmark performance
+- runtime-specific agent behavior under real tool pressure
+
+That separation is intentional. Native mode is the first honest proof layer for a MAS tool whose core claim is about shared state, routing, synthesis, and closure discipline.
+
+## Native Metric Contract
+
+For each case and arm, the native runner records:
+
+- `score`
+  The case's primary metric value.
+- `passed`
+  Whether the primary metric satisfied the case threshold.
+- `direction`
+  Whether the metric is `higher-is-better` or `lower-is-better`.
+- `threshold`
+  The configured case threshold for the primary metric.
+- `metrics`
+  The full metric map computed from the deterministic fixture.
+- `details`
+  Supporting breakdowns such as matched global facts, summary facts, targeted inbox recall, assignment precision, distinct assigned agents, and whether the blocking guard tripped.
+- `artifacts`
+  The generated `sharedSummary`, `inboxes`, `assignments`, and `blockingGuard` state used to score the arm.
+
+The runner also records:
+
+- `familySummary`
+  Mean score and pass rate per family and arm.
+- `comparisons`
+  Mean delta versus `single-agent`, bootstrap confidence intervals, and a conservative `statisticallyConfident` flag.
+
+When `waveControl` reporting is enabled, native runs also publish:
+
+- `benchmark_run`
+  Suite-level metadata, selected arms, family summary, and comparison summary.
+- `benchmark_item`
+  Full per-case arm payloads including `score`, `passed`, `metrics`, `details`, and generated artifacts.
+
+Native mode does **not** emit `verification` or `review` events, because there is no external verifier and no benchmark-validity split to interpret. Those are reserved for `wave benchmark external-run`.
+
+## Native Metric Set
+
+The current deterministic runner logs the following metrics:
+
+| Metric | Native signal used today | Why it matters for the MAS claim |
+| --- | --- | --- |
+| `distributed-info-accuracy` | Percent of expected global facts visible in the scored artifacts | Proves the team pooled distributed evidence rather than leaving it siloed |
+| `latent-asymmetry-surfacing-rate` | Clarification recall when a case expects missing-fact surfacing, otherwise targeted inbox recall | Proves the system notices that important evidence is still missing before closure |
+| `premature-convergence-rate` | `100` when a case required a blocking guard and the arm failed to keep it active, else `0` | Proves whether closure discipline resists converging on incomplete state |
+| `global-state-reconstruction-rate` | Percent of required cross-agent facts reconstructed in the visible state | Proves communication turned into a correct shared picture, not only message traffic |
+| `summary-fact-retention-rate` | Percent of required summary facts preserved in the shared summary | Proves summary compression is trustworthy enough to support downstream synthesis |
+| `communication-reasoning-gap` | `100 - global-state-reconstruction-rate` | Makes failure explicit when agents talk but still fail to integrate correctly |
+| `projection-consistency-rate` | Same summary-fidelity signal, framed for projection integrity | Proves the blackboard projections remain semantically aligned with canonical state |
+| `targeted-inbox-recall` | Percent of expected owner-specific facts present in the right inboxes | Proves targeted context actually reaches the agents who own the work |
+| `integration-coherence-rate` | Global-fact recall used as a proxy for integration fidelity in the deterministic corpus | Proves the synthesis layer reflects the underlying coordination state |
+| `contradiction-detection-rate` | Targeted-fact recall on contradiction-oriented fixtures | Proves conflicting claims become visible instead of being smoothed away |
+| `repair-closure-rate` | Assignment precision for required repair or follow-up work | Proves contradictions and blockers turn into owner-bound resolution work |
+| `false-consensus-rate` | `100` when a contradiction/premature-close guard should have held and did not, else `0` | Proves whether the system is narrating consensus where the state is still unresolved |
+| `deadlock-rate` | `100` when the arm failed to reach the required number of distinct owners in simultaneous-coordination cases, else `0` | Proves whether the team collapses under concurrent coordination pressure |
+| `contention-resolution-rate` | Assignment precision in concurrent blocker cases | Proves simultaneous work can resolve rather than stall |
+| `symmetry-breaking-rate` | Percent of the required distinct owners/choices achieved | Proves the team can break lockstep and avoid same-plan collapse |
+| `expert-preservation-rate` | Targeted-fact recall used on expert-preservation fixtures | Proves the strongest specialist signal survives into the visible decision path |
+| `capability-routing-precision` | Correct assignment rate for capability-routed requests | Proves the routing layer is steering work to the intended owner |
+| `expert-performance-gap` | `100 - expert-preservation-rate` | Makes expert-signal dilution explicit as a failure measure rather than an anecdote |
+
+Several of these metrics intentionally reuse the same deterministic signals under different benchmark families. That is not accidental. The goal is not to create an unnecessarily large metric vocabulary; it is to ask the same core question from multiple MAS failure angles:
+
+- did the right facts reach shared state
+- did the right owners receive the right context
+- did conflicts become explicit repair work
+- did closure wait for integrated proof
+
+## Why These Metrics Matter
+
+The first public claim is not "Wave is a better model." It is that Wave is a better multi-agent coordination substrate.
+
+That means the most valuable native metrics are the ones that expose the failure cases from the README:
+
+- distributed-evidence metrics matter because a MAS that cannot pool private facts has no credible shared-state claim
+- summary and inbox metrics matter because a blackboard is only useful if the projections stay faithful and owner-relevant
+- routing metrics matter because specialist structure only helps if work actually lands on the right owner
+- contradiction and repair metrics matter because visible disagreement without repair is still coordination failure
+- premature-closure metrics matter because a MAS that can always narrate PASS is not proving anything
+- simultaneous-coordination metrics matter because many systems look fine in serial but collapse under concurrent blockers
+
+In other words, these metrics matter because they test the *coordination mechanism itself*, which is the actual product claim of Wave.
+
 ## External Benchmark Positioning
 
 The external benchmark registry is split into two modes:

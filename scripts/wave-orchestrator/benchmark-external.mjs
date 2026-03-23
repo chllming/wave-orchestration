@@ -1,8 +1,23 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { REPO_ROOT, ensureDirectory, readJsonOrNull, toIsoTimestamp, writeJsonAtomic, writeTextAtomic } from "./shared.mjs";
+import {
+  DEFAULT_WAVE_LANE,
+  REPO_ROOT,
+  buildLanePaths,
+  ensureDirectory,
+  readJsonOrNull,
+  toIsoTimestamp,
+  writeJsonAtomic,
+  writeTextAtomic,
+} from "./shared.mjs";
 import { loadExternalBenchmarkAdapters } from "./benchmark-cases.mjs";
+import {
+  buildWaveControlArtifactFromPath,
+  flushWaveControlQueue,
+  safeQueueWaveControlEvent,
+} from "./wave-control-client.mjs";
+import { buildWaveControlConfigAttestationHash } from "./wave-control-schema.mjs";
 
 const DEFAULT_EXTERNAL_PILOTS_DIR = "docs/evals/pilots";
 const DEFAULT_EXTERNAL_ARM_TEMPLATES_DIR = "docs/evals/arm-templates";
@@ -90,6 +105,241 @@ function escapeMarkdownCell(value) {
   return String(value ?? "")
     .replace(/\r?\n/g, " ")
     .replace(/\|/g, "\\|");
+}
+
+function benchmarkTelemetryLanePaths() {
+  try {
+    return buildLanePaths(DEFAULT_WAVE_LANE);
+  } catch {
+    return null;
+  }
+}
+
+function benchmarkRunId(output) {
+  return `bench-${output.adapter.id}-${output.manifest.id}-${String(output.generatedAt || toIsoTimestamp()).replace(/[-:.TZ]/g, "").slice(0, 14)}`;
+}
+
+function reviewValidityForResult(result, output) {
+  if (result.success && output.comparisonReady) {
+    return "comparison-valid";
+  }
+  if (result.reviewDisposition === "invalidated") {
+    return "benchmark-invalid";
+  }
+  if (result.reviewDisposition === "setup-failure") {
+    return "harness-setup-failure";
+  }
+  if (result.reviewDisposition === "blocked-proof") {
+    return "proof-blocked";
+  }
+  if (result.reviewDisposition === "scored-failure") {
+    return "trustworthy-model-failure";
+  }
+  return "review-only";
+}
+
+function externalTaskArtifacts(result) {
+  const artifacts = [];
+  if (result.patchPath) {
+    artifacts.push({
+      ...buildWaveControlArtifactFromPath(path.resolve(REPO_ROOT, result.patchPath), {
+        kind: "benchmark-patch-manifest",
+        uploadPolicy: "selected",
+      }),
+      sourcePath: path.resolve(REPO_ROOT, result.patchPath),
+    });
+  }
+  if (result.summaryPath) {
+    artifacts.push({
+      ...buildWaveControlArtifactFromPath(path.resolve(REPO_ROOT, result.summaryPath), {
+        kind: "benchmark-task-summary",
+        uploadPolicy: "selected",
+      }),
+      sourcePath: path.resolve(REPO_ROOT, result.summaryPath),
+    });
+  }
+  if (result.verificationStdoutPath) {
+    artifacts.push({
+      ...buildWaveControlArtifactFromPath(path.resolve(REPO_ROOT, result.verificationStdoutPath), {
+        kind: "verification-stdout",
+        uploadPolicy: "selected",
+      }),
+      sourcePath: path.resolve(REPO_ROOT, result.verificationStdoutPath),
+    });
+  }
+  if (result.verificationStderrPath) {
+    artifacts.push({
+      ...buildWaveControlArtifactFromPath(path.resolve(REPO_ROOT, result.verificationStderrPath), {
+        kind: "verification-stderr",
+        uploadPolicy: "selected",
+      }),
+      sourcePath: path.resolve(REPO_ROOT, result.verificationStderrPath),
+    });
+  }
+  return artifacts;
+}
+
+function publishExternalBenchmarkTelemetry({ output, outputDir, failureReview }) {
+  const lanePaths = benchmarkTelemetryLanePaths();
+  if (!lanePaths || lanePaths.waveControl?.captureBenchmarkRuns === false) {
+    return null;
+  }
+  const benchmarkRunIdValue = benchmarkRunId(output);
+  const attestation = {
+    adapterId: output.adapter.id,
+    manifestId: output.manifest.id,
+    manifestPath: output.manifest.path,
+    selectedArms: output.selectedArms,
+    comparisonReady: output.comparisonReady,
+    comparisonMode: output.comparisonMode,
+    runConfig: output.runConfig,
+    summary: {
+      tasks: output.summary.tasks,
+      solved: output.summary.solved,
+      successRate: output.summary.successRate,
+    },
+  };
+  safeQueueWaveControlEvent(lanePaths, {
+    category: "benchmark",
+    entityType: "benchmark_run",
+    entityId: benchmarkRunIdValue,
+    action: output.dryRun ? "planned" : "completed",
+    source: "benchmark-runner",
+    actor: "wave benchmark external-run",
+    recordedAt: output.generatedAt,
+    identity: {
+      runKind: "benchmark",
+      benchmarkRunId: benchmarkRunIdValue,
+    },
+    tags: [output.adapter.id, output.comparisonMode],
+    attestation,
+    data: {
+      adapter: output.adapter,
+      manifest: {
+        id: output.manifest.id,
+        path: output.manifest.path,
+        reviewOnly: output.manifest.reviewOnly,
+      },
+      comparisonReady: output.comparisonReady,
+      comparisonMode: output.comparisonMode,
+      selectedArms: output.selectedArms,
+      summary: output.summary,
+      review: failureReview.summary,
+      configHash: buildWaveControlConfigAttestationHash(attestation),
+    },
+    artifacts: [
+      {
+        ...buildWaveControlArtifactFromPath(path.join(outputDir, "results.json"), {
+          kind: "benchmark-results",
+          uploadPolicy: "selected",
+        }),
+        sourcePath: path.join(outputDir, "results.json"),
+      },
+      {
+        ...buildWaveControlArtifactFromPath(path.join(outputDir, "results.md"), {
+          kind: "benchmark-results-markdown",
+          uploadPolicy: "metadata-only",
+        }),
+        sourcePath: path.join(outputDir, "results.md"),
+      },
+      {
+        ...buildWaveControlArtifactFromPath(path.join(outputDir, "failure-review.json"), {
+          kind: "benchmark-failure-review",
+          uploadPolicy: "selected",
+        }),
+        sourcePath: path.join(outputDir, "failure-review.json"),
+      },
+      {
+        ...buildWaveControlArtifactFromPath(path.join(outputDir, "failure-review.md"), {
+          kind: "benchmark-failure-review-markdown",
+          uploadPolicy: "metadata-only",
+        }),
+        sourcePath: path.join(outputDir, "failure-review.md"),
+      },
+    ],
+  });
+  for (const result of output.tasks || []) {
+    const reviewValidity = reviewValidityForResult(result, output);
+    const identity = {
+      runKind: "benchmark",
+      benchmarkRunId: benchmarkRunIdValue,
+      benchmarkItemId: `${result.taskId}:${result.arm}`,
+    };
+    const taskArtifacts = externalTaskArtifacts(result);
+    safeQueueWaveControlEvent(lanePaths, {
+      category: "benchmark",
+      entityType: "benchmark_item",
+      entityId: `${result.taskId}:${result.arm}`,
+      action: result.success ? "passed" : "failed",
+      source: "benchmark-runner",
+      actor: "wave benchmark external-run",
+      recordedAt: output.generatedAt,
+      identity,
+      tags: [output.adapter.id, result.arm, reviewValidity],
+      data: {
+        benchmarkId: result.benchmarkId,
+        benchmarkTitle: result.benchmarkTitle,
+        taskId: result.taskId,
+        repo: result.repo,
+        repoLanguage: result.repoLanguage,
+        arm: result.arm,
+        modelId: result.modelId,
+        executorId: result.executorId,
+        success: result.success,
+        wallClockMs: result.wallClockMs,
+        totalCostUsd: result.totalCostUsd,
+        tokenUsage: result.tokenUsage,
+        reviewCategory: result.reviewCategory,
+        reviewDisposition: result.reviewDisposition,
+        reviewValidity,
+        detail: result.detail,
+        tracePath: result.tracePath || null,
+      },
+      artifacts: taskArtifacts,
+    });
+    safeQueueWaveControlEvent(lanePaths, {
+      category: "benchmark",
+      entityType: "verification",
+      entityId: `${result.taskId}:${result.arm}:verification`,
+      action: result.success ? "passed" : "failed",
+      source: "benchmark-runner",
+      actor: output.runConfig.verificationHarness || "benchmark-verifier",
+      recordedAt: output.generatedAt,
+      identity,
+      tags: [output.adapter.id, result.arm, "verification"],
+      data: {
+        verificationHarness: output.runConfig.verificationHarness || null,
+        officialScore: result.success ? 1 : 0,
+        reviewCategory: result.reviewCategory,
+        reviewDisposition: result.reviewDisposition,
+        verificationOutputDir: result.verificationOutputDir || null,
+      },
+      artifacts: taskArtifacts.filter((artifact) =>
+        ["verification-stdout", "verification-stderr"].includes(artifact.kind),
+      ),
+    });
+    safeQueueWaveControlEvent(lanePaths, {
+      category: "benchmark",
+      entityType: "review",
+      entityId: `${result.taskId}:${result.arm}:review`,
+      action: reviewValidity,
+      source: "benchmark-runner",
+      actor: "wave benchmark external-run",
+      recordedAt: output.generatedAt,
+      identity,
+      tags: [output.adapter.id, result.arm, reviewValidity],
+      data: {
+        reviewCategory: result.reviewCategory,
+        reviewDisposition: result.reviewDisposition,
+        reviewValidity,
+        comparisonReady: output.comparisonReady,
+        comparisonMode: output.comparisonMode,
+        detail: result.detail,
+      },
+    });
+  }
+  void flushWaveControlQueue(lanePaths);
+  return benchmarkRunIdValue;
 }
 
 function normalizeRepoRelativePath(value, label) {
@@ -1126,6 +1376,7 @@ export function runExternalBenchmarkPilot(options = {}) {
   writeTextAtomic(path.join(outputDir, "results.md"), `${renderExternalResultsMarkdown(output)}\n`);
   writeJsonAtomic(path.join(outputDir, "failure-review.json"), failureReview);
   writeTextAtomic(path.join(outputDir, "failure-review.md"), `${renderExternalFailureReviewMarkdown(failureReview)}\n`);
+  publishExternalBenchmarkTelemetry({ output, outputDir, failureReview });
   return {
     ...output,
     outputDir: path.relative(REPO_ROOT, outputDir).replaceAll(path.sep, "/"),

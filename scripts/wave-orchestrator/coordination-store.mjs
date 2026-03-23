@@ -5,6 +5,7 @@ import {
   DEFAULT_COORDINATION_ACK_TIMEOUT_MS,
   DEFAULT_COORDINATION_RESOLUTION_STALE_MS,
   REPO_ROOT,
+  buildLanePaths,
   compactSingleLine,
   ensureDirectory,
   readJsonOrNull,
@@ -12,6 +13,7 @@ import {
   truncate,
   writeTextAtomic,
 } from "./shared.mjs";
+import { safeQueueWaveControlEvent } from "./wave-control-client.mjs";
 
 export const COORDINATION_KIND_VALUES = [
   "request",
@@ -149,6 +151,50 @@ export function appendCoordinationRecord(filePath, rawRecord, defaults = {}) {
   const record = normalizeCoordinationRecord(rawRecord, defaults);
   ensureDirectory(path.dirname(filePath));
   fs.appendFileSync(filePath, `${JSON.stringify(record)}\n`, "utf8");
+  const runIdHint = normalizeString(rawRecord?.runId ?? defaults.runId, "");
+  try {
+    const lanePaths = buildLanePaths(record.lane, {
+      ...(runIdHint ? { adhocRunId: runIdHint } : {}),
+    });
+    if (lanePaths?.waveControl?.captureCoordinationRecords !== false) {
+      safeQueueWaveControlEvent(lanePaths, {
+        category: "coordination",
+        entityType: "coordination_record",
+        entityId: record.id,
+        action: "recorded",
+        source: record.source,
+        actor: record.agentId,
+        recordedAt: record.updatedAt || record.createdAt,
+        identity: {
+          lane: record.lane,
+          wave: record.wave,
+          attempt: record.attempt,
+          agentId: record.agentId,
+          runKind: lanePaths.runKind,
+          runId: lanePaths.runId,
+        },
+        tags: [`kind:${record.kind}`, `status:${record.status}`],
+        data: {
+          kind: record.kind,
+          status: record.status,
+          priority: record.priority,
+          confidence: record.confidence,
+          summary: record.summary,
+          detail: record.detail,
+          targets: record.targets,
+          artifactRefs: record.artifactRefs,
+          dependsOn: record.dependsOn,
+          closureCondition: record.closureCondition,
+          required: record.required,
+          executorId: record.executorId || null,
+          requesterLane: record.requesterLane || null,
+          ownerLane: record.ownerLane || null,
+        },
+      });
+    }
+  } catch {
+    // Telemetry is best-effort and must never block canonical coordination writes.
+  }
   return record;
 }
 
@@ -443,7 +489,7 @@ function renderOpenRecord(record, responseMetrics = null) {
     tags.push("stale-clarification");
   }
   const timing = tags.length > 0 ? ` [${tags.join(", ")}]` : "";
-  return `- [${record.priority}] ${record.kind}/${record.status} ${record.agentId}${targets}${timing}: ${compactSingleLine(record.summary || record.detail || "no summary", 160)}${artifacts}`;
+  return `- [${record.priority}] ${record.kind}/${record.status} ${record.agentId}${targets}${timing} id=${record.id}: ${compactSingleLine(record.summary || record.detail || "no summary", 160)}${artifacts}`;
 }
 
 function renderActivityRecord(record) {

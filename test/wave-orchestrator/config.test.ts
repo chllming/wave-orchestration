@@ -130,8 +130,20 @@ describe("runtime configuration normalization", () => {
               },
             },
           },
+          waveControl: {
+            endpoint: "https://wave-control.example/api/v1",
+            workspaceId: "wave-control-workspace",
+            authTokenEnvVar: "CUSTOM_WAVE_CONTROL_TOKEN",
+            uploadArtifactKinds: ["trace-quality", "trace-outcome"],
+            requestTimeoutMs: 9000,
+            flushBatchSize: 12,
+          },
           lanes: {
             main: {
+              waveControl: {
+                uploadArtifactKinds: ["trace-quality", "benchmark-results"],
+                captureBenchmarkRuns: false,
+              },
               skills: {
                 base: ["repo-coding-rules"],
                 byRuntime: {
@@ -260,6 +272,23 @@ describe("runtime configuration normalization", () => {
       },
     });
     expect(lane.roles.securityRolePromptPath).toBe("docs/agents/wave-security-role.md");
+    expect(config.waveControl).toMatchObject({
+      enabled: true,
+      endpoint: "https://wave-control.example/api/v1",
+      workspaceId: "wave-control-workspace",
+      authTokenEnvVar: "CUSTOM_WAVE_CONTROL_TOKEN",
+      reportMode: "metadata-plus-selected",
+      uploadArtifactKinds: ["trace-quality", "trace-outcome"],
+      requestTimeoutMs: 9000,
+      flushBatchSize: 12,
+    });
+    expect(lane.waveControl).toMatchObject({
+      enabled: true,
+      endpoint: "https://wave-control.example/api/v1",
+      workspaceId: "wave-control-workspace",
+      uploadArtifactKinds: ["trace-quality", "benchmark-results"],
+      captureBenchmarkRuns: false,
+    });
   });
 
   it("preserves a global custom skills dir when lane skills omit dir", () => {

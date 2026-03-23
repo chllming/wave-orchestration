@@ -114,6 +114,14 @@ The default output path is `.tmp/wave-benchmarks/latest/`.
 
 These case runs are local benchmark artifacts, not committed run history.
 
+Native mode is deterministic on purpose. `wave benchmark run` is meant to prove the coordination substrate before we move to live external suites. Its logged outputs are:
+
+- per-case, per-arm `score`, `passed`, `direction`, `threshold`, `metrics`, `details`, and generated artifacts
+- family summaries with mean score and pass rate
+- arm comparisons with mean delta versus `single-agent` and bootstrap confidence intervals
+
+When `waveControl` reporting is enabled, native runs publish `benchmark_run` and `benchmark_item` events through the same telemetry spine as live waves. For the full native-mode contract and the rationale for each metric, see [wave-benchmark-program.md](./wave-benchmark-program.md) and [proof-metrics.md](../reference/proof-metrics.md).
+
 ## External Benchmark Workflow
 
 The current direct external benchmark path starts with `SWE-bench Pro`.
@@ -160,6 +168,16 @@ Each `wave benchmark external-run` output directory now includes:
 Start with `failure-review.md` when a review-only batch returns many failures. It splits
 verifier-image issues, setup or harness failures, trustworthy patch failures, and dry-run
 planning-only output so the batch is easier to interpret.
+
+When `waveControl` reporting is enabled, benchmark runs also publish through the same telemetry
+spine as live waves:
+
+- `benchmark_run` for the batch configuration and attestation hash
+- `benchmark_item` for each task/arm execution
+- `verification` for official harness output and linked verifier artifacts
+- `review` for publishability, validity, and failure classification
+
+That keeps benchmark trust evidence queryable alongside the runtime traces that produced it.
 
 ## How To Choose The Right Family
 
