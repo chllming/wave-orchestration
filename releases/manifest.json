@@ -3,6 +3,26 @@
   "packageName": "@chllming/wave-orchestration",
   "releases": [
     {
+      "version": "0.8.2",
+      "date": "2026-03-24",
+      "summary": "Completed-wave control-status projection hardening and 0.8.2 release-surface alignment.",
+      "features": [
+        "`wave control status` now clears stale blocking edges after a wave has already reached `phase=completed`, instead of replaying historical open request records as live blockers.",
+        "Completed waves now suppress stale `nextTimer` deadlines in the control-status projection.",
+        "Successful logical-agent states are preserved for completed waves instead of being re-blocked by stale coordination history in the control-status surface.",
+        "Regression coverage now exercises the completed-wave stale-blocking projection path directly.",
+        "Shipped package metadata, README, migration guidance, sample-wave docs, and npm publishing instructions now point at the `0.8.2` release surface."
+      ],
+      "manualSteps": [
+        "Run `pnpm exec wave doctor` and `pnpm exec wave launch --lane main --dry-run --no-dashboard` after upgrading so the repo validates against the `0.8.2` runtime and completed-wave control-status contract.",
+        "If an adopted repo fails `wave doctor` after the upgrade, sync the repo-owned planner starter surface (`docs/agents/wave-planner-role.md`, `skills/role-planner/`, `docs/context7/planner-agent/`, `docs/reference/wave-planning-lessons.md`, and the `planner-agentic` bundle entry) before relying on planner-aware validation.",
+        "If a repo carries custom operator docs for `wave control status`, update that guidance so completed waves are described as terminal projections where historical coordination records may remain visible without reopening blockers.",
+        "If an adopted repo copied the starter architecture docs or skill bundles, sync the updated role prompts, `skills/wave-core/`, runtime skills, and closure-role skills so local guidance matches the `0.8.2` authority model and completed-wave control behavior.",
+        "Review `docs/plans/architecture-hardening-migration.md` before continuing reducer-authoritative cutover work in repos that extend the shipped starter surface."
+      ],
+      "breaking": false
+    },
+    {
       "version": "0.8.1",
       "date": "2026-03-24",
       "summary": "Helper-assignment policy-closure hardening, multi-target assignment-safety repair, and 0.8.1 release-surface alignment.",
