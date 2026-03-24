@@ -28,12 +28,17 @@ describe("normalizeTask", () => {
     expect(task.ownerAgentId).toBeNull();
     expect(task.assigneeAgentId).toBeNull();
     expect(task.artifactContract).toEqual({
+      deliverables: [],
       requiredPaths: [],
       proofArtifacts: [],
       exitContract: null,
       componentTargets: {},
     });
-    expect(task.proofRequirements).toEqual([]);
+    expect(task.proofRequirements).toEqual({
+      proofLevel: "unit",
+      proofCentric: false,
+      maturityTarget: null,
+    });
     expect(task.dependencyEdges).toEqual([]);
     expect(task.createdAt).toBeTruthy();
     expect(task.updatedAt).toBeTruthy();
@@ -46,14 +51,24 @@ describe("normalizeTask", () => {
       ownerAgentId: "S1",
       closureState: "open",
       priority: "urgent",
-      proofRequirements: ["implementation-exit-met"],
+      proofRequirements: {
+        proofLevel: "integration",
+        proofCentric: true,
+        maturityTarget: "component",
+      },
       dependencyEdges: [{ targetTaskId: "task-abc", kind: "blocks" }],
     });
     expect(task.taskType).toBe("security");
     expect(task.ownerAgentId).toBe("S1");
     expect(task.priority).toBe("urgent");
-    expect(task.proofRequirements).toEqual(["implementation-exit-met"]);
-    expect(task.dependencyEdges).toEqual([{ targetTaskId: "task-abc", kind: "blocks" }]);
+    expect(task.proofRequirements).toEqual({
+      proofLevel: "integration",
+      proofCentric: true,
+      maturityTarget: "component",
+    });
+    expect(task.dependencyEdges).toEqual([
+      { taskId: "task-abc", kind: "blocks", status: "pending" },
+    ]);
   });
 
   it("throws on non-object input", () => {
@@ -283,8 +298,11 @@ describe("buildTasksFromWaveDefinition", () => {
   it("includes proof requirements for implementation tasks", () => {
     const tasks = buildTasksFromWaveDefinition(wave);
     const a1Task = tasks.find((t) => t.ownerAgentId === "A1");
-    expect(a1Task.proofRequirements).toContain("implementation-exit-met");
-    expect(a1Task.proofRequirements).toContain("proof-artifacts-present");
+    expect(a1Task.proofRequirements).toEqual({
+      proofLevel: "unit",
+      proofCentric: true,
+      maturityTarget: null,
+    });
   });
 
   it("creates component task with componentTargets", () => {
@@ -337,6 +355,34 @@ describe("buildTasksFromCoordinationState", () => {
     expect(tasks.length).toBe(1);
     expect(tasks[0].taskType).toBe("escalation");
     expect(tasks[0].priority).toBe("urgent");
+  });
+
+  it("builds deterministic task ids and timestamps for coordination-derived tasks", () => {
+    const state = {
+      clarifications: [
+        {
+          id: "clar-1",
+          wave: 7,
+          lane: "beta",
+          status: "open",
+          summary: "Need input",
+          detail: "Clarify the API contract.",
+          agentId: "A1",
+          createdAt: "2026-03-23T00:00:00.000Z",
+          updatedAt: "2026-03-23T01:00:00.000Z",
+        },
+      ],
+      humanFeedback: [],
+      humanEscalations: [],
+    };
+
+    const first = buildTasksFromCoordinationState(state);
+    const second = buildTasksFromCoordinationState(state);
+
+    expect(first).toEqual(second);
+    expect(first[0].taskId).toBe("wave-7:A1:clarification-clar-1");
+    expect(first[0].createdAt).toBe("2026-03-23T00:00:00.000Z");
+    expect(first[0].updatedAt).toBe("2026-03-23T01:00:00.000Z");
   });
 
   it("returns empty for null/empty state", () => {
