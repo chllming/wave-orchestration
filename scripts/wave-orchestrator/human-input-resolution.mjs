@@ -331,8 +331,9 @@ export function answerHumanInputByRequest({
   waveNumber,
   requestId,
   operator = "human-operator",
+  runId = null,
 }) {
-  const lanePaths = buildLanePaths(lane);
+  const lanePaths = buildLanePaths(lane, { adhocRunId: runId || null });
   const wave = loadWave(lanePaths, waveNumber);
   return answerHumanInputAndReconcile({
     lanePaths,

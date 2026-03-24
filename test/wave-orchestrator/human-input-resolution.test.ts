@@ -27,6 +27,11 @@ function writeJsonl(filePath, payloads) {
   );
 }
 
+function copyFile(fromPath, toPath) {
+  fs.mkdirSync(path.dirname(toPath), { recursive: true });
+  fs.copyFileSync(fromPath, toPath);
+}
+
 function runWaveCli(args, cwd) {
   return spawnSync("node", [path.join(PACKAGE_ROOT, "scripts", "wave.mjs"), ...args], {
     cwd,
@@ -38,10 +43,25 @@ function runWaveCli(args, cwd) {
   });
 }
 
-function seedAnsweredHumanInputFixture(repoDir) {
-  const stateDir = path.join(repoDir, ".tmp", "main-wave-launcher");
+function seedAnsweredHumanInputFixture(repoDir, options = {}) {
+  const runId = String(options.runId || "").trim() || null;
+  const stateDir = runId
+    ? path.join(repoDir, ".tmp", "main-wave-launcher", "adhoc", runId)
+    : path.join(repoDir, ".tmp", "main-wave-launcher");
   const feedbackRequestsDir = path.join(repoDir, ".tmp", "wave-orchestrator", "feedback", "requests");
   const requestId = "202603240000-main-w0-A9-abc123";
+
+  if (runId) {
+    const adhocRunDir = path.join(repoDir, ".wave", "adhoc", "runs", runId);
+    writeJson(path.join(adhocRunDir, "result.json"), {
+      runId,
+      lane: "main",
+    });
+    copyFile(
+      path.join(repoDir, "docs", "plans", "waves", "wave-0.md"),
+      path.join(adhocRunDir, "wave-0.md"),
+    );
+  }
 
   writeJson(path.join(stateDir, "status", "wave-0-a1.status"), {
     code: 0,
@@ -179,9 +199,10 @@ function seedAnsweredHumanInputFixture(repoDir) {
   return { requestId };
 }
 
-function expectResolvedCoordinationAndResume(repoDir) {
+function expectResolvedCoordinationAndResume(repoDir, options = {}) {
+  const runArgs = options.runId ? ["--run", options.runId] : [];
   const coordShow = runWaveCli(
-    ["coord", "show", "--lane", "main", "--wave", "0", "--json"],
+    ["coord", "show", "--lane", "main", "--wave", "0", "--json", ...runArgs],
     repoDir,
   );
   expect(coordShow.status).toBe(0);
@@ -194,7 +215,7 @@ function expectResolvedCoordinationAndResume(repoDir) {
   });
 
   const rerunGet = runWaveCli(
-    ["control", "rerun", "get", "--lane", "main", "--wave", "0"],
+    ["control", "rerun", "get", "--lane", "main", "--wave", "0", ...runArgs],
     repoDir,
   );
   expect(rerunGet.status).toBe(0);
@@ -279,5 +300,31 @@ describe("human input resolution", () => {
     expect(answerResult.status).toBe(0);
     expect(answerResult.stdout).toContain(`[wave-human-feedback] answered ${requestId}`);
     expectResolvedCoordinationAndResume(repoDir);
+  });
+
+  it("reconciles linked clarification state for adhoc runs when feedback respond is used with --run", () => {
+    const repoDir = makeTempDir();
+    const runId = "adhoc-human-input";
+    writeJson(path.join(repoDir, "package.json"), { name: "fixture-repo", private: true });
+    expect(runWaveCli(["init"], repoDir).status).toBe(0);
+
+    const { requestId } = seedAnsweredHumanInputFixture(repoDir, { runId });
+
+    const answerResult = runWaveCli(
+      [
+        "feedback",
+        "respond",
+        "--run",
+        runId,
+        "--id",
+        requestId,
+        "--response",
+        "Use docs/plans/current-state.md",
+      ],
+      repoDir,
+    );
+    expect(answerResult.status).toBe(0);
+    expect(answerResult.stdout).toContain(`[wave-human-feedback] answered ${requestId}`);
+    expectResolvedCoordinationAndResume(repoDir, { runId });
   });
 });

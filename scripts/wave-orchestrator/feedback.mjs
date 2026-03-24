@@ -379,6 +379,7 @@ export async function runFeedbackCli(argv) {
         waveNumber: Number(answered.wave),
         requestId: options.id,
         operator: options.operator,
+        runId: options.runId || null,
       });
     }
     console.log(`[wave-human-feedback] answered ${options.id}`);
