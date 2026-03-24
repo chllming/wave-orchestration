@@ -24,13 +24,13 @@ GitHub Packages remains available as an authenticated fallback path, and maintai
 - Fresh `wave init` seeds the starter `skills/` library. `wave init --adopt-existing` records existing repo-owned skill bundles when they are already present, but does not replace or rewrite them.
 - The current runtime expects the post-roadmap model: typed coordination, compiled inboxes, `A8` integration, staged closure, orchestrator-first clarification, and operational runtime policy.
 
-## Upgrading From 0.6.x To 0.8.1
+## Upgrading From 0.6.x To 0.8.2
 
 Read `CHANGELOG.md` first, then treat this section as the repo-owned migration checklist for adopted `0.6.x` workspaces.
 
 `wave upgrade` updates the installed runtime only. It does not copy planner starter files into a repo that already owns its docs, skills, and Context7 bundles.
 
-`0.8.1` carries forward the `0.8.0` architecture-hardening release surface and tightens helper-assignment closure handling: `resolved-by-policy` records now default to `resolved`, single-target helper requests can close from policy follow-up without mutating the original request, and multi-target helper requests only close from assignment-specific policy evidence so sibling assignments stay honest.
+`0.8.2` carries forward the `0.8.1` helper-assignment fixes and hardens the control-status projection layer: completed waves no longer replay stale blocking edges or overdue timers from historical coordination records, and successful logical-agent state stays preserved once the wave is terminal.
 
 ### Required Repo Changes
 
@@ -42,7 +42,7 @@ If the repo adopted Wave before the planner corpus became a tracked required sur
 - `docs/reference/wave-planning-lessons.md`
 - the `planner-agentic` bundle entry in `docs/context7/bundles.json`
 
-If the repo copied the shipped starter architecture docs or skills and wants the `0.8.1` authority-model language, also sync:
+If the repo copied the shipped starter architecture docs or skills and wants the `0.8.2` authority-model language, also sync:
 
 - `docs/agents/wave-launcher-role.md`
 - `docs/agents/wave-orchestrator-role.md`

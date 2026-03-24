@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+## 0.8.2 - 2026-03-24
+
+### Changed
+
+- Updated the shipped package metadata, release manifest, README, migration guide, sample-wave docs, and npm publishing runbook to advertise `0.8.2` as the current release surface.
+
+### Fixed And Hardened
+
+- `wave control status` now stops surfacing stale blocking edges after a wave has already reached `phase=completed`.
+- Completed waves now suppress stale `nextTimer` deadlines and preserve successful logical-agent states instead of re-blocking agents from historical open request records.
+
+### Testing And Validation
+
+- Added regression coverage for completed-wave control-status projections so historical request records stay visible without reopening blocking state after closure.
+
 ## 0.8.1 - 2026-03-24
 
 ### Changed

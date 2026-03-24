@@ -79,18 +79,18 @@ Wave is built to mitigate those failures with a canonical authority set, generat
 
 Current release:
 
-- `@chllming/wave-orchestration@0.8.1`
-- Release tag: [`v0.8.1`](https://github.com/chllming/agent-wave-orchestrator/releases/tag/v0.8.1)
+- `@chllming/wave-orchestration@0.8.2`
+- Release tag: [`v0.8.2`](https://github.com/chllming/agent-wave-orchestrator/releases/tag/v0.8.2)
 - Public install path: npmjs
 - Authenticated fallback: GitHub Packages
 
-Highlights in `0.8.1`:
+Highlights in `0.8.2`:
 
-- `resolved-by-policy` helper follow-up now closes single-target helper assignments authoritatively instead of leaving stale helper-assignment barriers open.
-- Manual `wave coord post --kind resolved-by-policy` now defaults to `status=resolved`, which matches the intended policy-closure semantics.
-- Multi-target helper requests no longer over-close sibling assignments from a request-level policy note; assignment-specific evidence is required.
-- The architecture-hardening migration plan, reducer or envelope wiring, and aligned docs or skills from the prior release remain intact.
-- Upgrade and operator docs now cover the full `0.8.1` package surface end to end.
+- `wave control status` now clears stale blocking edges once a wave is already completed instead of replaying historical open request records as live blockers.
+- Completed waves now suppress stale `nextTimer` deadlines and preserve successful logical-agent states in the control-status projection.
+- The helper-assignment policy-closure fixes from `0.8.1` remain intact.
+- The architecture-hardening migration plan, reducer or envelope wiring, and aligned docs or skills from the prior releases remain intact.
+- Upgrade and operator docs now cover the full `0.8.2` package surface end to end.
 
 Requirements:
 
