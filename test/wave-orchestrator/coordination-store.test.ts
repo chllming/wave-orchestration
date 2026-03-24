@@ -8,6 +8,7 @@ import {
   compileSharedSummary,
   isClarificationLinkedRequest,
   materializeCoordinationState,
+  normalizeCoordinationRecord,
   readMaterializedCoordinationState,
   serializeCoordinationState,
   updateSeedRecords,
@@ -72,6 +73,20 @@ describe("updateSeedRecords", () => {
       detail: "Second prompt",
       artifactRefs: ["src/second.ts"],
     });
+  });
+});
+
+describe("normalizeCoordinationRecord", () => {
+  it("defaults resolved-by-policy records to resolved status", () => {
+    const record = normalizeCoordinationRecord({
+      kind: "resolved-by-policy",
+      lane: "main",
+      wave: 11,
+      agentId: "A9",
+      summary: "Resolved helper assignment coord-request-6a0e96cf",
+    });
+
+    expect(record.status).toBe("resolved");
   });
 });
 

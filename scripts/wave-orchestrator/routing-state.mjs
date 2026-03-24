@@ -155,6 +155,71 @@ function assignmentStateForRecord(record) {
   return "open";
 }
 
+function recordText(record) {
+  return `${String(record?.summary || "")}\n${String(record?.detail || "")}`.trim().toLowerCase();
+}
+
+function targetMatchesAgent(target, agentId) {
+  const normalizedTarget = String(target || "").trim();
+  const normalizedAgentId = String(agentId || "").trim();
+  if (!normalizedTarget || !normalizedAgentId) {
+    return false;
+  }
+  return normalizedTarget === normalizedAgentId || normalizedTarget === `agent:${normalizedAgentId}`;
+}
+
+function recordTargetsAgent(record, agentId) {
+  const normalizedAgentId = String(agentId || "").trim();
+  if (!normalizedAgentId) {
+    return false;
+  }
+  if (String(record?.agentId || "").trim() === normalizedAgentId) {
+    return true;
+  }
+  return Array.isArray(record?.targets)
+    ? record.targets.some((target) => targetMatchesAgent(target, normalizedAgentId))
+    : false;
+}
+
+function requestResolutionForAssignment({
+  coordinationState,
+  requestRecord,
+  assignmentId,
+  assignedAgentId,
+  target,
+}) {
+  const requestId = String(requestRecord?.id || "").trim();
+  if (!requestId) {
+    return null;
+  }
+  const requestIdLower = requestId.toLowerCase();
+  const assignmentIdLower = String(assignmentId || "").trim().toLowerCase();
+  const resolvedRecords = [...(coordinationState?.resolvedByPolicy || [])].reverse();
+  for (const record of resolvedRecords) {
+    const dependsOn = Array.isArray(record?.dependsOn)
+      ? record.dependsOn.map((value) => String(value || "").trim().toLowerCase())
+      : [];
+    if (dependsOn.includes(requestIdLower) || (assignmentIdLower && dependsOn.includes(assignmentIdLower))) {
+      return record;
+    }
+    const closureCondition = String(record?.closureCondition || "").trim().toLowerCase();
+    if (
+      closureCondition.includes(requestIdLower) ||
+      (assignmentIdLower && closureCondition.includes(assignmentIdLower))
+    ) {
+      return record;
+    }
+    if (!recordTargetsAgent(record, assignedAgentId) && !targetMatchesAgent(target, record?.agentId)) {
+      continue;
+    }
+    const text = recordText(record);
+    if (text.includes(requestIdLower) || (assignmentIdLower && text.includes(assignmentIdLower))) {
+      return record;
+    }
+  }
+  return null;
+}
+
 export function buildRequestAssignments({
   coordinationState,
   agents,
@@ -179,8 +244,18 @@ export function buildRequestAssignments({
     }
     for (const target of targets) {
       const resolution = resolveTargetAssignment(target, agents, ledger, capabilityRouting);
+      const assignmentId = `assignment:${record.id}:${targetSlug(target) || "target"}`;
+      const resolvedByPolicyRecord = requestResolutionForAssignment({
+        coordinationState,
+        requestRecord: record,
+        assignmentId,
+        assignedAgentId: resolution.assignedAgentId,
+        target,
+      });
+      const resolvedByPolicy = Boolean(resolvedByPolicyRecord);
+      const effectiveStatus = resolvedByPolicy ? "resolved" : record.status;
       assignments.push({
-        id: `assignment:${record.id}:${targetSlug(target) || "target"}`,
+        id: assignmentId,
         requestId: record.id,
         recordId: record.id,
         sourceKind: record.kind,
@@ -188,20 +263,21 @@ export function buildRequestAssignments({
         summary: record.summary || "",
         detail: record.detail || "",
         priority: record.priority || "normal",
-        requestStatus: record.status,
-        state: assignmentStateForRecord(record),
+        requestStatus: effectiveStatus,
+        state: assignmentStateForRecord({ ...record, status: effectiveStatus }),
         target: resolution.target,
         targetType: resolution.targetType,
         capability: resolution.capability,
         assignedAgentId: resolution.assignedAgentId,
         assignmentReason: resolution.assignmentReason,
         assignmentDetail: resolution.detail,
-        blocking: isOpenCoordinationStatus(record.status),
+        blocking: !resolvedByPolicy && isOpenCoordinationStatus(record.status),
         artifactRefs: Array.isArray(record.artifactRefs) ? record.artifactRefs : [],
         dependsOn: Array.isArray(record.dependsOn) ? record.dependsOn : [],
         closureCondition: String(record.closureCondition || ""),
         createdAt: record.createdAt,
         updatedAt: record.updatedAt,
+        resolvedByRecordId: resolvedByPolicyRecord?.id || null,
       });
     }
   }

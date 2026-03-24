@@ -88,7 +88,9 @@ export function normalizeCoordinationRecord(rawRecord, defaults = {}) {
   const lane = normalizeString(rawRecord.lane || defaults.lane);
   const wave = Number.parseInt(String(rawRecord.wave ?? defaults.wave ?? ""), 10);
   const agentId = normalizeString(rawRecord.agentId || defaults.agentId);
-  const status = normalizeString(rawRecord.status || defaults.status || "open").toLowerCase();
+  const status = normalizeString(
+    rawRecord.status || defaults.status || (kind === "resolved-by-policy" ? "resolved" : "open"),
+  ).toLowerCase();
   const priority = normalizeString(rawRecord.priority || defaults.priority || "normal").toLowerCase();
   const confidence = normalizeString(rawRecord.confidence || defaults.confidence || "medium").toLowerCase();
   const createdAt = normalizeString(rawRecord.createdAt || defaults.createdAt || now);
