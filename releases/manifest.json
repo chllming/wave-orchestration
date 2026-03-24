@@ -3,6 +3,26 @@
   "packageName": "@chllming/wave-orchestration",
   "releases": [
     {
+      "version": "0.8.1",
+      "date": "2026-03-24",
+      "summary": "Helper-assignment policy-closure hardening, multi-target assignment-safety repair, and 0.8.1 release-surface alignment.",
+      "features": [
+        "`resolved-by-policy` follow-up now closes single-target helper assignments authoritatively without forcing the original request record itself to be rewritten.",
+        "Manual `wave coord post --kind resolved-by-policy` now defaults to `status=resolved`, so operator-entered policy closures stop behaving like fresh open coordination records.",
+        "Multi-target helper requests now require assignment-specific policy evidence before closure, which prevents a request-level policy note from accidentally closing sibling assignments that were not actually completed.",
+        "Regression coverage now exercises default `resolved-by-policy` status handling and the multi-target helper-assignment over-closure edge case directly.",
+        "Shipped package metadata, README, migration guidance, sample-wave docs, and npm publishing instructions now point at the `0.8.1` release surface."
+      ],
+      "manualSteps": [
+        "Run `pnpm exec wave doctor` and `pnpm exec wave launch --lane main --dry-run --no-dashboard` after upgrading so the repo validates against the `0.8.1` runtime and helper-assignment closure contract.",
+        "If an adopted repo fails `wave doctor` after the upgrade, sync the repo-owned planner starter surface (`docs/agents/wave-planner-role.md`, `skills/role-planner/`, `docs/context7/planner-agent/`, `docs/reference/wave-planning-lessons.md`, and the `planner-agentic` bundle entry) before relying on planner-aware validation.",
+        "If a repo carries custom operator docs for `wave coord post --kind resolved-by-policy`, update that guidance so policy-closure examples either omit `--status` or use `--status resolved` explicitly.",
+        "If an adopted repo copied the starter architecture docs or skill bundles, sync the updated role prompts, `skills/wave-core/`, runtime skills, and closure-role skills so local guidance matches the `0.8.1` authority model and helper-assignment behavior.",
+        "Review `docs/plans/architecture-hardening-migration.md` before continuing reducer-authoritative cutover work in repos that extend the shipped starter surface."
+      ],
+      "breaking": false
+    },
+    {
       "version": "0.8.0",
       "date": "2026-03-24",
       "summary": "Architecture hardening foundations, envelope-first closure wiring, docs and skill alignment, and 0.8.0 release-surface alignment.",

@@ -1,6 +1,6 @@
 # Current State
 
-- The starter workspace in this source repo reflects the `0.8.0` package release surface.
+- The starter workspace in this source repo reflects the `0.8.1` package release surface.
 - The staged architecture cutover from launcher-centric decisions to reducer and phase-engine ownership is tracked in `docs/plans/architecture-hardening-migration.md`.
 - The repository contains the published `@chllming/wave-orchestration` package plus the starter scaffold used by `wave init`.
 - The runtime is package-first and non-destructive for adopting repos: `wave init --adopt-existing` records existing repo-owned plans, waves, prompts, and config without overwriting them, and `wave upgrade` writes only `.wave/install-state.json` plus `.wave/upgrade-history/`.
