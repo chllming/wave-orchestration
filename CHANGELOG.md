@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## 0.8.1 - 2026-03-24
+
+### Changed
+
+- Updated the shipped package metadata, release manifest, README, migration guide, sample-wave docs, and npm publishing runbook to advertise `0.8.1` as the current release surface.
+
+### Fixed And Hardened
+
+- Helper-assignment policy resolution now treats `resolved-by-policy` follow-up as authoritative closure without requiring the original request to be rewritten.
+- Manual `wave coord post --kind resolved-by-policy` now defaults to `status=resolved`, so operator-authored policy closures stop reopening the assignment they are meant to close.
+- Multi-target helper requests now require assignment-specific policy evidence before closure, preventing one request-level `resolved-by-policy` note from accidentally closing sibling assignments.
+
+### Testing And Validation
+
+- Added regression coverage for default `resolved-by-policy` status handling and for multi-target assignment resolution that must not over-close sibling helper assignments.
+
 ## 0.8.0 - 2026-03-24
 
 ### Changed

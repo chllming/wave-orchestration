@@ -194,18 +194,27 @@ function requestResolutionForAssignment({
   }
   const requestIdLower = requestId.toLowerCase();
   const assignmentIdLower = String(assignmentId || "").trim().toLowerCase();
+  const requestTargets = Array.isArray(requestRecord?.targets)
+    ? requestRecord.targets.filter((entry) => String(entry || "").trim())
+    : [];
+  const requiresAssignmentSpecificMatch = requestTargets.length > 1;
   const resolvedRecords = [...(coordinationState?.resolvedByPolicy || [])].reverse();
   for (const record of resolvedRecords) {
     const dependsOn = Array.isArray(record?.dependsOn)
       ? record.dependsOn.map((value) => String(value || "").trim().toLowerCase())
       : [];
-    if (dependsOn.includes(requestIdLower) || (assignmentIdLower && dependsOn.includes(assignmentIdLower))) {
+    const assignmentDependsOnMatch = assignmentIdLower && dependsOn.includes(assignmentIdLower);
+    const requestDependsOnMatch = dependsOn.includes(requestIdLower);
+    if (assignmentDependsOnMatch || (!requiresAssignmentSpecificMatch && requestDependsOnMatch)) {
       return record;
     }
     const closureCondition = String(record?.closureCondition || "").trim().toLowerCase();
+    const assignmentClosureMatch =
+      assignmentIdLower && closureCondition.includes(assignmentIdLower);
+    const requestClosureMatch = closureCondition.includes(requestIdLower);
     if (
-      closureCondition.includes(requestIdLower) ||
-      (assignmentIdLower && closureCondition.includes(assignmentIdLower))
+      assignmentClosureMatch ||
+      (!requiresAssignmentSpecificMatch && requestClosureMatch)
     ) {
       return record;
     }
@@ -213,7 +222,9 @@ function requestResolutionForAssignment({
       continue;
     }
     const text = recordText(record);
-    if (text.includes(requestIdLower) || (assignmentIdLower && text.includes(assignmentIdLower))) {
+    const assignmentTextMatch = assignmentIdLower && text.includes(assignmentIdLower);
+    const requestTextMatch = text.includes(requestIdLower);
+    if (assignmentTextMatch || (!requiresAssignmentSpecificMatch && requestTextMatch)) {
       return record;
     }
   }
