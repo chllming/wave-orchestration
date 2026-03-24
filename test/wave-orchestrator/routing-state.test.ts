@@ -95,6 +95,66 @@ describe("buildRequestAssignments", () => {
       assignmentReason: "least-busy-capability",
     });
   });
+
+  it("treats resolved-by-policy follow-up as authoritative helper-assignment closure", () => {
+    const state = materializeCoordinationState([
+      {
+        id: "coord-request-6a0e96cf",
+        kind: "request",
+        lane: "main",
+        wave: 11,
+        agentId: "A1",
+        targets: ["A9"],
+        status: "open",
+        priority: "normal",
+        artifactRefs: [],
+        dependsOn: [],
+        closureCondition: "",
+        createdAt: "2026-03-24T06:41:06.628Z",
+        updatedAt: "2026-03-24T06:41:06.628Z",
+        confidence: "medium",
+        summary: "Wave 11 shared-plan docs need topology component promotion updates",
+        detail: "Update the shared-plan ownership files once the topology docs land.",
+        source: "agent",
+      },
+      {
+        id: "coord-resolved-by-policy-be382748",
+        kind: "resolved-by-policy",
+        lane: "main",
+        wave: 11,
+        agentId: "A9",
+        targets: [],
+        status: "open",
+        priority: "normal",
+        artifactRefs: [],
+        dependsOn: [],
+        closureCondition: "",
+        createdAt: "2026-03-24T06:52:17.630Z",
+        updatedAt: "2026-03-24T06:52:17.630Z",
+        confidence: "medium",
+        summary: "A9 resolved helper assignment coord-request-6a0e96cf",
+        detail:
+          "A1 requested shared-plan topology promotion updates. All six owned shared-plan docs now reflect the change.",
+        source: "agent",
+      },
+    ]);
+
+    const assignments = buildRequestAssignments({
+      coordinationState: state,
+      agents: [{ agentId: "A9", capabilities: ["docs-shared-plan"] }],
+      ledger: { tasks: [] },
+      capabilityRouting: { preferredAgents: {} },
+    });
+
+    expect(assignments).toHaveLength(1);
+    expect(assignments[0]).toMatchObject({
+      requestId: "coord-request-6a0e96cf",
+      assignedAgentId: "A9",
+      state: "resolved",
+      blocking: false,
+      resolvedByRecordId: "coord-resolved-by-policy-be382748",
+    });
+  });
 });
 
 describe("syncAssignmentRecords", () => {

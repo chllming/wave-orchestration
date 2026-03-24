@@ -69,7 +69,7 @@ function parseArgs(argv) {
     priority: "normal",
     dependsOn: [],
     artifactRefs: [],
-    status: "open",
+    status: "",
     id: "",
     to: "",
     response: "",
@@ -309,6 +309,10 @@ function appendCoordinationStatusUpdate(logPath, record, status, options = {}) {
   });
 }
 
+function defaultStatusForKind(kind) {
+  return String(kind || "").trim().toLowerCase() === "resolved-by-policy" ? "resolved" : "open";
+}
+
 function appendTriageEscalationUpdateIfPresent(lanePaths, waveNumber, record) {
   const triagePath = coordinationTriagePath(lanePaths, waveNumber);
   if (!fs.existsSync(triagePath) || record?.kind !== "human-escalation") {
@@ -436,7 +440,7 @@ export async function runCoordinationCli(argv) {
       priority: options.priority,
       dependsOn: options.dependsOn,
       artifactRefs: options.artifactRefs,
-      status: options.status,
+      status: options.status || defaultStatusForKind(options.kind),
       source: "agent",
     });
     console.log(JSON.stringify(record, null, 2));
