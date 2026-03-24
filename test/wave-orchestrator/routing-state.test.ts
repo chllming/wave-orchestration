@@ -155,6 +155,96 @@ describe("buildRequestAssignments", () => {
       resolvedByRecordId: "coord-resolved-by-policy-be382748",
     });
   });
+
+  it("requires assignment-specific policy resolution for multi-target requests", () => {
+    const state = materializeCoordinationState([
+      {
+        id: "coord-request-multi-target",
+        kind: "request",
+        lane: "main",
+        wave: 12,
+        agentId: "A1",
+        targets: ["A8", "A9"],
+        status: "open",
+        priority: "normal",
+        artifactRefs: [],
+        dependsOn: [],
+        closureCondition: "",
+        createdAt: "2026-03-24T07:20:00.000Z",
+        updatedAt: "2026-03-24T07:20:00.000Z",
+        confidence: "medium",
+        summary: "Need integration and docs follow-up",
+        detail: "Close both helper slices before wave closure.",
+        source: "agent",
+      },
+      {
+        id: "coord-resolved-by-policy-a8",
+        kind: "resolved-by-policy",
+        lane: "main",
+        wave: 12,
+        agentId: "A8",
+        targets: [],
+        status: "resolved",
+        priority: "normal",
+        artifactRefs: [],
+        dependsOn: ["assignment:coord-request-multi-target:a8"],
+        closureCondition: "",
+        createdAt: "2026-03-24T07:25:00.000Z",
+        updatedAt: "2026-03-24T07:25:00.000Z",
+        confidence: "medium",
+        summary: "A8 resolved helper assignment coord-request-multi-target",
+        detail: "The integration slice is complete.",
+        source: "agent",
+      },
+      {
+        id: "coord-resolved-by-policy-request-id-only",
+        kind: "resolved-by-policy",
+        lane: "main",
+        wave: 12,
+        agentId: "A8",
+        targets: [],
+        status: "resolved",
+        priority: "normal",
+        artifactRefs: [],
+        dependsOn: ["coord-request-multi-target"],
+        closureCondition: "",
+        createdAt: "2026-03-24T07:26:00.000Z",
+        updatedAt: "2026-03-24T07:26:00.000Z",
+        confidence: "medium",
+        summary: "A8 resolved request coord-request-multi-target",
+        detail: "This request-level note should not close sibling assignments by itself.",
+        source: "agent",
+      },
+    ]);
+
+    const assignments = buildRequestAssignments({
+      coordinationState: state,
+      agents: [
+        { agentId: "A8", capabilities: ["integration"] },
+        { agentId: "A9", capabilities: ["docs-shared-plan"] },
+      ],
+      ledger: { tasks: [] },
+      capabilityRouting: { preferredAgents: {} },
+    });
+
+    expect(assignments).toHaveLength(2);
+    expect(assignments).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          assignedAgentId: "A8",
+          state: "resolved",
+          blocking: false,
+          resolvedByRecordId: "coord-resolved-by-policy-a8",
+        }),
+        expect.objectContaining({
+          assignedAgentId: "A9",
+          state: "open",
+          blocking: true,
+          resolvedByRecordId: null,
+        }),
+      ]),
+    );
+  });
 });
 
 describe("syncAssignmentRecords", () => {
