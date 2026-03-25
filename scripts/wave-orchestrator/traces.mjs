@@ -603,7 +603,10 @@ function normalizeGateLogPath(gate, agentArtifacts) {
   }
   return {
     ...gate,
-    logPath: artifact.path,
+    // Log artifacts are already described in the bundle manifest. Nulling the
+    // inline path keeps replay parity focused on gate semantics instead of the
+    // copied artifact layout.
+    logPath: null,
   };
 }
 

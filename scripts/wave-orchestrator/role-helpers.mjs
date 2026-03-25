@@ -1,5 +1,8 @@
 import {
+  DEFAULT_CONT_QA_AGENT_ID,
   DEFAULT_CONT_EVAL_AGENT_ID,
+  DEFAULT_DOCUMENTATION_AGENT_ID,
+  DEFAULT_INTEGRATION_AGENT_ID,
   DEFAULT_SECURITY_ROLE_PROMPT_PATH,
 } from "./config.mjs";
 
@@ -81,4 +84,52 @@ export function isSecurityReviewAgent(
 export function resolveSecurityReviewReportPath(agent) {
   const ownedPaths = Array.isArray(agent?.ownedPaths) ? agent.ownedPaths.map(cleanPath).filter(Boolean) : [];
   return ownedPaths.find((ownedPath) => isSecurityReportPath(ownedPath)) || null;
+}
+
+export function resolveWaveRoleBindings(wave = {}, lanePaths = {}, agents = wave?.agents || []) {
+  const contQaAgentId =
+    wave?.contQaAgentId || lanePaths?.contQaAgentId || DEFAULT_CONT_QA_AGENT_ID;
+  const contEvalAgentId =
+    wave?.contEvalAgentId || lanePaths?.contEvalAgentId || DEFAULT_CONT_EVAL_AGENT_ID;
+  const integrationAgentId =
+    wave?.integrationAgentId || lanePaths?.integrationAgentId || DEFAULT_INTEGRATION_AGENT_ID;
+  const documentationAgentId =
+    wave?.documentationAgentId ||
+    lanePaths?.documentationAgentId ||
+    DEFAULT_DOCUMENTATION_AGENT_ID;
+  const securityReviewerAgentIds = Array.from(
+    new Set(
+      (Array.isArray(agents) ? agents : [])
+        .filter((agent) =>
+          isSecurityReviewAgent(agent, {
+            securityRolePromptPath: lanePaths?.securityRolePromptPath,
+          }),
+        )
+        .map((agent) => agent.agentId)
+        .filter(Boolean),
+    ),
+  ).sort();
+  const closureAgentIds = Array.from(
+    new Set(
+      [
+        contEvalAgentId,
+        integrationAgentId,
+        documentationAgentId,
+        contQaAgentId,
+        ...securityReviewerAgentIds,
+      ].filter(Boolean),
+    ),
+  ).sort();
+  return {
+    contQaAgentId,
+    contEvalAgentId,
+    integrationAgentId,
+    documentationAgentId,
+    securityReviewerAgentIds,
+    closureAgentIds,
+  };
+}
+
+export function isClosureRoleAgentId(agentId, roleBindings) {
+  return (roleBindings?.closureAgentIds || []).includes(agentId);
 }

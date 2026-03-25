@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildResumePlan } from "../../scripts/wave-orchestrator/launcher-retry.mjs";
+import { buildResumePlan } from "../../scripts/wave-orchestrator/retry-engine.mjs";
 import { reduceWaveState } from "../../scripts/wave-orchestrator/wave-state-reducer.mjs";
 
 function makeClosureEligibility(overrides = {}) {
@@ -241,6 +241,68 @@ describe("buildResumePlan", () => {
     const plan = buildResumePlan(waveState);
 
     expect(plan.resumeFromPhase).toBe("integrating");
+    expect(plan.reason).toBe("gate-failure");
+  });
+
+  it("maps contEvalGate to resumeFromPhase cont-eval", () => {
+    const waveState = {
+      wave: 3,
+      lane: "main",
+      attempt: 2,
+      closureEligibility: makeClosureEligibility({ waveMayClose: false }),
+      gateSnapshot: makeGateSnapshot({
+        contEvalGate: {
+          ok: false,
+          agentId: "E0",
+          statusCode: "cont-eval-needs-more-work",
+          detail: "Benchmarks still fail.",
+        },
+        overall: {
+          ok: false,
+          gate: "contEvalGate",
+          statusCode: "cont-eval-needs-more-work",
+          detail: "Benchmarks still fail.",
+          agentId: "E0",
+        },
+      }),
+      openBlockers: [],
+      retryTargetSet: [],
+    };
+
+    const plan = buildResumePlan(waveState);
+
+    expect(plan.resumeFromPhase).toBe("cont-eval");
+    expect(plan.reason).toBe("gate-failure");
+  });
+
+  it("maps securityGate to resumeFromPhase security-review", () => {
+    const waveState = {
+      wave: 3,
+      lane: "main",
+      attempt: 2,
+      closureEligibility: makeClosureEligibility({ waveMayClose: false }),
+      gateSnapshot: makeGateSnapshot({
+        securityGate: {
+          ok: false,
+          agentId: "A7",
+          statusCode: "security-blocked",
+          detail: "Manual approval still required.",
+        },
+        overall: {
+          ok: false,
+          gate: "securityGate",
+          statusCode: "security-blocked",
+          detail: "Manual approval still required.",
+          agentId: "A7",
+        },
+      }),
+      openBlockers: [],
+      retryTargetSet: [],
+    };
+
+    const plan = buildResumePlan(waveState);
+
+    expect(plan.resumeFromPhase).toBe("security-review");
     expect(plan.reason).toBe("gate-failure");
   });
 

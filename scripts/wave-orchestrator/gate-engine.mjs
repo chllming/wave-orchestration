@@ -3,10 +3,7 @@ import path from "node:path";
 import {
   agentSummaryPathFromStatusPath,
   buildAgentExecutionSummary,
-  buildEnvelopeFromLegacySignals,
-  buildExecutionSummaryFromEnvelope,
   readAgentExecutionSummary,
-  readAgentResultEnvelope,
   validateContQaSummary,
   validateContEvalSummary,
   validateImplementationSummary,
@@ -14,8 +11,17 @@ import {
   validateSecuritySummary,
   validateIntegrationSummary,
   writeAgentExecutionSummary,
-  writeAgentResultEnvelope,
 } from "./agent-state.mjs";
+import {
+  projectLegacySummaryFromEnvelope,
+  readAgentResultEnvelope,
+  readAgentResultEnvelopeForRun,
+  resolveRunEnvelopeContext,
+  synthesizeLegacyEnvelope,
+  validateResultEnvelope,
+  writeAgentResultEnvelope,
+  writeAgentResultEnvelopeForRun,
+} from "./result-envelope.mjs";
 import {
   REPO_ROOT,
   readFileTail,
@@ -91,6 +97,33 @@ function resolveRunReportPath(wave, runInfo) {
   return null;
 }
 
+function normalizeReadMode(mode) {
+  return String(mode || "compat").trim().toLowerCase() === "live" ? "live" : "compat";
+}
+
+function buildEnvelopeReadOptions(runInfo, wave, statusRecord, reportPath) {
+  return {
+    agent: runInfo?.agent,
+    waveNumber: wave?.wave ?? null,
+    attempt: statusRecord?.attempt ?? null,
+    logPath: runInfo?.logPath || null,
+    reportPath,
+  };
+}
+
+function validateEnvelopeForRun(runInfo, envelope, options = {}) {
+  const validation = validateResultEnvelope(envelope, {
+    agent: runInfo?.agent,
+    waveNumber: options.wave?.wave ?? null,
+  });
+  return {
+    valid: validation.valid,
+    errors: validation.errors || [],
+    detail: validation.valid ? null : validation.errors.join(" "),
+    envelope: validation.valid ? envelope : null,
+  };
+}
+
 export function materializeAgentExecutionSummaryForRun(wave, runInfo) {
   const statusRecord = readStatusRecordIfPresent(runInfo.statusPath);
   if (!statusRecord) {
@@ -104,13 +137,17 @@ export function materializeAgentExecutionSummaryForRun(wave, runInfo) {
     reportPath,
   });
   writeAgentExecutionSummary(runInfo.statusPath, summary);
-  writeAgentResultEnvelope(
-    runInfo.statusPath,
-    buildEnvelopeFromLegacySignals(runInfo.agent, summary, {
+  writeAgentResultEnvelopeForRun(
+    runInfo,
+    wave,
+    synthesizeLegacyEnvelope(runInfo.agent, summary, {
       waveNumber: wave?.wave ?? null,
       attempt: statusRecord.attempt ?? null,
       exitCode: typeof statusRecord.code === "number" ? statusRecord.code : 0,
     }),
+    {
+      statusRecord,
+    },
   );
   if (runInfo?.previewPath && fs.existsSync(runInfo.previewPath)) {
     const previewPayload = readJsonOrNull(runInfo.previewPath);
@@ -141,48 +178,164 @@ export function materializeAgentExecutionSummaryForRun(wave, runInfo) {
   return summary;
 }
 
-export function readRunExecutionSummary(runInfo, wave = null) {
+export function readRunResultEnvelope(runInfo, wave = null, options = {}) {
+  const mode = normalizeReadMode(options.mode);
+  const statusRecord = runInfo?.statusPath ? readStatusRecordIfPresent(runInfo.statusPath) : null;
+  const reportPath = wave ? resolveRunReportPath(wave, runInfo) : null;
+  const runEnvelopeContext = resolveRunEnvelopeContext(runInfo, wave, { statusRecord });
+  const envelopeReadOptions = buildEnvelopeReadOptions(runInfo, wave, statusRecord, reportPath);
+  const synthesizeFromSummary = (summary, source) => {
+    if (!summary || mode === "live") {
+      return null;
+    }
+    const envelope = synthesizeLegacyEnvelope(runInfo?.agent, summary, {
+      waveNumber: wave?.wave ?? null,
+      attempt: statusRecord?.attempt ?? null,
+      exitCode:
+        typeof statusRecord?.code === "number"
+          ? statusRecord.code
+          : typeof summary?.exitCode === "number"
+            ? summary.exitCode
+            : 0,
+    });
+    return {
+      source,
+      ...validateEnvelopeForRun(runInfo, envelope, { wave }),
+    };
+  };
+
+  if (runInfo?.summary && typeof runInfo.summary === "object") {
+    if (runInfo.summary.schemaVersion === 2) {
+      return {
+        source: "inline-envelope",
+        ...validateEnvelopeForRun(runInfo, runInfo.summary, { wave }),
+      };
+    }
+    const synthesized = synthesizeFromSummary(runInfo.summary, "inline-legacy-summary");
+    if (synthesized) {
+      return synthesized;
+    }
+  }
+  if (runInfo?.statusPath && fs.existsSync(runInfo.statusPath)) {
+    const envelope = readAgentResultEnvelopeForRun(runInfo, wave, { statusRecord });
+    if (envelope) {
+      const validation = {
+        source: "run-envelope",
+        ...validateEnvelopeForRun(runInfo, envelope, { wave }),
+      };
+      if (validation.valid || mode === "live") {
+        return validation;
+      }
+    }
+  }
+  if (mode !== "live" && runInfo?.statusPath && fs.existsSync(runInfo.statusPath)) {
+    const envelope = readAgentResultEnvelope(runInfo.statusPath);
+    if (envelope) {
+      const validation = {
+        source: "legacy-status-envelope",
+        ...validateEnvelopeForRun(runInfo, envelope, { wave }),
+      };
+      if (validation.valid) {
+        return validation;
+      }
+    }
+  }
+  if (mode !== "live" && runInfo?.summaryPath && fs.existsSync(runInfo.summaryPath)) {
+    const summary = readAgentExecutionSummary(runInfo.summaryPath, {
+      agent: runInfo.agent,
+      statusPath: runInfo.summaryPath,
+      statusRecord,
+      logPath: runInfo.logPath,
+      reportPath,
+    });
+    const synthesized = synthesizeFromSummary(summary, "summary-file-legacy");
+    if (synthesized) {
+      return synthesized;
+    }
+  }
+  if (
+    mode !== "live" &&
+    runInfo?.statusPath &&
+    fs.existsSync(agentSummaryPathFromStatusPath(runInfo.statusPath))
+  ) {
+    const summary = readAgentExecutionSummary(runInfo.statusPath, {
+      agent: runInfo.agent,
+      statusPath: runInfo.statusPath,
+      statusRecord,
+      logPath: runInfo.logPath,
+      reportPath,
+    });
+    const synthesized = synthesizeFromSummary(summary, "status-summary-legacy");
+    if (synthesized) {
+      return synthesized;
+    }
+  }
+  if (
+    mode !== "live" &&
+    wave &&
+    runInfo?.statusPath &&
+    runInfo?.logPath &&
+    fs.existsSync(runInfo.statusPath)
+  ) {
+    materializeAgentExecutionSummaryForRun(wave, runInfo);
+    const envelope =
+      readAgentResultEnvelopeForRun(runInfo, wave, { statusRecord }) ||
+      readAgentResultEnvelope(runInfo.statusPath);
+    if (envelope) {
+      return {
+        source: "materialized-legacy-envelope",
+        ...validateEnvelopeForRun(runInfo, envelope, { wave }),
+      };
+    }
+  }
+  return {
+    source: "missing-envelope",
+    valid: false,
+    errors: [
+      `Missing result envelope for ${runInfo?.agent?.agentId || "unknown-agent"} at ${path.relative(REPO_ROOT, runEnvelopeContext.envelopePath)}.`,
+    ],
+    detail: `Missing result envelope for ${runInfo?.agent?.agentId || "unknown-agent"} at ${path.relative(REPO_ROOT, runEnvelopeContext.envelopePath)}.`,
+    envelope: null,
+    envelopeReadOptions,
+  };
+}
+
+export function readRunExecutionSummary(runInfo, wave = null, options = {}) {
+  const mode = normalizeReadMode(options.mode);
   const applyProofRegistry = (summary) =>
     runInfo?.proofRegistry ? augmentSummaryWithProofRegistry(runInfo.agent, summary, runInfo.proofRegistry) : summary;
   const statusRecord = runInfo?.statusPath ? readStatusRecordIfPresent(runInfo.statusPath) : null;
-  const reportPath = wave && runInfo?.logPath ? resolveRunReportPath(wave, runInfo) : null;
-  const summaryReadOptions =
-    wave && runInfo?.logPath
-      ? {
-          agent: runInfo.agent,
-          statusPath: runInfo.statusPath,
-          statusRecord,
-          logPath: runInfo.logPath,
-          reportPath,
-        }
-      : {};
-  const envelopeReadOptions = {
-    agent: runInfo?.agent,
-    waveNumber: wave?.wave ?? null,
-    attempt: statusRecord?.attempt ?? null,
-    logPath: runInfo?.logPath || null,
-    reportPath,
-  };
-  if (runInfo?.summary && typeof runInfo.summary === "object") {
-    const summary = runInfo.summary.schemaVersion === 2
-      ? buildExecutionSummaryFromEnvelope(runInfo.summary, envelopeReadOptions)
-      : runInfo.summary;
-    return applyProofRegistry(summary);
+  const reportPath = wave ? resolveRunReportPath(wave, runInfo) : null;
+  const envelopeReadOptions = buildEnvelopeReadOptions(runInfo, wave, statusRecord, reportPath);
+  const envelopeResult = readRunResultEnvelope(runInfo, wave, { mode });
+  if (envelopeResult?.valid && envelopeResult.envelope) {
+    return applyProofRegistry(
+      projectLegacySummaryFromEnvelope(envelopeResult.envelope, envelopeReadOptions),
+    );
   }
-  if (runInfo?.statusPath && fs.existsSync(runInfo.statusPath)) {
-    const envelope = readAgentResultEnvelope(runInfo.statusPath);
-    if (envelope) {
-      return applyProofRegistry(buildExecutionSummaryFromEnvelope(envelope, envelopeReadOptions));
-    }
+  if (mode === "live") {
+    return null;
+  }
+  if (runInfo?.summary && typeof runInfo.summary === "object") {
+    return applyProofRegistry(runInfo.summary);
   }
   if (runInfo?.summaryPath && fs.existsSync(runInfo.summaryPath)) {
-    return applyProofRegistry(readAgentExecutionSummary(runInfo.summaryPath, summaryReadOptions));
+    return applyProofRegistry(readAgentExecutionSummary(runInfo.summaryPath, {
+      agent: runInfo.agent,
+      statusPath: runInfo.summaryPath,
+      statusRecord,
+      logPath: runInfo.logPath,
+      reportPath,
+    }));
   }
   if (runInfo?.statusPath && fs.existsSync(agentSummaryPathFromStatusPath(runInfo.statusPath))) {
-    return applyProofRegistry(readAgentExecutionSummary(runInfo.statusPath, summaryReadOptions));
-  }
-  if (wave && runInfo?.statusPath && runInfo?.logPath && fs.existsSync(runInfo.statusPath)) {
-    return applyProofRegistry(materializeAgentExecutionSummaryForRun(wave, runInfo));
+    return applyProofRegistry(readAgentExecutionSummary(runInfo.statusPath, {
+      agent: runInfo.agent,
+      statusPath: runInfo.statusPath,
+      statusRecord,
+      logPath: runInfo.logPath,
+      reportPath,
+    }));
   }
   return null;
 }
@@ -208,7 +361,18 @@ export function readWaveContQaGate(wave, agentRuns, options = {}) {
       logPath: null,
     };
   }
-  const summary = readRunExecutionSummary(contQaRun, strict ? wave : null);
+  const envelopeResult = readRunResultEnvelope(contQaRun, wave, { mode });
+  const summary = envelopeResult.valid
+    ? projectLegacySummaryFromEnvelope(
+        envelopeResult.envelope,
+        buildEnvelopeReadOptions(
+          contQaRun,
+          wave,
+          contQaRun?.statusPath ? readStatusRecordIfPresent(contQaRun.statusPath) : null,
+          resolveRunReportPath(wave, contQaRun),
+        ),
+      )
+    : readRunExecutionSummary(contQaRun, wave, { mode });
   if (summary) {
     const validation = validateContQaSummary(contQaRun.agent, summary, { mode });
     return {
@@ -223,8 +387,13 @@ export function readWaveContQaGate(wave, agentRuns, options = {}) {
     return {
       ok: false,
       agentId: contQaRun.agent.agentId,
-      statusCode: "missing-wave-gate",
-      detail: `Missing structured cont-QA summary for ${contQaRun.agent.agentId}.`,
+      statusCode:
+        envelopeResult.source === "missing-envelope"
+          ? "missing-result-envelope"
+          : "invalid-result-envelope",
+      detail:
+        envelopeResult.detail ||
+        `Missing structured cont-QA result envelope for ${contQaRun.agent.agentId}.`,
       logPath: path.relative(REPO_ROOT, contQaRun.logPath),
     };
   }
@@ -284,7 +453,18 @@ export function readWaveContEvalGate(wave, agentRuns, options = {}) {
       logPath: null,
     };
   }
-  const summary = readRunExecutionSummary(contEvalRun, strict ? wave : null);
+  const envelopeResult = readRunResultEnvelope(contEvalRun, wave, { mode });
+  const summary = envelopeResult.valid
+    ? projectLegacySummaryFromEnvelope(
+        envelopeResult.envelope,
+        buildEnvelopeReadOptions(
+          contEvalRun,
+          wave,
+          contEvalRun?.statusPath ? readStatusRecordIfPresent(contEvalRun.statusPath) : null,
+          resolveRunReportPath(wave, contEvalRun),
+        ),
+      )
+    : readRunExecutionSummary(contEvalRun, wave, { mode });
   if (summary) {
     const validation = validateContEvalSummary(contEvalRun.agent, summary, {
       mode,
@@ -302,8 +482,16 @@ export function readWaveContEvalGate(wave, agentRuns, options = {}) {
   return {
     ok: false,
     agentId: contEvalRun.agent.agentId,
-    statusCode: "missing-wave-eval",
-    detail: `Missing [wave-eval] marker for ${contEvalRun.agent.agentId}.`,
+    statusCode:
+      strict && envelopeResult.source !== "missing-envelope"
+        ? "invalid-result-envelope"
+        : strict
+          ? "missing-result-envelope"
+          : "missing-wave-eval",
+    detail:
+      strict && envelopeResult.detail
+        ? envelopeResult.detail
+        : `Missing [wave-eval] marker for ${contEvalRun.agent.agentId}.`,
     logPath: path.relative(REPO_ROOT, contEvalRun.logPath),
   };
 }
@@ -315,7 +503,8 @@ export function readWaveEvaluatorGate(wave, agentRuns, options = {}) {
   });
 }
 
-export function readWaveImplementationGate(wave, agentRuns) {
+export function readWaveImplementationGate(wave, agentRuns, options = {}) {
+  const mode = normalizeReadMode(options.mode || "live");
   const contQaAgentId = wave.contQaAgentId || "A0";
   const contEvalAgentId = wave.contEvalAgentId || "E0";
   const integrationAgentId = wave.integrationAgentId || "A8";
@@ -328,7 +517,32 @@ export function readWaveImplementationGate(wave, agentRuns) {
     ) {
       continue;
     }
-    const summary = readRunExecutionSummary(runInfo, wave);
+    const envelopeResult = readRunResultEnvelope(runInfo, wave, { mode });
+    if (mode === "live" && !envelopeResult.valid) {
+      return {
+        ok: false,
+        agentId: runInfo.agent.agentId,
+        statusCode:
+          envelopeResult.source === "missing-envelope"
+            ? "missing-result-envelope"
+            : "invalid-result-envelope",
+        detail:
+          envelopeResult.detail ||
+          `Missing structured implementation result envelope for ${runInfo.agent.agentId}.`,
+        logPath: path.relative(REPO_ROOT, runInfo.logPath),
+      };
+    }
+    const summary = envelopeResult.valid
+      ? projectLegacySummaryFromEnvelope(
+          envelopeResult.envelope,
+          buildEnvelopeReadOptions(
+            runInfo,
+            wave,
+            runInfo?.statusPath ? readStatusRecordIfPresent(runInfo.statusPath) : null,
+            resolveRunReportPath(wave, runInfo),
+          ),
+        )
+      : readRunExecutionSummary(runInfo, wave, { mode });
     const validation = validateImplementationSummary(runInfo.agent, summary);
     if (!validation.ok) {
       return {
@@ -423,8 +637,12 @@ export function buildSharedComponentSiblingPendingFailure(componentState) {
 }
 
 export function readWaveComponentGate(wave, agentRuns, options = {}) {
+  const mode = normalizeReadMode(options.mode);
   const summariesByAgentId = Object.fromEntries(
-    agentRuns.map((runInfo) => [runInfo.agent.agentId, readRunExecutionSummary(runInfo, wave)]),
+    agentRuns.map((runInfo) => [
+      runInfo.agent.agentId,
+      readRunExecutionSummary(runInfo, wave, { mode }),
+    ]),
   );
   const validation = validateWaveComponentPromotions(wave, summariesByAgentId, options);
   const sharedPending = (wave.componentPromotions || [])
@@ -493,7 +711,8 @@ export function readWaveComponentMatrixGate(wave, agentRuns, options = {}) {
   };
 }
 
-export function readWaveDocumentationGate(wave, agentRuns) {
+export function readWaveDocumentationGate(wave, agentRuns, options = {}) {
+  const mode = normalizeReadMode(options.mode || "live");
   const documentationAgentId = wave.documentationAgentId || "A9";
   const docRun =
     agentRuns.find((run) => run.agent.agentId === documentationAgentId) ?? null;
@@ -506,7 +725,32 @@ export function readWaveDocumentationGate(wave, agentRuns) {
       logPath: null,
     };
   }
-  const summary = readRunExecutionSummary(docRun, wave);
+  const envelopeResult = readRunResultEnvelope(docRun, wave, { mode });
+  if (mode === "live" && !envelopeResult.valid) {
+    return {
+      ok: false,
+      agentId: docRun.agent.agentId,
+      statusCode:
+        envelopeResult.source === "missing-envelope"
+          ? "missing-result-envelope"
+          : "invalid-result-envelope",
+      detail:
+        envelopeResult.detail ||
+        `Missing structured documentation result envelope for ${docRun.agent.agentId}.`,
+      logPath: path.relative(REPO_ROOT, docRun.logPath),
+    };
+  }
+  const summary = envelopeResult.valid
+    ? projectLegacySummaryFromEnvelope(
+        envelopeResult.envelope,
+        buildEnvelopeReadOptions(
+          docRun,
+          wave,
+          docRun?.statusPath ? readStatusRecordIfPresent(docRun.statusPath) : null,
+          resolveRunReportPath(wave, docRun),
+        ),
+      )
+    : readRunExecutionSummary(docRun, wave, { mode });
   const validation = validateDocumentationClosureSummary(docRun.agent, summary);
   return {
     ok: validation.ok,
@@ -517,7 +761,8 @@ export function readWaveDocumentationGate(wave, agentRuns) {
   };
 }
 
-export function readWaveSecurityGate(wave, agentRuns) {
+export function readWaveSecurityGate(wave, agentRuns, options = {}) {
+  const mode = normalizeReadMode(options.mode || "live");
   const securityRuns = (agentRuns || []).filter((run) => isSecurityReviewAgent(run.agent));
   if (securityRuns.length === 0) {
     return {
@@ -530,7 +775,32 @@ export function readWaveSecurityGate(wave, agentRuns) {
   }
   const concernAgentIds = [];
   for (const runInfo of securityRuns) {
-    const summary = readRunExecutionSummary(runInfo, wave);
+    const envelopeResult = readRunResultEnvelope(runInfo, wave, { mode });
+    if (mode === "live" && !envelopeResult.valid) {
+      return {
+        ok: false,
+        agentId: runInfo.agent.agentId,
+        statusCode:
+          envelopeResult.source === "missing-envelope"
+            ? "missing-result-envelope"
+            : "invalid-result-envelope",
+        detail:
+          envelopeResult.detail ||
+          `Missing structured security result envelope for ${runInfo.agent.agentId}.`,
+        logPath: path.relative(REPO_ROOT, runInfo.logPath),
+      };
+    }
+    const summary = envelopeResult.valid
+      ? projectLegacySummaryFromEnvelope(
+          envelopeResult.envelope,
+          buildEnvelopeReadOptions(
+            runInfo,
+            wave,
+            runInfo?.statusPath ? readStatusRecordIfPresent(runInfo.statusPath) : null,
+            resolveRunReportPath(wave, runInfo),
+          ),
+        )
+      : readRunExecutionSummary(runInfo, wave, { mode });
     const validation = validateSecuritySummary(runInfo.agent, summary);
     if (!validation.ok) {
       return {
@@ -564,6 +834,7 @@ export function readWaveSecurityGate(wave, agentRuns) {
 }
 
 export function readWaveIntegrationGate(wave, agentRuns, options = {}) {
+  const mode = normalizeReadMode(options.mode || "live");
   const integrationAgentId =
     options.integrationAgentId || wave.integrationAgentId || "A8";
   const requireIntegration =
@@ -584,7 +855,32 @@ export function readWaveIntegrationGate(wave, agentRuns, options = {}) {
       logPath: null,
     };
   }
-  const summary = readRunExecutionSummary(integrationRun, wave);
+  const envelopeResult = readRunResultEnvelope(integrationRun, wave, { mode });
+  if (mode === "live" && !envelopeResult.valid) {
+    return {
+      ok: false,
+      agentId: integrationRun.agent.agentId,
+      statusCode:
+        envelopeResult.source === "missing-envelope"
+          ? "missing-result-envelope"
+          : "invalid-result-envelope",
+      detail:
+        envelopeResult.detail ||
+        `Missing structured integration result envelope for ${integrationRun.agent.agentId}.`,
+      logPath: path.relative(REPO_ROOT, integrationRun.logPath),
+    };
+  }
+  const summary = envelopeResult.valid
+    ? projectLegacySummaryFromEnvelope(
+        envelopeResult.envelope,
+        buildEnvelopeReadOptions(
+          integrationRun,
+          wave,
+          integrationRun?.statusPath ? readStatusRecordIfPresent(integrationRun.statusPath) : null,
+          resolveRunReportPath(wave, integrationRun),
+        ),
+      )
+    : readRunExecutionSummary(integrationRun, wave, { mode });
   const validation = validateIntegrationSummary(integrationRun.agent, summary);
   return {
     ok: validation.ok,
@@ -737,90 +1033,50 @@ export function buildGateSnapshot({
   validationMode = "compat",
   readWaveInfraGateFn,
 }) {
-  const implementationGate = readWaveImplementationGate(wave, agentRuns);
-  const componentGate = readWaveComponentGate(wave, agentRuns, {
-    laneProfile: lanePaths?.laneProfile,
+  const agentResults = Object.fromEntries(
+    (agentRuns || [])
+      .map((runInfo) => [
+        runInfo.agent.agentId,
+        readRunExecutionSummary(runInfo, wave, { mode: validationMode }),
+      ])
+      .filter(([, summary]) => Boolean(summary)),
+  );
+  return buildGateSnapshotPure({
+    wave,
+    agentResults,
+    derivedState: {
+      ...derivedState,
+      clarificationBarrier:
+        derivedState?.clarificationBarrier || readClarificationBarrier(derivedState),
+      helperAssignmentBarrier:
+        derivedState?.helperAssignmentBarrier || readWaveAssignmentBarrier(derivedState),
+      dependencyBarrier:
+        derivedState?.dependencyBarrier || readWaveDependencyBarrier(derivedState),
+    },
+    validationMode,
+    laneConfig: {
+      contQaAgentId: lanePaths?.contQaAgentId,
+      contEvalAgentId: lanePaths?.contEvalAgentId,
+      integrationAgentId: lanePaths?.integrationAgentId,
+      documentationAgentId: lanePaths?.documentationAgentId,
+      requireIntegrationStewardFromWave: lanePaths?.requireIntegrationStewardFromWave,
+      laneProfile: lanePaths?.laneProfile,
+      benchmarkCatalogPath: lanePaths?.laneProfile?.paths?.benchmarkCatalogPath,
+      componentMatrixPayload,
+      componentMatrixJsonPath,
+    },
   });
-  const integrationGate = readWaveIntegrationGate(wave, agentRuns, {
-    integrationAgentId: lanePaths?.integrationAgentId,
-    requireIntegrationStewardFromWave: lanePaths?.requireIntegrationStewardFromWave,
-  });
-  const integrationBarrier = readWaveIntegrationBarrier(wave, agentRuns, derivedState, {
-    integrationAgentId: lanePaths?.integrationAgentId,
-    requireIntegrationStewardFromWave: lanePaths?.requireIntegrationStewardFromWave,
-  });
-  const documentationGate = readWaveDocumentationGate(wave, agentRuns);
-  const componentMatrixGate = readWaveComponentMatrixGate(wave, agentRuns, {
-    laneProfile: lanePaths?.laneProfile,
-    documentationAgentId: lanePaths?.documentationAgentId,
-    componentMatrixPayload,
-    componentMatrixJsonPath,
-  });
-  const contEvalGate = readWaveContEvalGate(wave, agentRuns, {
-    contEvalAgentId: lanePaths?.contEvalAgentId,
-    mode: validationMode,
-    evalTargets: wave.evalTargets,
-    benchmarkCatalogPath: lanePaths?.laneProfile?.paths?.benchmarkCatalogPath,
-  });
-  const securityGate = readWaveSecurityGate(wave, agentRuns);
-  const contQaGate = readWaveContQaGate(wave, agentRuns, {
-    contQaAgentId: lanePaths?.contQaAgentId,
-    mode: validationMode,
-  });
-  const infraGate = readWaveInfraGateFn(agentRuns);
-  const clarificationBarrier = readClarificationBarrier(derivedState);
-  const helperAssignmentBarrier = readWaveAssignmentBarrier(derivedState);
-  const dependencyBarrier = readWaveDependencyBarrier(derivedState);
-  const orderedGates = [
-    ["implementationGate", implementationGate],
-    ["componentGate", componentGate],
-    ["helperAssignmentBarrier", helperAssignmentBarrier],
-    ["dependencyBarrier", dependencyBarrier],
-    ["contEvalGate", contEvalGate],
-    ["securityGate", securityGate],
-    ["integrationBarrier", integrationBarrier],
-    ["documentationGate", documentationGate],
-    ["componentMatrixGate", componentMatrixGate],
-    ["contQaGate", contQaGate],
-    ["infraGate", infraGate],
-    ["clarificationBarrier", clarificationBarrier],
-  ];
-  const firstFailure = orderedGates.find(([, gate]) => gate?.ok === false);
-  return {
-    implementationGate,
-    componentGate,
-    integrationGate,
-    integrationBarrier,
-    documentationGate,
-    componentMatrixGate,
-    contEvalGate,
-    securityGate,
-    contQaGate,
-    infraGate,
-    clarificationBarrier,
-    helperAssignmentBarrier,
-    dependencyBarrier,
-    overall: firstFailure
-      ? {
-          ok: false,
-          gate: firstFailure[0],
-          statusCode: firstFailure[1].statusCode,
-          detail: firstFailure[1].detail,
-          agentId: firstFailure[1].agentId || null,
-        }
-      : {
-          ok: true,
-          gate: "pass",
-          statusCode: "pass",
-          detail: "All replayed wave gates passed.",
-          agentId: null,
-        },
-  };
 }
 
 // --- Pure gate variants (no file I/O) ---
 // These accept agentResults map { agentId: executionSummary } instead of runInfo objects.
 // Used by the wave-state-reducer for deterministic replay.
+
+function waveDeclaresAgent(wave, agentId) {
+  return (Array.isArray(wave?.agents) ? wave.agents : []).some(
+    (agent) => agent?.agentId === agentId,
+  );
+}
 
 export function readWaveImplementationGatePure(wave, agentResults, options = {}) {
   const contQaAgentId = options.contQaAgentId || wave.contQaAgentId || "A0";
@@ -865,24 +1121,24 @@ export function readWaveContQaGatePure(wave, agentResults, options = {}) {
   const agent = { agentId: contQaAgentId };
   const validation = validateContQaSummary(agent, summary, { mode });
   return { ok: validation.ok, agentId: contQaAgentId, statusCode: validation.statusCode,
-    detail: validation.detail, logPath: summary.logPath || null };
+    detail: validation.detail, logPath: summary?.logPath || null };
 }
 
 export function readWaveContEvalGatePure(wave, agentResults, options = {}) {
   const mode = String(options.mode || "live").trim().toLowerCase();
   const contEvalAgentId = options.contEvalAgentId || wave.contEvalAgentId || "E0";
-  const summary = agentResults?.[contEvalAgentId] || null;
-  if (!summary) {
+  if (!waveDeclaresAgent(wave, contEvalAgentId)) {
     return { ok: true, agentId: null, statusCode: "pass",
       detail: "Wave does not include cont-EVAL.", logPath: null };
   }
+  const summary = agentResults?.[contEvalAgentId] || null;
   const agent = { agentId: contEvalAgentId };
   const validation = validateContEvalSummary(agent, summary, {
     mode, evalTargets: options.evalTargets || wave.evalTargets,
     benchmarkCatalogPath: options.benchmarkCatalogPath,
   });
   return { ok: validation.ok, agentId: contEvalAgentId, statusCode: validation.statusCode,
-    detail: validation.detail, logPath: summary.logPath || null };
+    detail: validation.detail, logPath: summary?.logPath || null };
 }
 
 export function readWaveEvaluatorGatePure(wave, agentResults, options = {}) {
@@ -976,15 +1232,15 @@ export function readWaveComponentMatrixGatePure(wave, agentResults, options = {}
 
 export function readWaveDocumentationGatePure(wave, agentResults, options = {}) {
   const documentationAgentId = options.documentationAgentId || wave.documentationAgentId || "A9";
-  const summary = agentResults?.[documentationAgentId] || null;
-  if (!summary) {
+  if (!waveDeclaresAgent(wave, documentationAgentId)) {
     return { ok: true, agentId: null, statusCode: "pass",
       detail: "No documentation steward declared for this wave.", logPath: null };
   }
+  const summary = agentResults?.[documentationAgentId] || null;
   const agent = { agentId: documentationAgentId };
   const validation = validateDocumentationClosureSummary(agent, summary);
   return { ok: validation.ok, agentId: documentationAgentId, statusCode: validation.statusCode,
-    detail: validation.detail, logPath: summary.logPath || null };
+    detail: validation.detail, logPath: summary?.logPath || null };
 }
 
 export function readWaveSecurityGatePure(wave, agentResults, options = {}) {
@@ -1016,8 +1272,7 @@ export function readWaveIntegrationGatePure(wave, agentResults, options = {}) {
   const integrationAgentId = options.integrationAgentId || wave.integrationAgentId || "A8";
   const requireIntegration = options.requireIntegrationSteward === true ||
     (options.requireIntegrationStewardFromWave != null && wave.wave >= options.requireIntegrationStewardFromWave);
-  const summary = agentResults?.[integrationAgentId] || null;
-  if (!summary) {
+  if (!waveDeclaresAgent(wave, integrationAgentId)) {
     return {
       ok: !requireIntegration,
       agentId: requireIntegration ? integrationAgentId : null,
@@ -1027,10 +1282,11 @@ export function readWaveIntegrationGatePure(wave, agentResults, options = {}) {
       logPath: null,
     };
   }
+  const summary = agentResults?.[integrationAgentId] || null;
   const agent = { agentId: integrationAgentId };
   const validation = validateIntegrationSummary(agent, summary);
   return { ok: validation.ok, agentId: integrationAgentId, statusCode: validation.statusCode,
-    detail: validation.detail, logPath: summary.logPath || null };
+    detail: validation.detail, logPath: summary?.logPath || null };
 }
 
 const NON_BLOCKING_INFRA_SIGNAL_STATES = new Set([

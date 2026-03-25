@@ -5,8 +5,17 @@ import {
   setWaveDashboardAgent,
   updateWaveDashboardMessageBoard,
 } from "./dashboard-state.mjs";
+import {
+  materializeAgentExecutionSummaryForRun as materializeAgentExecutionSummaryForRunDefault,
+  readWaveComponentMatrixGate as readWaveComponentMatrixGateDefault,
+  readWaveContEvalGate as readWaveContEvalGateDefault,
+  readWaveContQaGate as readWaveContQaGateDefault,
+  readWaveDocumentationGate as readWaveDocumentationGateDefault,
+  readWaveIntegrationBarrier as readWaveIntegrationBarrierDefault,
+  readWaveSecurityGate as readWaveSecurityGateDefault,
+} from "./gate-engine.mjs";
 import { REPO_ROOT, toIsoTimestamp } from "./shared.mjs";
-import { isSecurityReviewAgent } from "./role-helpers.mjs";
+import { isSecurityReviewAgent, resolveWaveRoleBindings } from "./role-helpers.mjs";
 import { summarizeResolvedSkills } from "./skills.mjs";
 
 function failureResultFromGate(gate, fallbackLogPath) {
@@ -71,76 +80,41 @@ export async function runClosureSweepPhase({
   materializeAgentExecutionSummaryForRunFn,
   monitorWaveHumanFeedbackFn,
 }) {
-  const contQaAgentId = wave.contQaAgentId || "A0";
-  const contEvalAgentId = wave.contEvalAgentId || lanePaths.contEvalAgentId || "E0";
-  const integrationAgentId = wave.integrationAgentId || lanePaths.integrationAgentId || "A8";
-  const documentationAgentId = wave.documentationAgentId || "A9";
-  const stagedRuns = [
-    {
-      agentId: contEvalAgentId,
-      label: "cont-EVAL gate",
-      runs: closureRuns.filter((run) => run.agent.agentId === contEvalAgentId),
-      validate: () =>
-        readWaveContEvalGateFn(wave, closureRuns, {
-          contEvalAgentId,
-          mode: "live",
-          evalTargets: wave.evalTargets,
-          benchmarkCatalogPath: lanePaths.laneProfile?.paths?.benchmarkCatalogPath,
-        }),
-      actionRequested:
-        `Lane ${lanePaths.lane} owners should resolve cont-EVAL tuning gaps before integration closure.`,
-    },
-    {
-      agentId: "security",
-      label: "Security review",
-      runs: closureRuns.filter((run) => isSecurityReviewAgent(run.agent)),
-      validate: () => readWaveSecurityGateFn(wave, closureRuns),
-      actionRequested:
-        `Lane ${lanePaths.lane} owners should resolve blocked security findings or missing approvals before integration closure.`,
-    },
-    {
-      agentId: integrationAgentId,
-      label: "Integration gate",
-      runs: closureRuns.filter((run) => run.agent.agentId === integrationAgentId),
-      validate: () =>
-        readWaveIntegrationBarrierFn(
-          wave,
-          closureRuns,
-          refreshDerivedState?.(dashboardState?.attempt || 0),
-          {
-            integrationAgentId,
-            requireIntegrationStewardFromWave: lanePaths.requireIntegrationStewardFromWave,
-          },
-        ),
-      actionRequested:
-        `Lane ${lanePaths.lane} owners should resolve integration contradictions or blockers before documentation and cont-QA closure.`,
-    },
-    {
-      agentId: documentationAgentId,
-      label: "Documentation closure",
-      runs: closureRuns.filter((run) => run.agent.agentId === documentationAgentId),
-      validate: () => {
-        const documentationGate = readWaveDocumentationGateFn(wave, closureRuns);
-        if (!documentationGate.ok) {
-          return documentationGate;
-        }
-        return readWaveComponentMatrixGateFn(wave, closureRuns, {
-          laneProfile: lanePaths.laneProfile,
-          documentationAgentId,
-        });
-      },
-      actionRequested:
-        `Lane ${lanePaths.lane} owners should resolve the shared-plan or component-matrix closure state before cont-QA progression.`,
-    },
-    {
-      agentId: contQaAgentId,
-      label: "cont-QA gate",
-      runs: closureRuns.filter((run) => run.agent.agentId === contQaAgentId),
-      validate: () => readWaveContQaGateFn(wave, closureRuns, { contQaAgentId, mode: "live" }),
-      actionRequested:
-        `Lane ${lanePaths.lane} owners should resolve the cont-QA gate before wave progression.`,
-    },
-  ];
+  const materializeSummary =
+    typeof materializeAgentExecutionSummaryForRunFn === "function"
+      ? materializeAgentExecutionSummaryForRunFn
+      : materializeAgentExecutionSummaryForRunDefault;
+  const monitorHumanFeedback =
+    typeof monitorWaveHumanFeedbackFn === "function"
+      ? monitorWaveHumanFeedbackFn
+      : () => false;
+  const readContEvalGate =
+    typeof readWaveContEvalGateFn === "function"
+      ? readWaveContEvalGateFn
+      : readWaveContEvalGateDefault;
+  const readSecurityGate =
+    typeof readWaveSecurityGateFn === "function"
+      ? readWaveSecurityGateFn
+      : readWaveSecurityGateDefault;
+  const readIntegrationBarrier =
+    typeof readWaveIntegrationBarrierFn === "function"
+      ? readWaveIntegrationBarrierFn
+      : readWaveIntegrationBarrierDefault;
+  const readDocumentationGate =
+    typeof readWaveDocumentationGateFn === "function"
+      ? readWaveDocumentationGateFn
+      : readWaveDocumentationGateDefault;
+  const readComponentMatrixGate =
+    typeof readWaveComponentMatrixGateFn === "function"
+      ? readWaveComponentMatrixGateFn
+      : readWaveComponentMatrixGateDefault;
+  const readContQaGate =
+    typeof readWaveContQaGateFn === "function"
+      ? readWaveContQaGateFn
+      : readWaveContQaGateDefault;
+  const stagedRuns = planClosureStages({ lanePaths, wave, closureRuns });
+  const { contQaAgentId, contEvalAgentId, integrationAgentId, documentationAgentId } =
+    resolveWaveRoleBindings(wave, lanePaths);
   for (const stage of stagedRuns) {
     if (stage.runs.length === 0) {
       continue;
@@ -177,6 +151,11 @@ export async function runClosureSweepPhase({
         agentRateLimitBaseDelaySeconds: options.agentRateLimitBaseDelaySeconds,
         agentRateLimitMaxDelaySeconds: options.agentRateLimitMaxDelaySeconds,
         context7Enabled: options.context7Enabled,
+        attempt: dashboardState?.attempt || 1,
+        controlPlane: {
+          waveNumber: wave.wave,
+          attempt: dashboardState?.attempt || 1,
+        },
       });
       runInfo.lastLaunchAttempt = dashboardState?.attempt || null;
       runInfo.lastPromptHash = launchResult?.promptHash || null;
@@ -201,7 +180,7 @@ export async function runClosureSweepPhase({
           refreshWaveDashboardAgentStates(dashboardState, [runInfo], pendingAgentIds, (event) =>
             recordCombinedEvent(event),
           );
-          const feedbackChanged = monitorWaveHumanFeedbackFn({
+          const feedbackChanged = monitorHumanFeedback({
             lanePaths,
             waveNumber: wave.wave,
             agentRuns: [runInfo],
@@ -217,14 +196,37 @@ export async function runClosureSweepPhase({
           updateWaveDashboardMessageBoard(dashboardState, runInfo.messageBoardPath);
           flushDashboards();
         },
+        {
+          controlPlane: {
+            waveNumber: wave.wave,
+            attempt: dashboardState?.attempt || 1,
+          },
+        },
       );
-      materializeAgentExecutionSummaryForRunFn(wave, runInfo);
+      materializeSummary(wave, runInfo);
       refreshDerivedState?.(dashboardState?.attempt || 0);
       if (result.failures.length > 0) {
         return result;
       }
     }
-    const gate = stage.validate();
+    const gate = evaluateClosureStage({
+      stage,
+      wave,
+      closureRuns,
+      lanePaths,
+      dashboardState,
+      refreshDerivedState,
+      readWaveContEvalGateFn: readContEvalGate,
+      readWaveSecurityGateFn: readSecurityGate,
+      readWaveIntegrationBarrierFn: readIntegrationBarrier,
+      readWaveDocumentationGateFn: readDocumentationGate,
+      readWaveComponentMatrixGateFn: readComponentMatrixGate,
+      readWaveContQaGateFn: readContQaGate,
+      contEvalAgentId,
+      integrationAgentId,
+      documentationAgentId,
+      contQaAgentId,
+    });
     if (!gate.ok) {
       recordClosureGateFailure({
         wave,
@@ -242,6 +244,120 @@ export async function runClosureSweepPhase({
     }
   }
   return { failures: [], timedOut: false };
+}
+
+export function planClosureStages({ lanePaths, wave, closureRuns }) {
+  const { contQaAgentId, contEvalAgentId, integrationAgentId, documentationAgentId } =
+    resolveWaveRoleBindings(wave, lanePaths);
+  return [
+    {
+      key: "cont-eval",
+      agentId: contEvalAgentId,
+      label: "cont-EVAL gate",
+      runs: closureRuns.filter((run) => run.agent.agentId === contEvalAgentId),
+      actionRequested:
+        `Lane ${lanePaths.lane} owners should resolve cont-EVAL tuning gaps before integration closure.`,
+    },
+    {
+      key: "security-review",
+      agentId: "security",
+      label: "Security review",
+      runs: closureRuns.filter((run) => isSecurityReviewAgent(run.agent)),
+      actionRequested:
+        `Lane ${lanePaths.lane} owners should resolve blocked security findings or missing approvals before integration closure.`,
+    },
+    {
+      key: "integration",
+      agentId: integrationAgentId,
+      label: "Integration gate",
+      runs: closureRuns.filter((run) => run.agent.agentId === integrationAgentId),
+      actionRequested:
+        `Lane ${lanePaths.lane} owners should resolve integration contradictions or blockers before documentation and cont-QA closure.`,
+    },
+    {
+      key: "documentation",
+      agentId: documentationAgentId,
+      label: "Documentation closure",
+      runs: closureRuns.filter((run) => run.agent.agentId === documentationAgentId),
+      actionRequested:
+        `Lane ${lanePaths.lane} owners should resolve the shared-plan or component-matrix closure state before cont-QA progression.`,
+    },
+    {
+      key: "cont-qa",
+      agentId: contQaAgentId,
+      label: "cont-QA gate",
+      runs: closureRuns.filter((run) => run.agent.agentId === contQaAgentId),
+      actionRequested:
+        `Lane ${lanePaths.lane} owners should resolve the cont-QA gate before wave progression.`,
+    },
+  ];
+}
+
+function evaluateClosureStage({
+  stage,
+  wave,
+  closureRuns,
+  lanePaths,
+  dashboardState,
+  refreshDerivedState,
+  readWaveContEvalGateFn,
+  readWaveSecurityGateFn,
+  readWaveIntegrationBarrierFn,
+  readWaveDocumentationGateFn,
+  readWaveComponentMatrixGateFn,
+  readWaveContQaGateFn,
+  contEvalAgentId,
+  integrationAgentId,
+  documentationAgentId,
+  contQaAgentId,
+}) {
+  switch (stage.key) {
+    case "cont-eval":
+      return readWaveContEvalGateFn(wave, closureRuns, {
+        contEvalAgentId,
+        mode: "live",
+        evalTargets: wave.evalTargets,
+        benchmarkCatalogPath: lanePaths.laneProfile?.paths?.benchmarkCatalogPath,
+      });
+    case "security-review":
+      return readWaveSecurityGateFn(wave, closureRuns, { mode: "live" });
+    case "integration":
+      return readWaveIntegrationBarrierFn(
+        wave,
+        closureRuns,
+        refreshDerivedState?.(dashboardState?.attempt || 0),
+        {
+          integrationAgentId,
+          mode: "live",
+          requireIntegrationStewardFromWave: lanePaths.requireIntegrationStewardFromWave,
+        },
+      );
+    case "documentation": {
+      const documentationGate = readWaveDocumentationGateFn(wave, closureRuns, {
+        mode: "live",
+      });
+      if (!documentationGate.ok) {
+        return documentationGate;
+      }
+      return readWaveComponentMatrixGateFn(wave, closureRuns, {
+        laneProfile: lanePaths.laneProfile,
+        documentationAgentId,
+      });
+    }
+    case "cont-qa":
+      return readWaveContQaGateFn(wave, closureRuns, {
+        contQaAgentId,
+        mode: "live",
+      });
+    default:
+      return {
+        ok: true,
+        agentId: null,
+        statusCode: "pass",
+        detail: "No closure stage configured.",
+        logPath: null,
+      };
+  }
 }
 
 const NON_BLOCKING_INFRA_SIGNAL_STATES = new Set([

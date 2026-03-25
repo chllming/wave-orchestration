@@ -14,6 +14,7 @@ const activeDocsAndSkills = [
   "docs/guides/author-and-run-waves.md",
   "docs/guides/planner.md",
   "docs/guides/terminal-surfaces.md",
+  "docs/reference/cli-reference.md",
   "docs/reference/coordination-and-closure.md",
   "docs/reference/skills.md",
   "docs/reference/wave-control.md",
@@ -21,6 +22,7 @@ const activeDocsAndSkills = [
   "docs/plans/master-plan.md",
   "docs/plans/migration.md",
   "docs/plans/architecture-hardening-migration.md",
+  "docs/plans/end-state-architecture.md",
   "docs/plans/wave-orchestrator.md",
   "docs/research/coordination-failure-review.md",
   "docs/agents/wave-launcher-role.md",
@@ -101,8 +103,11 @@ describe("docs architecture alignment", () => {
     const waveCoreSkill = read("skills/wave-core/SKILL.md");
     const migrationGuide = read("docs/plans/migration.md");
     const currentState = read("docs/plans/current-state.md");
+    const endStateArchitecture = read("docs/plans/end-state-architecture.md");
+    const cliReference = read("docs/reference/cli-reference.md");
 
     expect(readme).toContain("canonical authority set");
+    expect(readme).toContain("CLI Surfaces");
     expect(runbook).toContain("immutable result envelopes");
     expect(runbook).toContain("thin orchestrator");
     expect(waveCoreSkill).toContain("canonical authority set");
@@ -112,5 +117,13 @@ describe("docs architecture alignment", () => {
     expect(migrationDoc).toContain("Stage 0: Baseline Lock");
     expect(migrationDoc).toContain("Stage 3: Envelope-Authoritative Gate Evaluation");
     expect(migrationDoc).toContain("shared `0.7.3` parity suites");
+    expect(endStateArchitecture).toContain("Runtime Module Layout");
+    expect(endStateArchitecture).toContain("no longer part of the live runtime tree");
+    expect(endStateArchitecture).toContain(".tmp/<lane>-wave-launcher/inboxes/wave-<N>/shared-summary.md");
+    expect(endStateArchitecture).toContain(".tmp/<lane>-wave-launcher/messageboards/wave-<N>.md");
+    expect(endStateArchitecture).toContain(".tmp/<lane>-wave-launcher/waves.manifest.json");
+    expect(cliReference).toContain("Command Families");
+    expect(cliReference).toContain("--orchestrator-board <path>");
+    expect(cliReference).toContain("--coordination-note <text>");
   });
 });

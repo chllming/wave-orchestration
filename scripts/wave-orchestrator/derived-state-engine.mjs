@@ -4,7 +4,7 @@ import {
   materializeAgentExecutionSummaryForRun,
   materializeAgentExecutionSummaries,
   readRunExecutionSummary,
-} from "./launcher-gates.mjs";
+} from "./gate-engine.mjs";
 import {
   isOpenCoordinationStatus,
   appendCoordinationRecord,
@@ -39,6 +39,7 @@ import {
   isSecurityReviewAgent,
   resolveSecurityReviewReportPath,
   isContEvalImplementationOwningAgent,
+  resolveWaveRoleBindings,
 } from "./role-helpers.mjs";
 import {
   REPO_ROOT,
@@ -339,6 +340,7 @@ function padReportedEntries(entries, minimumCount, label) {
 function buildIntegrationEvidence({
   lanePaths,
   wave,
+  roleBindings = resolveWaveRoleBindings(wave, lanePaths),
   coordinationState,
   summariesByAgentId,
   docsQueue,
@@ -404,14 +406,14 @@ function buildIntegrationEvidence({
   for (const agent of wave.agents || []) {
     const summary = summariesByAgentId?.[agent.agentId] || null;
     const contEvalImplementationOwning =
-      agent.agentId === lanePaths.contEvalAgentId &&
+      agent.agentId === roleBindings.contEvalAgentId &&
       isContEvalImplementationOwningAgent(agent, {
-        contEvalAgentId: lanePaths.contEvalAgentId,
+        contEvalAgentId: roleBindings.contEvalAgentId,
       });
     if (isSecurityReviewAgent(agent)) {
       continue;
     }
-    if (agent.agentId === lanePaths.contEvalAgentId) {
+    if (agent.agentId === roleBindings.contEvalAgentId) {
       const validation = validateContEvalSummary(agent, summary, {
         mode: "live",
         evalTargets: wave.evalTargets,
@@ -425,11 +427,11 @@ function buildIntegrationEvidence({
     }
     if (
       ![
-        lanePaths.contQaAgentId,
-        lanePaths.integrationAgentId,
-        lanePaths.documentationAgentId,
+        roleBindings.contQaAgentId,
+        roleBindings.integrationAgentId,
+        roleBindings.documentationAgentId,
       ].includes(agent.agentId) &&
-      (agent.agentId !== lanePaths.contEvalAgentId || contEvalImplementationOwning)
+      (agent.agentId !== roleBindings.contEvalAgentId || contEvalImplementationOwning)
     ) {
       const validation = validateImplementationSummary(agent, summary);
       if (!validation.ok) {
@@ -553,10 +555,12 @@ export function buildWaveIntegrationSummary({
   dependencySnapshot = null,
   securitySummary = null,
 }) {
-  const explicitIntegration = summariesByAgentId[lanePaths.integrationAgentId]?.integration || null;
+  const roleBindings = resolveWaveRoleBindings(wave, lanePaths);
+  const explicitIntegration = summariesByAgentId[roleBindings.integrationAgentId]?.integration || null;
   const evidence = buildIntegrationEvidence({
     lanePaths,
     wave,
+    roleBindings,
     coordinationState,
     summariesByAgentId,
     docsQueue,
@@ -569,7 +573,7 @@ export function buildWaveIntegrationSummary({
     return {
       wave: wave.wave,
       lane: lanePaths.lane,
-      agentId: lanePaths.integrationAgentId,
+      agentId: roleBindings.integrationAgentId,
       attempt,
       openClaims: padReportedEntries(
         evidence.openClaims,
@@ -684,6 +688,7 @@ export function writeWaveDerivedState({
   attempt = 0,
   orchestratorId = null,
 }) {
+  const roleBindings = resolveWaveRoleBindings(wave, lanePaths);
   const coordinationLogPath = waveCoordinationLogPath(lanePaths, wave.wave);
   const existingDocsQueue = readDocsQueue(waveDocsQueuePath(lanePaths, wave.wave));
   const existingIntegrationSummary = readJsonOrNull(waveIntegrationPath(lanePaths, wave.wave));
@@ -694,10 +699,10 @@ export function writeWaveDerivedState({
     agents: wave.agents,
     componentPromotions: wave.componentPromotions,
     sharedPlanDocs: lanePaths.sharedPlanDocs,
-    contQaAgentId: lanePaths.contQaAgentId,
-    contEvalAgentId: lanePaths.contEvalAgentId,
-    integrationAgentId: lanePaths.integrationAgentId,
-    documentationAgentId: lanePaths.documentationAgentId,
+    contQaAgentId: roleBindings.contQaAgentId,
+    contEvalAgentId: roleBindings.contEvalAgentId,
+    integrationAgentId: roleBindings.integrationAgentId,
+    documentationAgentId: roleBindings.documentationAgentId,
     feedbackRequests,
   });
   let coordinationState = readMaterializedCoordinationState(coordinationLogPath);
@@ -810,10 +815,10 @@ export function writeWaveDerivedState({
     integrationSummary,
     docsQueue,
     attempt,
-    contQaAgentId: lanePaths.contQaAgentId,
-    contEvalAgentId: lanePaths.contEvalAgentId,
-    integrationAgentId: lanePaths.integrationAgentId,
-    documentationAgentId: lanePaths.documentationAgentId,
+    contQaAgentId: roleBindings.contQaAgentId,
+    contEvalAgentId: roleBindings.contEvalAgentId,
+    integrationAgentId: roleBindings.integrationAgentId,
+    documentationAgentId: roleBindings.documentationAgentId,
     benchmarkCatalogPath: lanePaths.laneProfile?.paths?.benchmarkCatalogPath,
     capabilityAssignments,
     dependencySnapshot,

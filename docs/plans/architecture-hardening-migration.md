@@ -1,6 +1,13 @@
 # Architecture Hardening Migration
 
-This document is the staged cutover plan from the legacy launcher-centric runtime to the end-state architecture described in [end-state-architecture.md](./end-state-architecture.md).
+This document is the historical record of the completed cutover from the legacy launcher-centric runtime to the architecture described in [end-state-architecture.md](./end-state-architecture.md).
+
+Current status at this head:
+
+- Stage 1 is complete: reducer snapshots persist machine-readable shadow diffs for high-value decision slices.
+- Stage 2 is complete: live helper-assignment blocking, retry target selection, and resume planning consume reducer state.
+- Stage 3 and Stage 4 are complete in runtime behavior: live gate and closure decisions are envelope-authoritative, and the launcher sequences explicit engine surfaces instead of recomputing those policies inline.
+- Stage 5 is complete for live runtime behavior: compatibility parsing remains only for replay, reconcile, and historical trace materialization, and the old `launcher-*` engine module names have been removed from the live runtime tree.
 
 The target model is fixed:
 

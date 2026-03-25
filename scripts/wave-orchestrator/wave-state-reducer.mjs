@@ -16,11 +16,26 @@ import {
   buildGateSnapshotPure,
   readClarificationBarrier,
   readWaveAssignmentBarrier,
-} from "./launcher-gates.mjs";
+} from "./gate-engine.mjs";
 import { buildHumanInputRequests } from "./human-input-workflow.mjs";
+import { projectLegacySummaryFromEnvelope } from "./result-envelope.mjs";
 import { buildRequestAssignments } from "./routing-state.mjs";
+import { resolveSecurityReviewReportPath } from "./role-helpers.mjs";
 
 const REDUCER_VERSION = 2;
+
+function resolveReducerReportPath(waveDefinition, agent) {
+  if (!waveDefinition || !agent) {
+    return null;
+  }
+  if (agent.agentId === (waveDefinition.contQaAgentId || "A0")) {
+    return waveDefinition.contQaReportPath || null;
+  }
+  if (agent.agentId === (waveDefinition.contEvalAgentId || "E0")) {
+    return waveDefinition.contEvalReportPath || null;
+  }
+  return resolveSecurityReviewReportPath(agent);
+}
 
 /**
  * Detect contradictions from control-plane events.
@@ -117,6 +132,7 @@ function derivePhase({
   gateSnapshot,
   coordinationState,
   dependencySnapshot,
+  clarificationBarrier,
 }) {
   const blockers = (coordinationState?.blockers || []).filter(
     (record) =>
@@ -132,6 +148,9 @@ function derivePhase({
   );
   const openClarificationRequests = openClarificationLinkedRequests(coordinationState);
   if (openClarifications.length > 0 || openClarificationRequests.length > 0) {
+    return "clarifying";
+  }
+  if (clarificationBarrier?.statusCode === "human-feedback-open") {
     return "clarifying";
   }
 
@@ -528,12 +547,34 @@ function applyProofAvailabilityToTasks(tasks, proofAvailability) {
 export function reduceWaveState({
   controlPlaneEvents = [],
   coordinationRecords = [],
-  agentResults = {},
+  agentEnvelopes = null,
+  agentResults = null,
   waveDefinition = null,
   dependencyTickets = null,
   feedbackRequests = [],
   laneConfig = {},
 }) {
+  const resolvedAgentResults =
+    agentResults && typeof agentResults === "object" && !Array.isArray(agentResults)
+      ? agentResults
+      : Object.fromEntries(
+          Object.entries(agentEnvelopes || {})
+            .map(([agentId, envelope]) => {
+              const agent =
+                (Array.isArray(waveDefinition?.agents) ? waveDefinition.agents : []).find(
+                  (candidate) => candidate?.agentId === agentId,
+                ) || { agentId };
+              return [
+                agentId,
+                projectLegacySummaryFromEnvelope(envelope, {
+                  agent,
+                  waveNumber: waveDefinition?.wave ?? null,
+                  reportPath: resolveReducerReportPath(waveDefinition, agent),
+                }),
+              ];
+            })
+            .filter(([, summary]) => Boolean(summary)),
+        );
   // Step 1: Materialize control-plane state
   const controlPlaneState = materializeControlPlaneState(controlPlaneEvents);
 
@@ -555,7 +596,7 @@ export function reduceWaveState({
   // Step 5: Evaluate proof availability per agent
   const proofAvailability = buildProofAvailability(
     tasks,
-    agentResults,
+    resolvedAgentResults,
     controlPlaneState,
   );
 
@@ -564,7 +605,7 @@ export function reduceWaveState({
 
   // Step 6: Build integration summary BEFORE creating derivedState for gates
   const integrationAgentId = laneConfig.integrationAgentId || "A8";
-  const integrationResult = agentResults?.[integrationAgentId]?.integration || null;
+  const integrationResult = resolvedAgentResults?.[integrationAgentId]?.integration || null;
   const integrationSummary = integrationResult
     ? {
         recommendation: integrationResult.state === "ready-for-doc-closure"
@@ -622,7 +663,7 @@ export function reduceWaveState({
   // Step 8: Evaluate gates using pure variants (integrationSummary already in derivedState)
   const gateSnapshot = buildGateSnapshotPure({
     wave: waveDefinition || { wave: 0, agents: [] },
-    agentResults,
+    agentResults: resolvedAgentResults,
     derivedState,
     validationMode: laneConfig.validationMode || "live",
     laneConfig,
@@ -647,6 +688,7 @@ export function reduceWaveState({
     gateSnapshot,
     coordinationState,
     dependencySnapshot: dependencyTickets,
+    clarificationBarrier,
   });
 
   // Step 13: Derive waveState from phase
@@ -708,6 +750,11 @@ export function reduceWaveState({
     facts,
     humanInputs,
     assignments,
+    agentEnvelopes: agentEnvelopes || null,
+    capabilityAssignments,
+    coordinationState,
+    dependencySnapshot: dependencyTickets,
+    integrationSummary,
 
     coordinationMetrics,
     controlPlaneState,

@@ -8,7 +8,7 @@ import {
   appendCoordinationRecord,
   readMaterializedCoordinationState,
 } from "../../scripts/wave-orchestrator/coordination-store.mjs";
-import { buildGateSnapshot } from "../../scripts/wave-orchestrator/launcher.mjs";
+import { buildGateSnapshot } from "../../scripts/wave-orchestrator/gate-engine.mjs";
 import { deriveWaveLedger } from "../../scripts/wave-orchestrator/ledger.mjs";
 import { replayTraceBundle } from "../../scripts/wave-orchestrator/replay.mjs";
 import { PACKAGE_ROOT } from "../../scripts/wave-orchestrator/shared.mjs";
@@ -797,6 +797,219 @@ describe("trace bundles", () => {
     expect(isolatedReplay.ok).toBe(true);
     expect(isolatedReplay.replayMode).toBe("hermetic");
     expect(isolatedReplay.quality).toEqual(replay.quality);
+  });
+
+  it("replays contradiction-driven integration failures from control-plane events", () => {
+    const dir = makeTempDir();
+    const componentMatrixJsonPath = path.join(dir, "component-matrix.json");
+    const componentMatrixDocPath = path.join(dir, "component-matrix.md");
+    writeJson(componentMatrixJsonPath, { components: [] });
+    writeText(componentMatrixDocPath, "# Component Matrix\n");
+    const lanePaths = makeLanePaths(dir, componentMatrixJsonPath, componentMatrixDocPath);
+    const wave = {
+      wave: 0,
+      agents: [
+        {
+          agentId: "A1",
+          title: "Implementation",
+          exitContract: {
+            completion: "contract",
+            durability: "none",
+            proof: "unit",
+            docImpact: "none",
+          },
+        },
+        { agentId: "A8", title: "Integration" },
+      ],
+      componentPromotions: [],
+    };
+    const sourceDir = path.join(dir, "source");
+    const sharedSummaryPath = path.join(sourceDir, "shared-summary.md");
+    const integrationMarkdownPath = path.join(sourceDir, "integration.md");
+    const controlPlanePath = path.join(sourceDir, "control-plane.raw.jsonl");
+    const coordinationLogPath = path.join(sourceDir, "coordination.raw.jsonl");
+    writeText(sharedSummaryPath, "# Shared summary\n");
+    writeText(integrationMarkdownPath, "# Integration summary\n");
+    writeText(coordinationLogPath, "");
+    writeText(
+      controlPlanePath,
+      `${JSON.stringify({
+        lane: "main",
+        wave: 0,
+        entityType: "contradiction",
+        entityId: "contradiction-1",
+        action: "detected",
+        source: "session-supervisor",
+        actor: "session-supervisor",
+        recordedAt: "2026-03-21T00:05:00.000Z",
+        data: {
+          contradictionId: "contradiction-1",
+          kind: "integration_conflict",
+          status: "detected",
+          severity: "blocking",
+          impactedGates: ["integrationBarrier"],
+        },
+      })}\n`,
+    );
+
+    const a1StatusPath = path.join(sourceDir, "status", "wave-0-a1.status");
+    const a8StatusPath = path.join(sourceDir, "status", "wave-0-a8.status");
+    const a1LogPath = path.join(sourceDir, "logs", "wave-0-a1.log");
+    const a8LogPath = path.join(sourceDir, "logs", "wave-0-a8.log");
+    const a1PromptPath = path.join(sourceDir, "prompts", "wave-0-a1.prompt.md");
+    const a8PromptPath = path.join(sourceDir, "prompts", "wave-0-a8.prompt.md");
+    const a1InboxPath = path.join(sourceDir, "inboxes", "A1.md");
+    const a8InboxPath = path.join(sourceDir, "inboxes", "A8.md");
+    writeText(a1PromptPath, "# Prompt A1\n");
+    writeText(a8PromptPath, "# Prompt A8\n");
+    writeText(a1LogPath, "");
+    writeText(
+      a8LogPath,
+      "[wave-integration] state=ready-for-doc-closure claims=0 conflicts=0 blockers=0 detail=ready\n",
+    );
+    writeText(a1InboxPath, "# Inbox A1\n");
+    writeText(a8InboxPath, "# Inbox A8\n");
+    makeStatus(a1StatusPath, 0);
+    makeStatus(a8StatusPath, 0);
+    makeSummary(a1StatusPath, {
+      agentId: "A1",
+      proof: {
+        completion: "contract",
+        durability: "none",
+        proof: "unit",
+        state: "met",
+      },
+      docDelta: {
+        state: "none",
+      },
+    });
+    makeSummary(a8StatusPath, {
+      agentId: "A8",
+      integration: {
+        state: "ready-for-doc-closure",
+        claims: 0,
+        conflicts: 0,
+        blockers: 0,
+        detail: "Ready.",
+      },
+    });
+
+    const coordinationState = readMaterializedCoordinationState(coordinationLogPath);
+    const ledger = { wave: 0, phase: "integrating", attempt: 1 };
+    const docsQueue = { items: [] };
+    const integrationSummary = {
+      wave: 0,
+      lane: "main",
+      agentId: "A8",
+      attempt: 1,
+      openClaims: [],
+      conflictingClaims: [],
+      unresolvedBlockers: [],
+      changedInterfaces: [],
+      crossComponentImpacts: [],
+      proofGaps: [],
+      docGaps: [],
+      deployRisks: [],
+      inboundDependencies: [],
+      outboundDependencies: [],
+      helperAssignments: [],
+      securityState: "not-applicable",
+      securityFindings: [],
+      securityApprovals: [],
+      runtimeAssignments: [],
+      recommendation: "ready-for-doc-closure",
+      detail: "Ready.",
+      createdAt: "2026-03-21T00:05:00.000Z",
+      updatedAt: "2026-03-21T00:05:00.000Z",
+    };
+    const agentRuns = [
+      {
+        agent: {
+          ...wave.agents[0],
+          executorResolved: { role: "implementation", id: "codex" },
+        },
+        promptPath: a1PromptPath,
+        logPath: a1LogPath,
+        statusPath: a1StatusPath,
+        inboxPath: a1InboxPath,
+        sharedSummaryPath,
+        lastLaunchAttempt: 1,
+      },
+      {
+        agent: {
+          ...wave.agents[1],
+          executorResolved: { role: "integration", id: "codex" },
+        },
+        promptPath: a8PromptPath,
+        logPath: a8LogPath,
+        statusPath: a8StatusPath,
+        inboxPath: a8InboxPath,
+        sharedSummaryPath,
+        lastLaunchAttempt: 1,
+      },
+    ];
+    const gateSnapshot = buildGateSnapshot({
+      wave,
+      agentRuns,
+      derivedState: {
+        coordinationState,
+        ledger,
+        docsQueue,
+        capabilityAssignments: [],
+        dependencySnapshot: null,
+        integrationSummary,
+        contradictions: new Map([
+          [
+            "contradiction-1",
+            {
+              contradictionId: "contradiction-1",
+              status: "detected",
+              severity: "blocking",
+              impactedGates: ["integrationBarrier"],
+            },
+          ],
+        ]),
+      },
+      lanePaths,
+      componentMatrixPayload: { components: [] },
+      componentMatrixJsonPath,
+    });
+
+    const traceDir = writeTraceBundle({
+      tracesDir: lanePaths.tracesDir,
+      lanePaths,
+      launcherOptions: {
+        timeoutMinutes: 60,
+        maxRetriesPerWave: 2,
+        dryRun: false,
+      },
+      wave,
+      attempt: 1,
+      manifest: {
+        generatedAt: "2026-03-21T00:05:00.000Z",
+        source: "docs/**/*",
+        docs: [],
+        waves: [wave],
+      },
+      coordinationLogPath,
+      coordinationState,
+      ledger,
+      docsQueue,
+      integrationSummary,
+      integrationMarkdownPath,
+      controlPlanePath,
+      agentRuns,
+      quality: {},
+      structuredSignals: {},
+      gateSnapshot,
+    });
+
+    const replay = replayTraceBundle(traceDir);
+    expect(replay.ok).toBe(true);
+    expect(replay.gateSnapshot.integrationBarrier).toMatchObject({
+      ok: false,
+      statusCode: "integration-contradiction-open",
+    });
   });
 
   it("fails validation when a promoted-component bundle omits the copied component matrix artifact", () => {

@@ -15,14 +15,15 @@ import {
   waveControlPlaneLogPath,
 } from "./control-plane.mjs";
 import { readWaveLedger } from "./ledger.mjs";
-import { readRunExecutionSummary } from "./launcher-gates.mjs";
-import { buildResumePlan, clearWaveRelaunchPlan } from "./launcher-retry.mjs";
+import { readRunResultEnvelope } from "./gate-engine.mjs";
+import { buildResumePlan, clearWaveRelaunchPlan } from "./retry-engine.mjs";
 import { readWaveProofRegistry } from "./proof-registry.mjs";
 import { buildDependencySnapshot, buildRequestAssignments, syncAssignmentRecords } from "./routing-state.mjs";
 import { buildLanePaths } from "./shared.mjs";
 import { reduceWaveState } from "./wave-state-reducer.mjs";
 import { parseWaveFiles } from "./wave-files.mjs";
 import { writeWaveRetryOverride } from "./retry-control.mjs";
+import { resolveWaveRoleBindings } from "./role-helpers.mjs";
 
 function coordinationLogPath(lanePaths, waveNumber) {
   return path.join(lanePaths.coordinationDir, `wave-${waveNumber}.jsonl`);
@@ -67,6 +68,9 @@ function taskRunInfoForAgent(lanePaths, wave, agent, proofRegistry) {
   const safeName = `wave-${wave.wave}-${agent.slug}`;
   return {
     agent,
+    lane: lanePaths.lane,
+    wave: wave.wave,
+    resultsDir: lanePaths.resultsDir,
     logPath: path.join(lanePaths.logsDir, `${safeName}.log`),
     statusPath: path.join(lanePaths.statusDir, `${safeName}.status`),
     proofRegistry,
@@ -207,10 +211,13 @@ export function buildResumePlanFromDisk({ lanePaths, wave }) {
   const agentRuns = wave.agents.map((agent) =>
     taskRunInfoForAgent(lanePaths, wave, agent, proofRegistry),
   );
-  const agentResults = Object.fromEntries(
+  const agentEnvelopes = Object.fromEntries(
     agentRuns
-      .map((runInfo) => [runInfo.agent.agentId, readRunExecutionSummary(runInfo, wave)])
-      .filter(([, summary]) => Boolean(summary)),
+      .map((runInfo) => {
+        const envelopeResult = readRunResultEnvelope(runInfo, wave, { mode: "compat" });
+        return [runInfo.agent.agentId, envelopeResult?.valid ? envelopeResult.envelope : null];
+      })
+      .filter(([, envelope]) => Boolean(envelope)),
   );
   const coordinationState = readMaterializedCoordinationState(coordinationLogPath(lanePaths, wave.wave));
   const feedbackRequests = readWaveHumanFeedbackRequests({
@@ -232,16 +239,13 @@ export function buildResumePlanFromDisk({ lanePaths, wave }) {
   const reducerState = reduceWaveState({
     controlPlaneEvents: readControlPlaneEvents(waveControlPlaneLogPath(lanePaths, wave.wave)),
     coordinationRecords: coordinationState.latestRecords || [],
-    agentResults,
+    agentEnvelopes,
     waveDefinition: wave,
     dependencyTickets: dependencySnapshot,
     feedbackRequests,
     laneConfig: {
       lane: lanePaths.lane,
-      contQaAgentId: lanePaths.contQaAgentId || "A0",
-      contEvalAgentId: lanePaths.contEvalAgentId || "E0",
-      integrationAgentId: lanePaths.integrationAgentId || "A8",
-      documentationAgentId: lanePaths.documentationAgentId || "A9",
+      ...resolveWaveRoleBindings(wave, lanePaths, wave.agents),
       validationMode: "live",
       evalTargets: wave.evalTargets,
       benchmarkCatalogPath: lanePaths.laneProfile?.paths?.benchmarkCatalogPath,

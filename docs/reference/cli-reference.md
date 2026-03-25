@@ -7,6 +7,19 @@ summary: "Complete syntax reference for all wave CLI commands, flags, and operat
 
 Complete syntax for every `wave` command. All commands use `pnpm exec wave` as the entry point.
 
+## Command Families
+
+- Runtime:
+  `wave launch`, `wave autonomous`, and `wave local` cover dry-run validation, live execution, and executor-specific prompt transport.
+- Operator control:
+  `wave control` is the preferred surface for live status, tasks, reruns, proof bundles, and telemetry.
+- Compatibility and inspection:
+  `wave coord`, `wave retry`, and `wave proof` remain available where older runbooks still depend on them.
+- Planning and transient work:
+  `wave project`, `wave draft`, and `wave adhoc` cover defaults, authored waves, and operator-driven one-off runs.
+- Setup and lifecycle:
+  `wave init`, `wave doctor`, `wave upgrade`, and `wave self-update` cover workspace adoption, validation, and package upgrades.
+
 ## wave launch
 
 Launch waves for execution.
@@ -15,6 +28,10 @@ Launch waves for execution.
 wave launch [options]
 ```
 
+Defaults below reflect the starter workspace surface in this repo. Lane config can override executor, timeout, retry, and terminal defaults.
+
+Closure-role bindings do not have a CLI override surface. When a wave file declares custom integration, documentation, `cont-QA`, `cont-EVAL`, or security-review role ids, launch, retry, reducer, and closure flows honor those wave-level bindings end to end.
+
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--lane <name>` | `main` | Lane name |
@@ -22,20 +39,23 @@ wave launch [options]
 | `--end-wave <n>` | last available | Last wave to launch |
 | `--auto-next` | off | Start from next unfinished wave and continue |
 | `--resume-control-state` | off | Preserve the prior auto-generated relaunch plan instead of treating the launch as a fresh wave start |
-| `--executor <id>` | lane config | Default executor: `codex`, `claude`, `opencode`, `local` |
+| `--executor <id>` | `codex` | Default executor: `codex`, `claude`, `opencode`, `local` |
 | `--codex-sandbox <mode>` | `danger-full-access` | Codex sandbox isolation level |
-| `--timeout-minutes <n>` | `60` | Max minutes to wait per wave |
-| `--max-retries-per-wave <n>` | `3` | Relaunch failed agents per wave |
-| `--agent-rate-limit-retries <n>` | `3` | Per-agent retries for 429 errors |
-| `--agent-rate-limit-base-delay-seconds <n>` | `1` | Base exponential backoff for 429 |
-| `--agent-rate-limit-max-delay-seconds <n>` | `60` | Max backoff delay for 429 |
-| `--agent-launch-stagger-ms <n>` | `250` | Delay between agent launches |
-| `--terminal-surface <mode>` | configured | `tmux`, `vscode`, or `none` |
+| `--timeout-minutes <n>` | `240` | Max minutes to wait per wave |
+| `--max-retries-per-wave <n>` | `1` | Relaunch failed agents per wave |
+| `--agent-rate-limit-retries <n>` | `2` | Per-agent retries for 429 errors |
+| `--agent-rate-limit-base-delay-seconds <n>` | `20` | Base exponential backoff for 429 |
+| `--agent-rate-limit-max-delay-seconds <n>` | `180` | Max backoff delay for 429 |
+| `--agent-launch-stagger-ms <n>` | `1200` | Delay between agent launches |
+| `--terminal-surface <mode>` | `vscode` | `tmux`, `vscode`, or `none` |
 | `--no-dashboard` | off | Disable per-wave tmux dashboard |
 | `--cleanup-sessions` | on | Kill lane tmux sessions after each wave |
 | `--keep-sessions` | off | Keep lane tmux sessions |
 | `--keep-terminals` | off | Keep temporary terminal entries |
 | `--orchestrator-id <id>` | generated | Stable orchestrator identity |
+| `--orchestrator-board <path>` | default board path | Write coordination-board updates to a specific shared board |
+| `--no-orchestrator-board` | off | Disable shared orchestrator-board writes for this run |
+| `--coordination-note <text>` | empty | Append a startup intent note to orchestrator-board updates |
 | `--resident-orchestrator` | off | Launch long-running non-owning orchestrator session |
 | `--no-telemetry` | off | Disable Wave Control event publication |
 | `--no-context7` | off | Disable Context7 prefetch |
@@ -57,13 +77,13 @@ wave autonomous [options]
 | `--lane <name>` | `main` | Lane name |
 | `--executor <id>` | lane config | `codex`, `claude`, or `opencode` (not `local`) |
 | `--codex-sandbox <mode>` | `danger-full-access` | Codex sandbox mode |
-| `--timeout-minutes <n>` | `60` | Per-wave timeout passed to launcher |
-| `--max-retries-per-wave <n>` | `3` | Per-wave relaunches inside launcher |
+| `--timeout-minutes <n>` | `240` | Per-wave timeout passed to launcher |
+| `--max-retries-per-wave <n>` | `1` | Per-wave relaunches inside launcher |
 | `--max-attempts-per-wave <n>` | `1` | External attempts per wave |
-| `--agent-rate-limit-retries <n>` | `3` | Per-agent 429 retries |
-| `--agent-rate-limit-base-delay-seconds <n>` | `1` | Base 429 backoff |
-| `--agent-rate-limit-max-delay-seconds <n>` | `60` | Max 429 backoff |
-| `--agent-launch-stagger-ms <n>` | `250` | Delay between agent launches |
+| `--agent-rate-limit-retries <n>` | `2` | Per-agent 429 retries |
+| `--agent-rate-limit-base-delay-seconds <n>` | `20` | Base 429 backoff |
+| `--agent-rate-limit-max-delay-seconds <n>` | `180` | Max 429 backoff |
+| `--agent-launch-stagger-ms <n>` | `1200` | Delay between agent launches |
 | `--orchestrator-id <id>` | `<lane>-autonomous` | Orchestrator identity |
 | `--resident-orchestrator` | off | Launch resident orchestrator for each wave |
 | `--dashboard` | off | Enable dashboards |

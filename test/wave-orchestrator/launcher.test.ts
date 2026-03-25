@@ -2,36 +2,45 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { DEFAULT_CODEX_SANDBOX_MODE } from "../../scripts/wave-orchestrator/config.mjs";
+import { buildCodexExecInvocation } from "../../scripts/wave-orchestrator/executors.mjs";
 import {
-  acquireLauncherLock,
-  buildWaveIntegrationSummary,
-  buildCodexExecInvocation,
-  collectUnexpectedSessionFailures,
-  DEFAULT_CODEX_SANDBOX_MODE,
-  formatReconcileBlockedWaveLine,
-  hasReusableSuccessStatus,
-  markLauncherFailed,
   readWaveComponentGate,
   readWaveComponentMatrixGate,
   readWaveContEvalGate,
   readWaveContQaGate,
-  readWaveInfraGate,
   readWaveSecurityGate,
-  reconcileStaleLauncherArtifacts,
-  releaseLauncherLock,
+} from "../../scripts/wave-orchestrator/gate-engine.mjs";
+import { buildWaveIntegrationSummary } from "../../scripts/wave-orchestrator/derived-state-engine.mjs";
+import {
+  hasReusableSuccessStatus,
   persistedRelaunchPlanMatchesCurrentState,
   resetPersistedWaveLaunchState,
   resolveRelaunchRuns,
   resolveSharedComponentContinuationRuns,
-  runClosureSweepPhase,
   selectReusablePreCompletedAgentIds,
   selectInitialWaveRuns,
-} from "../../scripts/wave-orchestrator/launcher.mjs";
+} from "../../scripts/wave-orchestrator/retry-engine.mjs";
+import {
+  acquireLauncherLock,
+  collectUnexpectedSessionFailures,
+  markLauncherFailed,
+  reconcileStaleLauncherArtifacts,
+  releaseLauncherLock,
+} from "../../scripts/wave-orchestrator/session-supervisor.mjs";
+import {
+  readWaveInfraGate,
+  runClosureSweepPhase,
+} from "../../scripts/wave-orchestrator/closure-engine.mjs";
+import {
+  formatReconcileBlockedWaveLine,
+} from "../../scripts/wave-orchestrator/reconcile-format.mjs";
+import { computeReducerSnapshot } from "../../scripts/wave-orchestrator/reducer-snapshot.mjs";
 import {
   buildAgentResultEnvelope,
-  writeAgentExecutionSummary,
-  writeAgentResultEnvelope,
-} from "../../scripts/wave-orchestrator/agent-state.mjs";
+  writeAgentResultEnvelopeForRun,
+} from "../../scripts/wave-orchestrator/result-envelope.mjs";
+import { writeAgentExecutionSummary } from "../../scripts/wave-orchestrator/agent-state.mjs";
 import { materializeCoordinationState } from "../../scripts/wave-orchestrator/coordination-store.mjs";
 import { hashAgentPromptFingerprint } from "../../scripts/wave-orchestrator/context7.mjs";
 
@@ -45,13 +54,25 @@ function makeTempDir() {
 
 function makeLanePaths(dir) {
   const dashboardsDir = path.join(dir, "dashboards");
+  const logsDir = path.join(dir, "logs");
+  const promptsDir = path.join(dir, "prompts");
   const statusDir = path.join(dir, "status");
   const controlDir = path.join(dir, "control");
   const controlPlaneDir = path.join(dir, "control-plane");
+  const coordinationDir = path.join(dir, "coordination");
+  const feedbackRequestsDir = path.join(dir, "feedback", "requests");
+  const stateDir = path.join(dir, "state");
+  const resultsDir = path.join(dir, "results");
   fs.mkdirSync(dashboardsDir, { recursive: true });
+  fs.mkdirSync(logsDir, { recursive: true });
+  fs.mkdirSync(promptsDir, { recursive: true });
   fs.mkdirSync(statusDir, { recursive: true });
   fs.mkdirSync(controlDir, { recursive: true });
   fs.mkdirSync(controlPlaneDir, { recursive: true });
+  fs.mkdirSync(coordinationDir, { recursive: true });
+  fs.mkdirSync(feedbackRequestsDir, { recursive: true });
+  fs.mkdirSync(stateDir, { recursive: true });
+  fs.mkdirSync(resultsDir, { recursive: true });
   return {
     lane: "leap-claw",
     launcherLockPath: path.join(dir, "launcher.lock"),
@@ -65,9 +86,15 @@ function makeLanePaths(dir) {
     tmuxDashboardSessionPrefix: "oc_leap_claw_wave_dashboard",
     tmuxGlobalDashboardSessionPrefix: "oc_leap_claw_wave_dashboard_global",
     tmuxSocketName: `test-${path.basename(dir)}`,
+    promptsDir,
+    logsDir,
     statusDir,
+    stateDir,
     controlDir,
     controlPlaneDir,
+    coordinationDir,
+    feedbackRequestsDir,
+    resultsDir,
     integrationAgentId: "A8",
     documentationAgentId: "A9",
     contQaAgentId: "A0",
@@ -80,6 +107,23 @@ function makeLanePaths(dir) {
       },
     },
     capabilityRouting: { preferredAgents: {} },
+  };
+}
+
+function makeRunInfo(agentId, statusPath, logPath, extra = {}) {
+  const { agent: agentOverrides = {}, ...rest } = extra;
+  return {
+    agent: {
+      agentId,
+      ...agentOverrides,
+    },
+    lane: rest.lane || "leap-claw",
+    wave: rest.wave ?? 0,
+    resultsDir: rest.resultsDir || path.join(path.dirname(statusPath), "results"),
+    statusPath,
+    logPath,
+    summaryPath: rest.summaryPath || null,
+    ...rest,
   };
 }
 
@@ -222,7 +266,7 @@ describe("readWaveContQaGate", () => {
       ),
     ).toMatchObject({
       ok: false,
-      statusCode: "missing-wave-gate",
+      statusCode: "missing-result-envelope",
     });
   });
 });
@@ -245,6 +289,7 @@ describe("readWaveContEvalGate", () => {
     expect(
       readWaveContEvalGate(
         {
+          wave: 4,
           contEvalReportPath: reportPath,
           evalTargets: [
             {
@@ -271,11 +316,11 @@ describe("readWaveContEvalGate", () => {
       ),
     ).toMatchObject({
       ok: false,
-      statusCode: "missing-cont-eval-target-ids",
+      statusCode: "missing-result-envelope",
     });
   });
 
-  it("materializes live cont-EVAL summaries from status and log artifacts", () => {
+  it("requires canonical live cont-EVAL envelopes instead of lazy materialization", () => {
     const dir = makeTempDir();
     const reportPath = path.join(dir, "wave-4-cont-eval.md");
     const logPath = path.join(dir, "wave-4-e0.log");
@@ -292,6 +337,7 @@ describe("readWaveContEvalGate", () => {
     expect(
       readWaveContEvalGate(
         {
+          wave: 4,
           contEvalReportPath: reportPath,
           evalTargets: [
             {
@@ -317,9 +363,8 @@ describe("readWaveContEvalGate", () => {
         },
       ),
     ).toMatchObject({
-      ok: true,
-      statusCode: "pass",
-      detail: "ready",
+      ok: false,
+      statusCode: "missing-result-envelope",
     });
   });
 
@@ -345,8 +390,14 @@ describe("readWaveContEvalGate", () => {
       },
       reportPath,
     });
-    writeAgentResultEnvelope(
-      statusPath,
+    writeAgentResultEnvelopeForRun(
+      makeRunInfo("E0", statusPath, logPath, {
+        wave: 4,
+      }),
+      {
+        wave: 4,
+        lane: "main",
+      },
       buildAgentResultEnvelope(
         { agentId: "E0", role: "cont-eval" },
         {
@@ -367,6 +418,7 @@ describe("readWaveContEvalGate", () => {
     expect(
       readWaveContEvalGate(
         {
+          wave: 4,
           contEvalReportPath: reportPath,
           evalTargets: [
             {
@@ -437,25 +489,43 @@ describe("readWaveSecurityGate", () => {
       "[wave-security] state=blocked findings=1 approvals=0 detail=unreviewed-authz-regression\n",
       "utf8",
     );
-    fs.writeFileSync(statusPath, JSON.stringify({ code: 0, promptHash: "hash" }, null, 2), "utf8");
+    fs.writeFileSync(
+      statusPath,
+      JSON.stringify({ code: 0, promptHash: "hash", attempt: 1 }, null, 2),
+      "utf8",
+    );
+    const runInfo = makeRunInfo("A7", statusPath, logPath, {
+      wave: 0,
+      agent: {
+        title: "Security Engineer",
+        rolePromptPaths: ["docs/agents/wave-security-role.md"],
+        ownedPaths: [path.relative(process.cwd(), reportPath)],
+      },
+    });
+    writeAgentResultEnvelopeForRun(
+      runInfo,
+      { wave: 0, lane: "main" },
+      buildAgentResultEnvelope(
+        { agentId: "A7", role: "security" },
+        {
+          agentId: "A7",
+          security: {
+            state: "blocked",
+            findings: 1,
+            approvals: 0,
+            detail: "unreviewed-authz-regression",
+          },
+        },
+      ),
+      { statusRecord: { attempt: 1 } },
+    );
 
     expect(
       readWaveSecurityGate(
         {
           wave: 0,
         },
-        [
-          {
-            agent: {
-              agentId: "A7",
-              title: "Security Engineer",
-              rolePromptPaths: ["docs/agents/wave-security-role.md"],
-              ownedPaths: [path.relative(process.cwd(), reportPath)],
-            },
-            logPath,
-            statusPath,
-          },
-        ],
+        [runInfo],
       ),
     ).toMatchObject({
       ok: false,
@@ -691,6 +761,44 @@ describe("buildWaveIntegrationSummary", () => {
     expect(
       integrationSummary.proofGaps.some((entry) => entry.includes("Need integration proof.")),
     ).toBe(true);
+  });
+
+  it("honors a wave-specific integration steward when building integration summaries", () => {
+    const dir = makeTempDir();
+    const wave = {
+      wave: 8,
+      integrationAgentId: "I8",
+      agents: [
+        { agentId: "A1", title: "Implementation" },
+        { agentId: "I8", title: "Integration" },
+        { agentId: "A0", title: "cont-QA" },
+      ],
+    };
+
+    const integrationSummary = buildWaveIntegrationSummary({
+      lanePaths: makeLanePaths(dir),
+      wave,
+      attempt: 1,
+      coordinationState: materializeCoordinationState([]),
+      summariesByAgentId: {
+        I8: {
+          integration: {
+            state: "ready-for-doc-closure",
+            claims: 0,
+            conflicts: 0,
+            blockers: 0,
+            detail: "Wave-specific steward is authoritative.",
+          },
+        },
+      },
+      docsQueue: { items: [] },
+      runtimeAssignments: [],
+      agentRuns: [],
+    });
+
+    expect(integrationSummary.agentId).toBe("I8");
+    expect(integrationSummary.recommendation).toBe("ready-for-doc-closure");
+    expect(integrationSummary.detail).toBe("Wave-specific steward is authoritative.");
   });
 
   it("surfaces advisory security concerns without turning them into an automatic integration blocker", () => {
@@ -939,6 +1047,273 @@ describe("resolveRelaunchRuns", () => {
     expect(selected.runs.map((run) => run.agent.agentId)).toEqual(["A9"]);
   });
 
+  it("uses reducer capability assignments as the authoritative relaunch source when provided", () => {
+    const agentRuns = [
+      { agent: { agentId: "A1", capabilities: ["runtime"] } },
+      { agent: { agentId: "A2", capabilities: ["docs"] } },
+    ];
+
+    const selected = resolveRelaunchRuns(
+      agentRuns,
+      [{ agentId: "A1", statusCode: "failed" }],
+      {
+        coordinationState: {
+          humanFeedback: [],
+          humanEscalations: [],
+          requests: [],
+          blockers: [],
+        },
+        capabilityAssignments: [],
+        dependencySnapshot: {
+          openInbound: [],
+          unresolvedInboundAssignments: [],
+        },
+        ledger: { phase: "running", attempt: 1, tasks: [] },
+      },
+      {
+        documentationAgentId: "A9",
+        contQaAgentId: "A0",
+        integrationAgentId: "A8",
+        capabilityRouting: { preferredAgents: {} },
+      },
+      { wave: 0, agents: [{ agentId: "A1" }, { agentId: "A2" }] },
+      {
+        waveState: {
+          wave: 0,
+          lane: "leap-claw",
+          coordinationState: {
+            humanFeedback: [],
+            humanEscalations: [],
+            blockers: [],
+            clarifications: [],
+            requests: [],
+          },
+          capabilityAssignments: [
+            {
+              requestId: "request-docs",
+              assignedAgentId: "A2",
+              blocking: true,
+            },
+          ],
+          dependencySnapshot: {
+            openInbound: [],
+            unresolvedInboundAssignments: [],
+          },
+          retryTargetSet: {
+            agentIds: ["A1"],
+            targets: [{ agentId: "A1", reason: "owned-slice-not-proven" }],
+          },
+          openBlockers: [],
+          closureEligibility: {
+            waveMayClose: false,
+            pendingAgentIds: ["A1"],
+            ownedSliceProvenAgentIds: [],
+          },
+          gateSnapshot: {
+            overall: {
+              ok: false,
+              gate: "helperAssignmentBarrier",
+              statusCode: "helper-assignment-open",
+              detail: "Helper assignments remain open.",
+              agentId: null,
+            },
+            helperAssignmentBarrier: {
+              ok: false,
+              statusCode: "helper-assignment-open",
+              detail: "Helper assignments remain open.",
+            },
+          },
+        },
+      },
+    );
+
+    expect(selected.barrier).toBe(null);
+    expect(selected.runs.map((run) => run.agent.agentId)).toEqual(["A2"]);
+  });
+
+  it("uses wave-specific integration stewards for reducer snapshots and integrating resume targets", () => {
+    const dir = makeTempDir();
+    const lanePaths = makeLanePaths(dir);
+    const componentMatrixJsonPath = path.join(dir, "component-cutover-matrix.json");
+    const componentMatrixDocPath = path.join(dir, "component-cutover-matrix.md");
+    fs.writeFileSync(
+      componentMatrixJsonPath,
+      JSON.stringify({ levels: ["repo-landed"], components: {} }, null, 2),
+      "utf8",
+    );
+    fs.writeFileSync(componentMatrixDocPath, "# Component Matrix\n", "utf8");
+    lanePaths.componentCutoverMatrixJsonPath = componentMatrixJsonPath;
+    lanePaths.componentCutoverMatrixDocPath = componentMatrixDocPath;
+    lanePaths.laneProfile.validation.requireComponentPromotionsFromWave = 99;
+    lanePaths.laneProfile.paths = {
+      componentCutoverMatrixJsonPath: componentMatrixJsonPath,
+      componentCutoverMatrixDocPath: componentMatrixDocPath,
+    };
+    const wave = {
+      wave: 11,
+      integrationAgentId: "I8",
+      agents: [
+        {
+          agentId: "A1",
+          title: "Implementation",
+          exitContract: {
+            completion: "contract",
+            durability: "none",
+            proof: "unit",
+            docImpact: "none",
+          },
+        },
+        { agentId: "I8", title: "Integration" },
+        { agentId: "A9", title: "Docs" },
+        { agentId: "A0", title: "cont-QA" },
+      ],
+      componentPromotions: [],
+    };
+    const i8StatusPath = path.join(lanePaths.statusDir, "wave-11-i8.status");
+    const i8LogPath = path.join(lanePaths.logsDir, "wave-11-i8.log");
+    fs.mkdirSync(path.dirname(i8StatusPath), { recursive: true });
+    fs.mkdirSync(path.dirname(i8LogPath), { recursive: true });
+    fs.writeFileSync(
+      i8StatusPath,
+      JSON.stringify({ code: 0, promptHash: "hash-i8", attempt: 1 }, null, 2),
+      "utf8",
+    );
+    fs.writeFileSync(i8LogPath, "", "utf8");
+
+    const integrationRun = makeRunInfo("I8", i8StatusPath, i8LogPath, {
+      lane: lanePaths.lane,
+      wave: 11,
+      resultsDir: lanePaths.resultsDir,
+      agent: wave.agents[1],
+    });
+    writeAgentResultEnvelopeForRun(
+      integrationRun,
+      wave,
+      buildAgentResultEnvelope(
+        { agentId: "I8", role: "integration" },
+        {
+          agentId: "I8",
+          integration: {
+            state: "needs-review",
+            claims: 0,
+            conflicts: 0,
+            blockers: 0,
+            detail: "Integration steward ran.",
+          },
+        },
+      ),
+      { statusRecord: { attempt: 1 } },
+    );
+
+    const agentRuns = [
+      makeRunInfo(
+        "A1",
+        path.join(lanePaths.statusDir, "wave-11-a1.status"),
+        path.join(lanePaths.logsDir, "wave-11-a1.log"),
+        {
+          lane: lanePaths.lane,
+          wave: 11,
+          resultsDir: lanePaths.resultsDir,
+          agent: wave.agents[0],
+        },
+      ),
+      integrationRun,
+      makeRunInfo(
+        "A9",
+        path.join(lanePaths.statusDir, "wave-11-a9.status"),
+        path.join(lanePaths.logsDir, "wave-11-a9.log"),
+        {
+          lane: lanePaths.lane,
+          wave: 11,
+          resultsDir: lanePaths.resultsDir,
+          agent: wave.agents[2],
+        },
+      ),
+      makeRunInfo(
+        "A0",
+        path.join(lanePaths.statusDir, "wave-11-a0.status"),
+        path.join(lanePaths.logsDir, "wave-11-a0.log"),
+        {
+          lane: lanePaths.lane,
+          wave: 11,
+          resultsDir: lanePaths.resultsDir,
+          agent: wave.agents[3],
+        },
+      ),
+    ];
+
+    fs.writeFileSync(
+      agentRuns[0].statusPath,
+      JSON.stringify({ code: 0, promptHash: "hash-a1", attempt: 1 }, null, 2),
+      "utf8",
+    );
+    fs.writeFileSync(agentRuns[0].logPath, "", "utf8");
+
+    writeAgentResultEnvelopeForRun(
+      agentRuns[0],
+      wave,
+      buildAgentResultEnvelope(
+        {
+          agentId: "A1",
+          exitContract: {
+            completion: "contract",
+            durability: "none",
+            proof: "unit",
+            docImpact: "none",
+          },
+        },
+        {
+          agentId: "A1",
+          proof: {
+            completion: "contract",
+            durability: "none",
+            proof: "unit",
+            state: "met",
+          },
+          docDelta: {
+            state: "none",
+            paths: [],
+          },
+        },
+      ),
+      { statusRecord: { attempt: 1 } },
+    );
+
+    const derivedState = {
+      ledger: { attempt: 1, phase: "integrating" },
+      coordinationState: materializeCoordinationState([]),
+      capabilityAssignments: [],
+      dependencySnapshot: null,
+      integrationSummary: {
+        recommendation: "needs-review",
+        detail: "Integration steward still needs to reconcile output.",
+      },
+    };
+
+    const snapshot = computeReducerSnapshot({
+      lanePaths,
+      wave,
+      agentRuns,
+      derivedState,
+      attempt: 1,
+      options: { orchestratorId: "orch" },
+    });
+
+    expect(snapshot.reducerState.gateSnapshot.integrationGate.agentId).toBe("I8");
+    expect(snapshot.resumePlan.resumeFromPhase).toBe("integrating");
+
+    const relaunch = resolveRelaunchRuns(
+      agentRuns,
+      [{ agentId: "I8", statusCode: "integration-needs-more-work", logPath: "logs/wave-11-i8.log" }],
+      derivedState,
+      lanePaths,
+      wave,
+      { waveState: snapshot.reducerState },
+    );
+
+    expect(relaunch.runs.map((run) => run.agent.agentId)).toEqual(["I8"]);
+  });
+
   it("retries only waiting sibling owners for shared promoted components", () => {
     const agentRuns = [
       { agent: { agentId: "A1", capabilities: ["runtime"] } },
@@ -1079,6 +1454,51 @@ describe("resolveRelaunchRuns", () => {
         2,
       ),
       "utf8",
+    );
+    writeAgentResultEnvelopeForRun(
+      makeRunInfo("A1", a1StatusPath, a1LogPath, {
+        wave: 10,
+        summaryPath: a1SummaryPath,
+      }),
+      {
+        wave: 10,
+        lane: "main",
+      },
+      buildAgentResultEnvelope(
+        {
+          agentId: "A1",
+          components: ["pilot-live"],
+          componentTargets: {
+            "pilot-live": "pilot-live",
+          },
+          exitContract: {
+            completion: "contract",
+            durability: "none",
+            proof: "unit",
+            docImpact: "owned",
+          },
+        },
+        {
+        agentId: "A1",
+        proof: {
+          completion: "contract",
+          durability: "none",
+          proof: "unit",
+          state: "met",
+        },
+        docDelta: {
+          state: "owned",
+          paths: ["src/a1.ts"],
+        },
+        components: [
+          {
+            componentId: "pilot-live",
+            level: "pilot-live",
+            state: "met",
+          },
+        ],
+        },
+      ),
     );
 
     fs.writeFileSync(a2StatusPath, JSON.stringify({ code: 0, promptHash: "stale-a2" }, null, 2), "utf8");
@@ -1529,6 +1949,57 @@ describe("resolveRelaunchRuns", () => {
       allowFallbackOnRetry: false,
       fallbackUsed: false,
     });
+  });
+});
+
+describe("computeReducerSnapshot", () => {
+  it("persists machine-readable shadow diffs for reducer-vs-compatibility slices", () => {
+    const dir = makeTempDir();
+    const lanePaths = makeLanePaths(dir);
+    lanePaths.laneProfile.validation.requireComponentPromotionsFromWave = null;
+    const result = computeReducerSnapshot({
+      lanePaths,
+      wave: {
+        wave: 4,
+        agents: [{ agentId: "A1" }, { agentId: "A0" }],
+      },
+      agentRuns: [],
+      derivedState: {
+        coordinationState: {
+          blockers: [{ id: "blocker-1", status: "open" }],
+          clarifications: [],
+          humanFeedback: [],
+          humanEscalations: [],
+          requests: [],
+        },
+        capabilityAssignments: [],
+        dependencySnapshot: {
+          openInbound: [],
+          requiredInbound: [],
+          requiredOutbound: [],
+          unresolvedInboundAssignments: [],
+        },
+        contradictions: new Map([["c-1", { contradictionId: "c-1" }]]),
+      },
+      attempt: 2,
+      compatibilityGateSnapshot: {
+        helperAssignmentBarrier: { ok: true, statusCode: "pass", detail: "" },
+        dependencyBarrier: { ok: true, statusCode: "pass", detail: "" },
+        overall: { ok: true, gate: "pass", statusCode: "pass", detail: "" },
+      },
+      compatibilityRelaunchResolution: {
+        runs: [{ agent: { agentId: "A1" } }],
+        barrier: null,
+      },
+    });
+
+    expect(result.shadowDiff).toBeTruthy();
+    expect(result.shadowDiff.slices.helperAssignmentBarrier).toBeTruthy();
+    expect(result.shadowDiff.slices.retryPlan).toBeTruthy();
+    expect(fs.existsSync(result.snapshotPath)).toBe(true);
+    const snapshot = JSON.parse(fs.readFileSync(result.snapshotPath, "utf8"));
+    expect(snapshot.shadowDiff.slices.helperAssignmentBarrier).toBeTruthy();
+    expect(snapshot.shadowDiff.slices.retryPlan.reducer.resumeFromPhase).toBeTruthy();
   });
 });
 
@@ -2370,6 +2841,26 @@ describe("markLauncherFailed", () => {
       event: "launcher_finish",
       status: "failed",
     });
+  });
+});
+
+describe("lifecycle control-plane authorship", () => {
+  it("keeps wave/attempt/agent lifecycle event definitions in the session supervisor", () => {
+    const launcherSource = fs.readFileSync(
+      path.join(process.cwd(), "scripts", "wave-orchestrator", "launcher.mjs"),
+      "utf8",
+    );
+    const supervisorSource = fs.readFileSync(
+      path.join(process.cwd(), "scripts", "wave-orchestrator", "session-supervisor.mjs"),
+      "utf8",
+    );
+
+    expect(launcherSource).not.toContain('entityType: "agent_run"');
+    expect(launcherSource).not.toContain('entityType: "wave_run"');
+    expect(launcherSource).not.toContain('entityType: "attempt"');
+    expect(supervisorSource).toContain('entityType: "agent_run"');
+    expect(supervisorSource).toContain('entityType: "wave_run"');
+    expect(supervisorSource).toContain('entityType: "attempt"');
   });
 });
 

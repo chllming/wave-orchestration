@@ -28,8 +28,29 @@ The framework does three things:
 1. Define shared docs plus `docs/plans/waves/wave-<n>.md` files, or generate them with `wave draft`.
 2. Run `wave launch --dry-run` to validate the wave and materialize prompts, shared summaries, inboxes, dashboards, and executor previews before any live execution.
 3. During live execution, implementation agents write claims, evidence, requests, and decisions into the canonical coordination log instead of relying on ad hoc terminal narration.
-4. The reducer and derived-state engines materialize blackboard projections from the canonical authority set: rolling board, shared summary, per-agent inboxes, ledger, docs queue, dependency views, and integration summaries.
-5. Closure runs only when the integrated state is ready: optional `cont-EVAL` (`E0`), optional security review, integration (`A8`), documentation (`A9`), and `cont-QA` (`A0`).
+4. The reducer and derived-state engines materialize blackboard projections from the canonical authority set: rolling board, shared summary, per-agent inboxes, ledger, docs queue, dependency views, and integration summaries. Helper-assignment blocking, retry target selection, and resume planning read from reducer state during live runs.
+5. Live closure is result-envelope-first. Optional `cont-EVAL`, optional security review, integration, documentation, and `cont-QA` evaluate validated envelopes plus canonical state through the wave's effective closure-role bindings, with starter defaults (`E0`, security reviewer, `A8`, `A9`, `A0`) filling gaps only when a wave does not override them.
+
+## Runtime Modules
+
+- `launcher.mjs`
+  Thin orchestrator: parses args, acquires the launcher lock, and sequences the engines.
+- `implementation-engine.mjs`
+  Selects the implementation fan-out for a wave or retry attempt.
+- `derived-state-engine.mjs`
+  Materializes shared summary, inboxes, assignments, dependency views, ledger, docs queue, and integration/security summaries.
+- `gate-engine.mjs`
+  Evaluates implementation, component, assignment, dependency, clarification, `cont-EVAL`, security, integration, documentation, and `cont-QA` gates.
+- `retry-engine.mjs`
+  Plans reducer-driven resume and retry targets, reusable work, executor fallback changes, and blocking conditions.
+- `closure-engine.mjs`
+  Sequences the staged closure sweep from implementation proof through final `cont-QA`.
+- `wave-state-reducer.mjs`
+  Rebuilds deterministic wave state from canonical inputs for live queries and replay.
+- `session-supervisor.mjs`
+  Owns launches, waits, tmux sessions, lock handling, resident orchestrator sessions, and observed `wave_run`, `attempt`, and `agent_run` lifecycle facts.
+- `projection-writer.mjs`
+  Writes traces and other non-canonical operator projections.
 
 ## Architecture Surfaces
 
@@ -145,6 +166,19 @@ pnpm exec wave autonomous --lane main --executor codex --codex-sandbox danger-fu
 pnpm exec wave self-update
 ```
 
+## CLI Surfaces
+
+- `wave launch` and `wave autonomous`
+  Live execution, dry-run validation, retry cadence, terminal surfaces, and orchestrator options.
+- `wave control`
+  Read-only live status plus operator task, rerun, proof, and telemetry control surfaces.
+- `wave coord` and `wave dep`
+  Coordination-log and cross-lane dependency utilities. `wave control` is the preferred operator surface; `wave coord` remains useful for direct log inspection and rendering.
+- `wave project`, `wave draft`, and `wave adhoc`
+  Planner defaults, authored wave generation, and transient operator-driven runs on the same runtime.
+- `wave init`, `wave doctor`, `wave upgrade`, and `wave self-update`
+  Workspace setup, validation, adoption, and package lifecycle.
+
 ## Develop This Package
 
 ```bash
@@ -182,8 +216,9 @@ codex mcp list
 - [docs/reference/sample-waves.md](./docs/reference/sample-waves.md): showcase-first authored waves, including a high-fidelity repo-landed rollout example
 - [docs/plans/examples/wave-example-rollout-fidelity.md](./docs/plans/examples/wave-example-rollout-fidelity.md): concrete example of what good wave fidelity looks like for a narrow, closure-ready outcome
 - [docs/reference/cli-reference.md](./docs/reference/cli-reference.md): complete CLI syntax for all commands and flags
+- [docs/plans/end-state-architecture.md](./docs/plans/end-state-architecture.md): canonical runtime architecture, engine boundaries, and artifact ownership
 - [docs/plans/wave-orchestrator.md](./docs/plans/wave-orchestrator.md): operator runbook
-- [docs/plans/architecture-hardening-migration.md](./docs/plans/architecture-hardening-migration.md): staged cutover from the transitional launcher-centric runtime to the authority-set / reducer / phase-engine architecture
+- [docs/plans/architecture-hardening-migration.md](./docs/plans/architecture-hardening-migration.md): historical record of the completed architecture hardening stages
 - [docs/plans/context7-wave-orchestrator.md](./docs/plans/context7-wave-orchestrator.md): Context7 setup and bundle authoring
 - [docs/reference/runtime-config/README.md](./docs/reference/runtime-config/README.md): executor, runtime, and skill-projection configuration
 - [docs/reference/wave-control.md](./docs/reference/wave-control.md): local-first telemetry contract and Railway control-plane model

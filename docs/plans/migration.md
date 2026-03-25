@@ -1,6 +1,6 @@
 # Migration
 
-For the staged internal cutover from the legacy launcher-centric runtime to the authority-set / reducer / phase-engine architecture, see [architecture-hardening-migration.md](./architecture-hardening-migration.md). This page stays focused on package adoption and upgrade steps for repo operators.
+For the historical record of the completed internal architecture hardening, see [architecture-hardening-migration.md](./architecture-hardening-migration.md). This page stays focused on package adoption and upgrade steps for repo operators.
 
 ## Default Adoption Path
 
@@ -22,7 +22,7 @@ GitHub Packages remains available as an authenticated fallback path, and maintai
 - `wave upgrade` writes `.wave/install-state.json` and `.wave/upgrade-history/*` only.
 - Existing `wave.config.json`, role prompts, plan docs, `skills/` bundles, Context7 bundles, and wave files are never overwritten by the upgrade flow.
 - Fresh `wave init` seeds the starter `skills/` library. `wave init --adopt-existing` records existing repo-owned skill bundles when they are already present, but does not replace or rewrite them.
-- The current runtime expects the post-roadmap model: typed coordination, compiled inboxes, `A8` integration, staged closure, orchestrator-first clarification, and operational runtime policy.
+- The current runtime expects the post-roadmap model: typed coordination, compiled inboxes, staged closure with wave-specific role bindings over starter defaults, orchestrator-first clarification, and operational runtime policy.
 
 ## Upgrading From 0.6.x To 0.8.3
 

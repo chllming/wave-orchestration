@@ -12,10 +12,33 @@ This runbook is the operational view of the architecture:
 - executor adapters preserve Claude, Codex, and OpenCode-specific runtime features at the edge
 - closure makes completion depend on integrated proof and shared state, not on free-form agent narration
 
+## Runtime Module Map
+
+The live runtime is organized around explicit modules:
+
+- `launcher.mjs`
+  Thin orchestrator for CLI parsing, launcher lock handling, wave iteration, and engine sequencing.
+- `implementation-engine.mjs`
+  Chooses initial or retry implementation fan-out.
+- `derived-state-engine.mjs`
+  Rebuilds shared summary, inboxes, assignments, dependency views, ledger, docs queue, and integration or security summaries.
+- `gate-engine.mjs`
+  Evaluates live gates from validated result envelopes plus canonical state.
+- `retry-engine.mjs`
+  Produces reducer-driven retry and resume plans.
+- `closure-engine.mjs`
+  Runs staged closure sequencing across `cont-EVAL`, security, integration, documentation, and `cont-QA` using the wave's effective role bindings.
+- `wave-state-reducer.mjs`
+  Reconstructs deterministic wave state for live queries and replay.
+- `session-supervisor.mjs`
+  Launches and monitors sessions and writes observed `wave_run`, `attempt`, and `agent_run` lifecycle facts.
+- `projection-writer.mjs`
+  Writes traces and other non-canonical projections.
+
 ## What It Does
 
 - parses wave plans from `docs/plans/waves/`
-- supports transient ad-hoc runs from `.wave/adhoc/runs/` on the same launcher substrate
+- supports transient ad-hoc runs from `.wave/adhoc/runs/` on the same runtime substrate
 - fans a wave out into one session per `## Agent ...` section
 - supports standing role imports from `docs/agents/*.md`
 - seeds a coordination log, generated board, compiled shared summary, and per-agent inboxes
@@ -24,11 +47,12 @@ This runbook is the operational view of the architecture:
 - validates Context7 declarations and exit contracts from configurable wave thresholds
 - validates component promotions and component-owned proof from configurable wave thresholds
 - writes prompts, logs, dashboards, coordination state, and status summaries under `.tmp/`
-- supports launcher-side Context7 prefetch and injection for headless runs
+- supports runtime-side Context7 prefetch and injection for headless runs
 - supports headless execution through `codex`, `claude`, `opencode`, and the local smoke executor
 - can retry rate-limited `codex`, `claude`, and `opencode` launches with per-agent exponential backoff via `--agent-rate-limit-*`
 - supports a file-backed human feedback queue
-- performs a closure sweep so optional `cont-EVAL`, optional security review, integration, documentation, and cont-QA gates reflect final landed state
+- performs a closure sweep so optional `cont-EVAL`, optional security review, integration, documentation, and cont-QA gates reflect final landed state through the wave's effective closure-role bindings
+- rebuilds contradiction blockers from canonical control-plane events during replay and materializes human-blocked waves as `clarifying` plus blocked `waveState`
 
 ## Main Commands
 
@@ -147,14 +171,14 @@ Compatibility note:
 
 The canonical conversational state is the JSONL log under `.tmp/<lane>-wave-launcher/coordination/`. The markdown board is a generated projection for humans, not a decision input.
 
-Control-plane facts that drive reruns, proof, attempt state, contradictions, facts, and operator tasks are appended separately under `.tmp/<lane>-wave-launcher/control-plane/`. Result envelopes live under `.tmp/<lane>-wave-launcher/results/`. Legacy proof and retry files remain derived projections for compatibility, not decision inputs.
+Control-plane facts that drive reruns, proof, attempt state, contradictions, facts, human-input workflow, and operator tasks are appended separately under `.tmp/<lane>-wave-launcher/control-plane/`. Result envelopes live under `.tmp/<lane>-wave-launcher/results/wave-<n>/attempt-<a>/<agent>.json`. Legacy proof and retry files remain derived projections for compatibility, not decision inputs.
 
 Capability-targeted requests now become deterministic helper assignments. The runtime resolves the assignee from explicit targets, `capabilityRouting.preferredAgents`, then least-busy matching capability owners, writes that assignment into `.tmp/<lane>-wave-launcher/assignments/`, mirrors the decision into coordination state, and keeps the wave blocked until the linked follow-up resolves.
 
 Clarification flow is orchestrator-first:
 
 1. Agent emits `clarification-request` through `wave coord post`.
-2. The launcher triages it from repo policy, ownership, prior decisions, or targeted rerouting.
+2. The orchestrator triages it from repo policy, ownership, prior decisions, or targeted rerouting.
 3. Only unresolved items become human feedback tickets.
 4. Routed clarification follow-up requests remain blocking until they resolve.
 5. Human escalations are written back into coordination state, the ledger, and trace artifacts.
@@ -168,7 +192,8 @@ Retry intent, operator tasks, attempt lifecycle, and proof injection are now fir
 - canonical control events live under `.tmp/<lane>-wave-launcher/control-plane/`
 - projected retry overrides still live under `.tmp/<lane>-wave-launcher/control/`
 - projected proof registries still live under `.tmp/<lane>-wave-launcher/proof/`
-- live traces now copy the control-plane log alongside the proof registry so replay keeps the same operator-visible facts
+- live traces now copy the control-plane log alongside the proof registry so replay keeps the same operator-visible facts and contradiction blockers
+- `session-supervisor.mjs` writes observed `wave_run.started|completed|failed`, `attempt.running|completed|failed`, and `agent_run.started|completed|failed|timed_out` events into that control-plane log
 
 For a full end-to-end explainer of helper assignments, deliverables, integration, and why an agent can be locally done while the wave stays blocked, see [docs/reference/coordination-and-closure.md](../reference/coordination-and-closure.md).
 
@@ -208,7 +233,7 @@ pnpm exec wave changelog --since-installed
 
 3. Review `.wave/upgrade-history/` for any manual follow-up. The upgrade flow does not overwrite repo-owned plans, waves, or config.
 
-## What The Launcher Writes
+## What The Runtime Writes
 
 - prompts: `.tmp/<lane>-wave-launcher/prompts/`
 - logs: `.tmp/<lane>-wave-launcher/logs/`
@@ -235,7 +260,7 @@ pnpm exec wave changelog --since-installed
 - proof registries: `.tmp/<lane>-wave-launcher/proof/`
   Projected from control-plane state for compatibility. Operator-registered authoritative proof bundles that feed integration, cont-QA, and replay.
 - retry overrides: `.tmp/<lane>-wave-launcher/control/`
-  Projected from control-plane state for compatibility. Operator-applied targeted retry overrides, applied once per attempt and then cleared by the launcher.
+  Projected from control-plane state for compatibility. Operator-applied targeted retry overrides, applied once per attempt and then cleared after execution.
 - clarification triage: `.tmp/<lane>-wave-launcher/feedback/triage/`
 - dashboards: `.tmp/<lane>-wave-launcher/dashboards/`
   Dashboard JSON is a versioned contract. `global.json` and `wave-<n>.json` now carry explicit `schemaVersion` and `kind` fields.
@@ -248,7 +273,7 @@ pnpm exec wave changelog --since-installed
 
 Ad-hoc runs mirror the same state shape under `.tmp/<lane>-wave-launcher/adhoc/<run-id>/`, including dry-run previews at `.tmp/<lane>-wave-launcher/adhoc/<run-id>/dry-run/`. Their docs queue can still point at canonical shared-plan docs when the run reports a shared-plan delta.
 
-The launcher entrypoint in `scripts/wave-orchestrator/launcher.mjs` is being hardened toward a thin orchestrator over reducer, derived-state, retry, gate, closure, and supervision modules. The CLI and `traceVersion: 2` replay contract stay unchanged.
+The launcher entrypoint in `scripts/wave-orchestrator/launcher.mjs` now acts as a thin orchestrator over reducer, derived-state, retry, gate, closure, and supervision modules. The CLI and `traceVersion: 2` replay contract stay unchanged.
 
 ## Trace Contract
 
@@ -277,7 +302,7 @@ The launcher entrypoint in `scripts/wave-orchestrator/launcher.mjs` is being har
 - `security.json` stores the derived per-wave security state that feeds integration summaries, gate snapshots, and replay.
 - `quality.json` is cumulative through the current attempt. It is intended for regression comparison, not only for one-shot pass/fail reporting.
 - `quality.json` also reports capability-assignment and dependency-resolution metrics, plus coordination response metrics (overdue acknowledgements, clarification timing, human escalation counts), in addition to the Phase 2/3 communication, fallback, and closure metrics.
-- Replay support is internal. The source tree contains helpers to load, validate, and replay trace bundles against the same gate logic the launcher uses, but there is no public replay CLI yet.
+- Replay support is internal. The source tree contains helpers to load, validate, and replay trace bundles against the same gate logic the runtime uses, but there is no public replay CLI yet.
 - Replay is read-only and hash-validating for `traceVersion: 2` bundles. It ignores inline summary duplicates in `run-metadata.json` and returns a stored-vs-recomputed comparison report for gate and quality state. Legacy `traceVersion: 1` bundles remain best-effort and emit warnings instead of claiming full hermetic replay.
 
 ## Authoring Rules
@@ -375,7 +400,7 @@ pnpm exec wave feedback respond --id <request-id> --response "..."
 
 ## Closure Sweep
 
-If implementation agents ran, the launcher does not stop at `exit 0`. It checks implementation exit contracts, promoted component proof, helper assignments, required dependencies, and the integration recommendation first. When present, `cont-EVAL` must satisfy its declared eval targets before integration can close. Optional security review then runs before integration so the reviewer can publish findings and approval-sensitive actions while the wave is still active. In the default planner shape `E0` is report-only; if a wave explicitly assigns `E0` non-report files, the launcher also applies the normal implementation proof gates to that role. Security reviewers stay report-only by default. Documentation and cont-QA closure only run after integration is explicitly ready for doc closure; if `cont-EVAL`, security review, or integration reports more work, or if helper assignments or required dependency tickets remain open, the wave stops there and retries only the implicated owners plus the relevant closure steward. When multiple implementation agents share a promoted component, owners that already landed valid proof stay reusable while the launcher retries only the sibling owners that still owe closure evidence.
+If implementation agents ran, the runtime does not stop at `exit 0`. It checks implementation exit contracts, promoted component proof, helper assignments, required dependencies, and the integration recommendation first. When present, `cont-EVAL` must satisfy its declared eval targets before integration can close. Optional security review then runs before integration so the reviewer can publish findings and approval-sensitive actions while the wave is still active. In the default planner shape `E0` is report-only; if a wave explicitly assigns `E0` non-report files, the runtime also applies the normal implementation proof gates to that role. Security reviewers stay report-only by default. Waves may override the default closure role ids; derived state, reducer snapshots, retry or resume planning, and closure sequencing all honor those wave-specific bindings consistently. Documentation and cont-QA closure only run after integration is explicitly ready for doc closure; if `cont-EVAL`, security review, or integration reports more work, or if helper assignments or required dependency tickets remain open, the wave stops there and retries only the implicated owners plus the relevant closure steward. When multiple implementation agents share a promoted component, owners that already landed valid proof stay reusable while the runtime retries only the sibling owners that still owe closure evidence.
 
 Live closure is fail-closed:
 

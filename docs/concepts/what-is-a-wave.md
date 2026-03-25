@@ -89,7 +89,7 @@ Inside each agent block, the important sections are:
 
 ## Standard Roles
 
-The starter runtime expects three standard closure roles plus up to two optional review specialists:
+The starter runtime ships with three default closure roles plus up to two optional review specialists. A wave may override the role ids, but the closure semantics stay the same:
 
 - `A8`
   Integration steward
