@@ -6,8 +6,11 @@ import {
   agentEnvelopePathFromStatusPath,
   buildAgentResultEnvelope,
   readAgentResultEnvelope,
+  readAgentResultEnvelopeForRun,
+  resolveRunEnvelopeContext,
   writeAgentResultEnvelope,
-} from "../../scripts/wave-orchestrator/agent-state.mjs";
+  writeAgentResultEnvelopeForRun,
+} from "../../scripts/wave-orchestrator/result-envelope.mjs";
 
 const tempDirs = [];
 
@@ -150,6 +153,7 @@ describe("buildAgentResultEnvelope", () => {
         durability: "pass",
         live: "pass",
         docs: "pass",
+        detail: null,
       },
     });
   });
@@ -247,6 +251,42 @@ describe("buildAgentResultEnvelope", () => {
 });
 
 describe("writeAgentResultEnvelope / readAgentResultEnvelope round-trip", () => {
+  it("writes canonical live envelopes under attempt-scoped result paths", () => {
+    const dir = makeTempDir();
+    const runInfo = {
+      agent: { agentId: "A1" },
+      lane: "main",
+      wave: 7,
+      lastLaunchAttempt: 3,
+      statusPath: path.join(dir, "status", "wave-7-a1.status"),
+      logPath: path.join(dir, "logs", "wave-7-a1.log"),
+      resultsDir: path.join(dir, "results"),
+    };
+    const envelope = buildAgentResultEnvelope(
+      { agentId: "A1", role: "implementation" },
+      {
+        proof: { completion: "contract", durability: "none", proof: "unit", state: "met" },
+        docDelta: { state: "owned", paths: [], detail: "" },
+        deliverables: [{ path: "src/main.mjs", exists: true }],
+        components: [{ componentId: "core", level: "repo-landed", state: "met" }],
+      },
+      { waveNumber: 7, attempt: 3 },
+    );
+
+    const writtenPath = writeAgentResultEnvelopeForRun(runInfo, { wave: 7, lane: "main" }, envelope);
+    expect(writtenPath).toBe(path.join(dir, "results", "wave-7", "attempt-3", "A1.json"));
+    expect(fs.existsSync(writtenPath)).toBe(true);
+    expect(resolveRunEnvelopeContext(runInfo, { wave: 7, lane: "main" }).envelopePath).toBe(
+      writtenPath,
+    );
+
+    const read = readAgentResultEnvelopeForRun(runInfo, { wave: 7, lane: "main" });
+    expect(read).not.toBeNull();
+    expect(read.agentId).toBe("A1");
+    expect(read.attempt).toBe(3);
+    expect(read.waveNumber).toBe(7);
+  });
+
   it("round-trips an envelope through the filesystem", () => {
     const dir = makeTempDir();
     const statusPath = path.join(dir, "A1.status");

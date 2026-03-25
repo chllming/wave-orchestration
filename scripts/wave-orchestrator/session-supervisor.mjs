@@ -14,9 +14,11 @@ import {
 import {
   readStatusCodeIfPresent,
 } from "./dashboard-state.mjs";
+import { appendWaveControlEvent } from "./control-plane.mjs";
 import {
   REPO_ROOT,
   readJsonOrNull,
+  readStatusRecordIfPresent,
   ensureDirectory,
   shellQuote,
   PACKAGE_ROOT,
@@ -31,8 +33,8 @@ import {
 } from "./terminals.mjs";
 import {
   recordGlobalDashboardEvent,
-  writeGlobalDashboard,
 } from "./dashboard-state.mjs";
+import { buildHumanFeedbackWorkflowUpdate } from "./human-input-workflow.mjs";
 import {
   collectUnexpectedSessionFailures as collectUnexpectedSessionFailuresImpl,
   launchAgentSession as launchAgentSessionImpl,
@@ -51,6 +53,108 @@ function isProcessAlive(pid) {
   }
 }
 
+function relativeArtifactPath(filePath) {
+  return filePath ? path.relative(REPO_ROOT, filePath) : null;
+}
+
+export function recordWaveRunState(lanePaths, waveNumber, state, data = {}) {
+  return appendWaveControlEvent(lanePaths, waveNumber, {
+    entityType: "wave_run",
+    entityId: `wave-${waveNumber}`,
+    action: state,
+    source: "session-supervisor",
+    actor: "session-supervisor",
+    data: {
+      waveId: `wave-${waveNumber}`,
+      waveNumber,
+      updatedAt: toIsoTimestamp(),
+      ...data,
+    },
+  });
+}
+
+export function recordAttemptState(lanePaths, waveNumber, attemptNumber, state, data = {}) {
+  return appendWaveControlEvent(lanePaths, waveNumber, {
+    entityType: "attempt",
+    entityId: `wave-${waveNumber}-attempt-${attemptNumber}`,
+    action: state,
+    source: "session-supervisor",
+    actor: "session-supervisor",
+    attempt: attemptNumber,
+    data: {
+      attemptId: `wave-${waveNumber}-attempt-${attemptNumber}`,
+      attemptNumber,
+      state,
+      selectedAgentIds: data.selectedAgentIds || [],
+      detail: data.detail || null,
+      updatedAt: toIsoTimestamp(),
+      ...(data.createdAt ? { createdAt: data.createdAt } : {}),
+    },
+  });
+}
+
+export function recordAgentRunStarted(lanePaths, { waveNumber, attempt, runInfo }) {
+  if (!runInfo?.agent?.agentId || !Number.isFinite(Number(waveNumber))) {
+    return null;
+  }
+  return appendWaveControlEvent(lanePaths, waveNumber, {
+    entityType: "agent_run",
+    entityId: `wave-${waveNumber}-attempt-${attempt}-agent-${runInfo.agent.agentId}`,
+    action: "started",
+    source: "session-supervisor",
+    actor: "session-supervisor",
+    attempt,
+    data: {
+      agentId: runInfo.agent.agentId,
+      attemptNumber: attempt,
+      sessionName: runInfo.sessionName || null,
+      executorId: runInfo.lastExecutorId || runInfo.agent.executorResolved?.id || null,
+      promptPath: relativeArtifactPath(runInfo.promptPath),
+      statusPath: relativeArtifactPath(runInfo.statusPath),
+      logPath: relativeArtifactPath(runInfo.logPath),
+      startedAt: toIsoTimestamp(),
+    },
+  });
+}
+
+export function recordAgentRunFinished(
+  lanePaths,
+  { waveNumber, attempt, runInfo, failure = null, statusRecord = null },
+) {
+  if (!runInfo?.agent?.agentId || !Number.isFinite(Number(waveNumber))) {
+    return null;
+  }
+  const effectiveStatusRecord = statusRecord || readStatusRecordIfPresent(runInfo.statusPath);
+  const timedOut =
+    failure?.statusCode === "timeout-no-status" || failure?.statusCode === "timed_out";
+  const action =
+    timedOut
+      ? "timed_out"
+      : Number(effectiveStatusRecord?.code) === 0
+        ? "completed"
+        : "failed";
+  return appendWaveControlEvent(lanePaths, waveNumber, {
+    entityType: "agent_run",
+    entityId: `wave-${waveNumber}-attempt-${attempt}-agent-${runInfo.agent.agentId}`,
+    action,
+    source: "session-supervisor",
+    actor: "session-supervisor",
+    attempt,
+    data: {
+      agentId: runInfo.agent.agentId,
+      attemptNumber: attempt,
+      exitCode: effectiveStatusRecord?.code ?? null,
+      completedAt: effectiveStatusRecord?.completedAt || toIsoTimestamp(),
+      promptHash: effectiveStatusRecord?.promptHash || runInfo.lastPromptHash || null,
+      executorId: runInfo.lastExecutorId || runInfo.agent.executorResolved?.id || null,
+      statusCode: failure?.statusCode || null,
+      detail: failure?.detail || null,
+      logPath: relativeArtifactPath(runInfo.logPath),
+      statusPath: relativeArtifactPath(runInfo.statusPath),
+    },
+  });
+}
+
 export function markLauncherFailed(
   globalDashboard,
   lanePaths,
@@ -64,7 +168,6 @@ export function markLauncherFailed(
       level: "error",
       message: error instanceof Error ? error.message : String(error),
     });
-    writeGlobalDashboard(lanePaths.globalDashboardPath, globalDashboard);
   }
   appendCoordination({
     event: "launcher_finish",
@@ -553,13 +656,46 @@ export function launchWaveDashboardSession(lanePaths, { sessionName, dashboardPa
 }
 
 export async function launchAgentSession(lanePaths, params) {
-  return launchAgentSessionImpl(lanePaths, params, { runTmuxFn: runTmux });
+  const result = await launchAgentSessionImpl(lanePaths, params, { runTmuxFn: runTmux });
+  const controlPlane = params?.controlPlane || null;
+  if (!params?.dryRun && controlPlane?.waveNumber !== undefined && controlPlane?.attempt) {
+    recordAgentRunStarted(lanePaths, {
+      waveNumber: controlPlane.waveNumber,
+      attempt: controlPlane.attempt,
+      runInfo: {
+        ...params,
+        lastExecutorId: result?.executorId || params?.agent?.executorResolved?.id || null,
+      },
+    });
+  }
+  return result;
 }
 
-export async function waitForWaveCompletion(lanePaths, agentRuns, timeoutMinutes, onProgress = null) {
-  return waitForWaveCompletionImpl(lanePaths, agentRuns, timeoutMinutes, onProgress, {
+export async function waitForWaveCompletion(
+  lanePaths,
+  agentRuns,
+  timeoutMinutes,
+  onProgress = null,
+  options = {},
+) {
+  const result = await waitForWaveCompletionImpl(lanePaths, agentRuns, timeoutMinutes, onProgress, {
     collectUnexpectedSessionFailuresFn: collectUnexpectedSessionFailures,
   });
+  const controlPlane = options?.controlPlane || null;
+  if (controlPlane?.waveNumber !== undefined && controlPlane?.attempt) {
+    const failuresByAgentId = new Map(
+      (result?.failures || []).map((failure) => [failure.agentId, failure]),
+    );
+    for (const runInfo of agentRuns || []) {
+      recordAgentRunFinished(lanePaths, {
+        waveNumber: controlPlane.waveNumber,
+        attempt: controlPlane.attempt,
+        runInfo,
+        failure: failuresByAgentId.get(runInfo.agent.agentId) || null,
+      });
+    }
+  }
+  return result;
 }
 
 export function monitorWaveHumanFeedback({
@@ -592,111 +728,50 @@ export function monitorWaveHumanFeedback({
     const context = request.context ? `; context=${request.context}` : "";
     const responseOperator = request.responseOperator || "human-operator";
     const responseText = request.responseText || "(empty response)";
+    const escalationId = `escalation-${request.id}`;
+    const existingEscalation =
+      (fs.existsSync(triageLogPath)
+        ? readMaterializedCoordinationState(triageLogPath).byId.get(escalationId)
+        : null) ||
+      readMaterializedCoordinationState(coordinationLogPath).byId.get(escalationId) ||
+      null;
+    const workflowUpdate = buildHumanFeedbackWorkflowUpdate({
+      request,
+      lane: lanePaths.lane,
+      waveNumber,
+      existingEscalation,
+    });
     if (request.status === "pending") {
-      recordCombinedEvent({
-        level: "warn",
-        agentId: request.agentId,
-        message: `Human feedback requested (${request.id}): ${question}`,
-      });
-      console.warn(
-        `[human-feedback] wave=${waveNumber} agent=${request.agentId} request=${request.id} pending: ${question}`,
-      );
-      console.warn(
-        `[human-feedback] respond with: pnpm exec wave control task act answer --lane ${lanePaths.lane} --wave ${waveNumber} --id ${request.id} --response "<answer>" --operator "<name>"`,
-      );
-      appendCoordination({
-        event: "human_feedback_requested",
-        waves: [waveNumber],
-        status: "waiting-human",
-        details: `request_id=${request.id}; agent=${request.agentId}; question=${question}${context}`,
-        actionRequested: `Launcher operator should ask or answer in the parent session, then run: pnpm exec wave control task act answer --lane ${lanePaths.lane} --wave ${waveNumber} --id ${request.id} --response "<answer>" --operator "<name>"`,
-      });
+      if (workflowUpdate?.combinedEvent) {
+        recordCombinedEvent(workflowUpdate.combinedEvent);
+      }
+      for (const line of workflowUpdate?.consoleLines || []) {
+        console.warn(line);
+      }
+      if (workflowUpdate?.coordinationNotice) {
+        appendCoordination(workflowUpdate.coordinationNotice);
+      }
       if (coordinationLogPath) {
-        appendCoordinationRecord(coordinationLogPath, {
-          id: request.id,
-          lane: lanePaths.lane,
-          wave: waveNumber,
-          agentId: request.agentId || "human",
-          kind: "human-feedback",
-          targets: request.agentId ? [`agent:${request.agentId}`] : [],
-          priority: "high",
-          summary: question,
-          detail: request.context || "",
-          status: "open",
-          source: "feedback",
-        });
+        for (const update of workflowUpdate?.coordinationUpdates || []) {
+          appendCoordinationRecord(coordinationLogPath, update);
+        }
       }
     } else if (request.status === "answered") {
-      recordCombinedEvent({
-        level: "info",
-        agentId: request.agentId,
-        message: `Human feedback answered (${request.id}) by ${responseOperator}: ${responseText}`,
-      });
-      appendCoordination({
-        event: "human_feedback_answered",
-        waves: [waveNumber],
-        status: "resolved",
-        details: `request_id=${request.id}; agent=${request.agentId}; operator=${responseOperator}; response=${responseText}`,
-      });
+      if (workflowUpdate?.combinedEvent) {
+        recordCombinedEvent(workflowUpdate.combinedEvent);
+      }
+      if (workflowUpdate?.coordinationNotice) {
+        appendCoordination(workflowUpdate.coordinationNotice);
+      }
       if (coordinationLogPath) {
-        const escalationId = `escalation-${request.id}`;
-        const existingEscalation =
-          (fs.existsSync(triageLogPath)
-            ? readMaterializedCoordinationState(triageLogPath).byId.get(escalationId)
-            : null) ||
-          readMaterializedCoordinationState(coordinationLogPath).byId.get(escalationId) ||
-          null;
         if (fs.existsSync(triageLogPath)) {
-          appendCoordinationRecord(triageLogPath, {
-            id: escalationId,
-            lane: lanePaths.lane,
-            wave: waveNumber,
-            agentId: request.agentId || "human",
-            kind: "human-escalation",
-            targets:
-              existingEscalation?.targets ||
-              (request.agentId ? [`agent:${request.agentId}`] : []),
-            dependsOn: existingEscalation?.dependsOn || [],
-            closureCondition: existingEscalation?.closureCondition || "",
-            priority: "high",
-            summary: question,
-            detail: responseText,
-            artifactRefs: [request.id],
-            status: "resolved",
-            source: "feedback",
-          });
+          for (const update of workflowUpdate?.triageUpdates || []) {
+            appendCoordinationRecord(triageLogPath, update);
+          }
         }
-        appendCoordinationRecord(coordinationLogPath, {
-          id: escalationId,
-          lane: lanePaths.lane,
-          wave: waveNumber,
-          agentId: request.agentId || "human",
-          kind: "human-escalation",
-          targets:
-            existingEscalation?.targets ||
-            (request.agentId ? [`agent:${request.agentId}`] : []),
-          dependsOn: existingEscalation?.dependsOn || [],
-          closureCondition: existingEscalation?.closureCondition || "",
-          priority: "high",
-          summary: question,
-          detail: responseText,
-          artifactRefs: [request.id],
-          status: "resolved",
-          source: "feedback",
-        });
-        appendCoordinationRecord(coordinationLogPath, {
-          id: request.id,
-          lane: lanePaths.lane,
-          wave: waveNumber,
-          agentId: request.agentId || "human",
-          kind: "human-feedback",
-          targets: request.agentId ? [`agent:${request.agentId}`] : [],
-          priority: "high",
-          summary: question,
-          detail: responseText,
-          status: "resolved",
-          source: "feedback",
-        });
+        for (const update of workflowUpdate?.coordinationUpdates || []) {
+          appendCoordinationRecord(coordinationLogPath, update);
+        }
       }
     }
   }

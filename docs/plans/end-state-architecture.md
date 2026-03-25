@@ -1,8 +1,8 @@
 # End-State Architecture
 
-This document describes the target architecture for Wave Orchestration after the full refactor is complete. It is the authoritative reference for what the system should look like when all P0, P1, and P2 work items are landed.
+This document describes the canonical architecture for the current Wave runtime. It is the authoritative reference for the engine boundaries, canonical authority set, and artifact ownership model that the shipped code now follows.
 
-The thesis is unchanged: bounded waves, closure roles, proof artifacts, selective rerun, and delivery discipline. What changes is the internal authority model. The launcher stops being the decision engine and becomes a thin session supervisor that reads decisions from canonical state and delegates work to explicit subsystems.
+The thesis is unchanged: bounded waves, closure roles, proof artifacts, selective rerun, and delivery discipline. What changes is the internal authority model. The launcher stops being the decision engine and becomes a thin orchestrator that reads decisions from canonical state, sequences the engines, and delegates process work to the session supervisor.
 
 ---
 
@@ -12,7 +12,7 @@ The thesis is unchanged: bounded waves, closure roles, proof artifacts, selectiv
 
 2. **Phase engines replace the monolithic launcher loop.** Each distinct concern — implementation orchestration, derived-state materialization, gate evaluation, retry planning, closure sequencing, session supervision — lives in its own deterministic module with an explicit input/output contract.
 
-3. **Planning engines emit intent; the supervisor emits observed facts.** A phase engine may output `agent_run_planned` or a launch intent. Only the session supervisor, after the process actually launches, writes `agent_run.started`. This distinction between desired action and observed action is critical for replay and auditability.
+3. **Planning engines emit intent; the supervisor emits observed facts.** A phase engine may output a run selection or launch request. Only the session supervisor, after the process actually launches, writes `agent_run.started`. This distinction between desired action and observed action is critical for replay and auditability.
 
 4. **Proof and closure are separate first-class states.** An agent can satisfy its own work contract (`owned_slice_proven`) without the wave being closeable (`wave_closure_ready`). These are distinct top-level state transitions, not implicit conditions scattered across gate checks.
 
@@ -84,25 +84,26 @@ Each phase engine is a pure-ish function: it reads from the canonical authority 
 implementation-engine.mjs  Drives the implementation phase
                            Inputs:  wave definition, materialized event state,
                                     task graph, retry plan
-                           Outputs: launch intents (agent_run_planned),
-                                    run selections, executor assignments,
+                           Outputs: run selections, launch requests,
+                                    executor assignments,
                                     prompt construction requests
-                           Does NOT output: agent_run.started, attempt.created
+                           Does NOT output: agent_run.started, attempt.running
                            (those are observed facts written by the supervisor)
 
-derived-state-engine.mjs   Materializes all derived state from canonical sources
-  (launcher-derived-       Inputs:  coordination log, control-plane events,
-   state.mjs today)                 agent result envelopes
-                           Outputs: shared summaries, per-agent inboxes,
-                                    assignment snapshots, dependency snapshots,
-                                    ledger, docs queue, security summary,
-                                    integration summary
+derived-state-engine.mjs   Computes all derived state from canonical sources
+                           Inputs:  coordination log, control-plane events,
+                                    agent result envelopes
+                           Outputs: derived payloads for shared summaries,
+                                    per-agent inboxes, assignment snapshots,
+                                    dependency snapshots, ledger, docs queue,
+                                    security summary, integration summary
                            Rule:    reads only from canonical authority set,
-                                    never from its own prior outputs
+                                    never from its own prior outputs and
+                                    never persists projections directly
 
 gate-engine.mjs            Evaluates all closure gates
-  (launcher-gates.mjs      Inputs:  agent result envelopes, proof registry,
-   today)                           coordination state, component matrix,
+                           Inputs:  agent result envelopes, proof registry,
+                                    coordination state, component matrix,
                                     task graph
                            Outputs: per-gate verdicts (ok/blocked + detail),
                                     per-task owned_slice_proven verdicts
@@ -114,15 +115,15 @@ gate-engine.mjs            Evaluates all closure gates
                                     dependency-barrier, clarification-barrier
 
 closure-engine.mjs         Sequences the closure sweep
-  (launcher-closure.mjs    Inputs:  gate verdicts, wave definition, task graph
-   today)                  Outputs: closure phase transitions, agent relaunch
+                           Inputs:  gate verdicts, wave definition, task graph
+                           Outputs: closure phase transitions, agent relaunch
                                     requests, wave completion or block events
                            Stages:  implementation+proof → cont-eval → security →
                                     integration → documentation → cont-qa
 
 retry-engine.mjs           Plans all retry and resume operations
-  (launcher-retry.mjs      Inputs:  failure records, proof registry, rerun
-   today)                           requests, executor history, task graph
+                           Inputs:  failure records, proof registry, rerun
+                                    requests, executor history, task graph
                            Outputs: retry plan with explicit contract:
                                     - why_resuming
                                     - invalidated (task ids)
@@ -148,26 +149,27 @@ wave-state-reducer.mjs     Rebuilds full wave state from canonical authority set
 
 The supervisor is the only module that interacts with the outside world: launching processes, managing terminals, and monitoring sessions. It reads decisions from phase engines and executes them. It is the only module that writes observed lifecycle events.
 
-The projection writer is the single module responsible for all non-canonical file writes.
+The projection writer is the single module responsible for projection writes. Workflow-owned compatibility state, clarification triage, and canonical coordination/control-plane mutations stay in their own modules.
 
 ```
 session-supervisor.mjs     Launches and monitors agent sessions
-  (launcher-supervisor.mjs Inputs:  launch intents from implementation engine,
-   today)                           launch specs from executor adapters
+                           Inputs:  run selections / launch requests from
+                                    implementation engine and closure engine,
+                                    launch specs from executor adapters
                            Owns:    process lifecycle, tmux sessions,
                                     terminal surfaces, PID tracking,
                                     lock management, rate-limit retry loops,
                                     resident orchestrator sessions
-                           Writes:  agent_run.started (after real launch),
-                                    agent_run.completed (after real completion),
-                                    attempt.created, attempt.completed
+                           Writes:  wave_run.started|completed|failed,
+                                    attempt.running|completed|failed,
+                                    agent_run.started|completed|failed|timed_out
                            Observes: human feedback responses (collects and
                                     submits, but does NOT own SLA, reroute,
                                     escalation, or timeout policy — those
                                     are control-plane workflow semantics
                                     materialized by the reducer)
 
-projection-writer.mjs      Writes all non-canonical outputs
+projection-writer.mjs      Writes projection outputs
   (new)                    Inputs:  derived state from materializer,
                                     gate verdicts from gate engine,
                                     wave state from reducer
@@ -175,7 +177,10 @@ projection-writer.mjs      Writes all non-canonical outputs
                                     markdown board projections,
                                     coordination board projection,
                                     trace bundles, quality metrics,
-                                    human-facing status summaries
+                                    shared summaries, inboxes, assignment
+                                    and dependency snapshots, ledger,
+                                    docs queue, security summary,
+                                    integration summary
                            Rule:    never reads its own outputs,
                                     always writes atomically,
                                     labels every artifact with its class
@@ -192,15 +197,15 @@ launcher.mjs               Thin orchestrator
                            3. For each wave:
                               a. reducer.rebuild() → current state
                               b. retry-engine.plan() → retry decisions
-                              c. implementation-engine.select() → launch intents
-                              d. derived-state-engine.materialize() → projections
-                              e. supervisor.launch(intents) → agent sessions
+                              c. implementation-engine.select() → run selections
+                              d. derived-state-engine.materialize() → derived payloads
+                              e. supervisor.launch(run selections) → agent sessions
                                  (supervisor writes agent_run.started)
                               f. supervisor.wait() → completion
                                  (supervisor writes agent_run.completed)
                               g. gate-engine.evaluate() → gate verdicts
                               h. closure-engine.sequence() → closure phases
-                              i. projection-writer.write() → dashboards, traces
+                              i. projection-writer.write() → persisted projections
                            4. Release lock, exit
 ```
 
@@ -361,11 +366,11 @@ All tasks in the wave are `owned_slice_proven` AND all cross-cutting closure con
 - no open clarification barriers
 - no open helper assignment barriers
 - no open cross-lane dependency barriers
-- integration gate passed (A8)
-- documentation gate passed (A9)
-- cont-eval gate passed (E0) if applicable
+- integration gate passed (effective integration steward; starter default `A8`)
+- documentation gate passed (effective documentation steward; starter default `A9`)
+- cont-eval gate passed (effective `cont-EVAL`; starter default `E0`) if applicable
 - security gate passed if applicable
-- cont-qa final verdict is PASS (A0)
+- cont-qa final verdict is PASS (effective `cont-QA`; starter default `A0`)
 - component matrix promotions validated
 
 Only when `wave_closure_ready` is true does the closure engine emit the `wave_run.completed` event.
@@ -499,13 +504,11 @@ Agent result envelopes are classified as canonical structured snapshots and must
 .tmp/<lane>-wave-launcher/results/wave-<N>/attempt-<A>/<agentId>.json
 ```
 
-### Migration path
+### Current runtime behavior
 
-- Phase 1: agents emit the envelope alongside existing log markers. Gate engine reads the envelope when present, falls back to the legacy adapter.
-- Phase 2: gate engine requires the envelope. Log markers become human-readable only.
-- Phase 3: log-parsing code is removed.
-
-During migration, the `agent-state.mjs` module gains a `buildEnvelopeFromLegacySignals()` adapter that synthesizes an envelope from parsed log markers, so the gate engine always sees the same shape.
+- Live runs read and write the attempt-scoped canonical envelope path directly.
+- Legacy sibling `*.envelope.json` files and marker-era artifacts are compatibility import inputs for replay, reconcile, and historical trace materialization only.
+- `synthesizeLegacyEnvelope()` remains explicit migration-only compatibility code; live gate, retry, closure, and reducer decisions do not use it as a correctness path.
 
 ---
 
@@ -545,15 +548,17 @@ Projections materialized from Class 1 and Class 2 sources. Can be deleted and re
 | Relaunch plan | `.tmp/<lane>-wave-launcher/status/relaunch-plan-wave-<N>.json` | JSON |
 | Assignment snapshot | `.tmp/<lane>-wave-launcher/assignments/wave-<N>.json` | JSON |
 | Dependency snapshot | `.tmp/<lane>-wave-launcher/dependencies/wave-<N>.json` | JSON |
-| Shared summary | `.tmp/<lane>-wave-launcher/summaries/wave-<N>-shared.md` | Markdown |
+| Shared summary | `.tmp/<lane>-wave-launcher/inboxes/wave-<N>/shared-summary.md` | Markdown |
 | Per-agent inbox | `.tmp/<lane>-wave-launcher/inboxes/wave-<N>/<agentId>.md` | Markdown |
-| Ledger | `.tmp/<lane>-wave-launcher/ledgers/wave-<N>.json` | JSON |
+| Ledger | `.tmp/<lane>-wave-launcher/ledger/wave-<N>.json` | JSON |
 | Docs queue | `.tmp/<lane>-wave-launcher/docs-queue/wave-<N>.json` | JSON |
-| Security summary | `.tmp/<lane>-wave-launcher/summaries/wave-<N>-security.md` | Markdown |
-| Integration summary | `.tmp/<lane>-wave-launcher/summaries/wave-<N>-integration.md` | Markdown |
+| Security summary JSON | `.tmp/<lane>-wave-launcher/security/wave-<N>.json` | JSON |
+| Security summary markdown | `.tmp/<lane>-wave-launcher/security/wave-<N>.md` | Markdown |
+| Integration summary JSON | `.tmp/<lane>-wave-launcher/integration/wave-<N>.json` | JSON |
+| Integration summary markdown | `.tmp/<lane>-wave-launcher/integration/wave-<N>.md` | Markdown |
 | Run state | `.tmp/<lane>-wave-launcher/run-state.json` | JSON |
 | Quality metrics | `.tmp/<lane>-wave-launcher/traces/wave-<N>/attempt-<A>/quality.json` | JSON |
-| Task graph snapshot | `.tmp/<lane>-wave-launcher/tasks/wave-<N>.json` | JSON |
+| Reducer snapshot | `.tmp/<lane>-wave-launcher/reducer/wave-<N>.json` | JSON |
 
 ### Class 4 — Human-Facing Projections
 
@@ -563,9 +568,9 @@ Convenience outputs for operator dashboards and review. Never read by the system
 |----------|------|--------|
 | Global dashboard | `.tmp/<lane>-wave-launcher/dashboards/global.json` | JSON |
 | Wave dashboard | `.tmp/<lane>-wave-launcher/dashboards/wave-<N>.json` | JSON |
-| Coordination board | `.tmp/<lane>-wave-launcher/coordination/wave-<N>-board.md` | Markdown |
-| Orchestrator board | `.tmp/<lane>-wave-launcher/coordination/orchestrator-board.md` | Markdown |
-| Wave manifest | `.tmp/<lane>-wave-launcher/wave-manifest.json` | JSON |
+| Coordination board | `.tmp/<lane>-wave-launcher/messageboards/wave-<N>.md` | Markdown |
+| Orchestrator board | `.tmp/wave-orchestrator/messageboards/orchestrator.md` | Markdown |
+| Wave manifest | `.tmp/<lane>-wave-launcher/waves.manifest.json` | JSON |
 
 Each artifact file includes a `_meta` field (or frontmatter for markdown) declaring:
 
@@ -839,23 +844,31 @@ This boundary means a future Temporal-backed or service-backed orchestrator can 
 
 ---
 
-## File-to-Module Migration Map
+## Runtime Module Layout
 
-This maps current files to their end-state locations.
+The runtime tree now uses the engine-oriented module names directly.
 
-| Current File | End-State Module | Notes |
-|-------------|-----------------|-------|
-| `launcher.mjs` (monolith) | `launcher.mjs` (thin orchestrator) | ~95% of logic moves to engines |
-| `launcher-runtime.mjs` | `session-supervisor.mjs` | Session launch/wait |
-| `launcher-closure.mjs` | `closure-engine.mjs` | Closure sequencing |
-| `launcher-gates.mjs` | `gate-engine.mjs` | Gate evaluation |
-| `launcher-retry.mjs` | `retry-engine.mjs` | Retry planning |
-| `launcher-derived-state.mjs` | `derived-state-engine.mjs` | State materialization |
-| `launcher-supervisor.mjs` | `session-supervisor.mjs` | Merged with runtime |
-| (new) | `implementation-engine.mjs` | Implementation phase orchestration |
-| (new) | `wave-state-reducer.mjs` | Pure state reducer |
-| (new) | `projection-writer.mjs` | All non-canonical writes |
-| (new) | `result-envelope.mjs` | Envelope schema + validation |
+| Runtime Module | Responsibility |
+|---------------|----------------|
+| `launcher.mjs` | Thin orchestrator and CLI entrypoint |
+| `implementation-engine.mjs` | Implementation fan-out planning |
+| `derived-state-engine.mjs` | Derived state computation from canonical inputs |
+| `gate-engine.mjs` | Live gate evaluation |
+| `closure-engine.mjs` | Closure sequencing |
+| `retry-engine.mjs` | Retry and resume planning |
+| `wave-state-reducer.mjs` | Deterministic wave-state reconstruction |
+| `session-supervisor.mjs` | Session launch and observation |
+| `projection-writer.mjs` | Projection writes |
+| `result-envelope.mjs` | Envelope schema, validation, and compatibility synthesis |
+| `launcher-runtime.mjs` | Low-level launch and wait helpers used by the session supervisor |
+| `control-plane.mjs` | Canonical control-plane event log |
+| `coordination-store.mjs` | Canonical coordination log |
+| `wave-files.mjs` | Parsed wave definitions |
+
+Historical note:
+
+- earlier transition builds used `launcher-gates.mjs`, `launcher-retry.mjs`, `launcher-derived-state.mjs`, `launcher-closure.mjs`, and `launcher-supervisor.mjs` as extracted runtime modules
+- those compatibility names are no longer part of the live runtime tree
 | (new) | `contradiction-entity.mjs` | Contradiction lifecycle |
 | (new) | `fact-entity.mjs` | Fact/evidence lineage |
 | (new) | `human-input-workflow.mjs` | Human input workflow logic |
@@ -900,7 +913,7 @@ This section documents the 10 feedback corrections incorporated from architectur
 
 2. **Task vs coordination_record boundary:** added an explicit section defining the crisp rule. Task = durable work unit with ownership, artifact contract, proof rules, closure semantics. Coordination record = event or message about a task. They do not overlap.
 
-3. **Intent vs observation:** implementation engine now emits `agent_run_planned` (intent). Only the session supervisor writes `agent_run.started` (observed fact). The `agent_run` state machine now includes `planned → started` to capture this.
+3. **Intent vs observation:** planning engines emit run selections or launch requests (intent). Only the session supervisor writes `wave_run.*`, `attempt.*`, and `agent_run.*` observed lifecycle facts after those events actually happen.
 
 4. **Reducer input model:** the reducer explicitly takes all three canonical sources (control-plane events, coordination records, agent result envelopes) as arguments. The doc no longer claims a single event log.
 
@@ -914,7 +927,7 @@ This section documents the 10 feedback corrections incorporated from architectur
 
 9. **Human input workflow ownership:** explicitly moved SLA, reroute, escalation, and timeout logic out of the supervisor. The supervisor observes and submits; workflow semantics live in control-plane events, the reducer, and `human-input-workflow.mjs`.
 
-10. **Executor adapter contract:** `buildResultEnvelope(logPath, statusPath)` replaced with `locateResultEnvelope()` + `validateResultEnvelope()` for the end state, and `synthesizeLegacyEnvelope()` explicitly named as migration-only.
+10. **Executor adapter contract:** `locateResultEnvelope()` + `validateResultEnvelope()` define the live end state, and `synthesizeLegacyEnvelope()` is explicitly named as migration-only compatibility code.
 
 ---
 

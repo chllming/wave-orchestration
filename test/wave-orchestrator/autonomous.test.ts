@@ -8,7 +8,7 @@ import {
   readAutonomousBarrier,
 } from "../../scripts/wave-orchestrator/autonomous.mjs";
 import { appendDependencyTicket } from "../../scripts/wave-orchestrator/coordination-store.mjs";
-import { DEFAULT_CODEX_SANDBOX_MODE } from "../../scripts/wave-orchestrator/launcher.mjs";
+import { DEFAULT_CODEX_SANDBOX_MODE } from "../../scripts/wave-orchestrator/config.mjs";
 
 const tempDirs = [];
 

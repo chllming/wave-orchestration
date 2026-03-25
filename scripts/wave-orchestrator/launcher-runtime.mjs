@@ -14,6 +14,7 @@ import { readStatusCodeIfPresent } from "./dashboard-state.mjs";
 import { buildExecutorLaunchSpec } from "./executors.mjs";
 import { hashAgentPromptFingerprint, prefetchContext7ForSelection } from "./context7.mjs";
 import { killTmuxSessionIfExists } from "./terminals.mjs";
+import { resolveWaveRoleBindings } from "./role-helpers.mjs";
 import {
   resolveAgentSkills,
   summarizeResolvedSkills,
@@ -71,6 +72,7 @@ export async function launchAgentSession(lanePaths, params, { runTmuxFn }) {
     inboxText,
     promptOverride = "",
     orchestratorId,
+    attempt = 1,
     agentRateLimitRetries,
     agentRateLimitBaseDelaySeconds,
     agentRateLimitMaxDelaySeconds,
@@ -105,6 +107,7 @@ export async function launchAgentSession(lanePaths, params, { runTmuxFn }) {
   const prompt =
     String(promptOverride || "").trim() ||
     buildExecutionPrompt({
+      ...resolveWaveRoleBindings(resolvedWaveDefinition, lanePaths),
       lane: lanePaths.lane,
       wave,
       agent,
@@ -120,10 +123,6 @@ export async function launchAgentSession(lanePaths, params, { runTmuxFn }) {
       evalTargets: resolvedWaveDefinition.evalTargets,
       benchmarkCatalogPath: lanePaths.laneProfile?.paths?.benchmarkCatalogPath,
       sharedPlanDocs: lanePaths.sharedPlanDocs,
-      contQaAgentId: lanePaths.contQaAgentId,
-      contEvalAgentId: lanePaths.contEvalAgentId,
-      integrationAgentId: lanePaths.integrationAgentId,
-      documentationAgentId: lanePaths.documentationAgentId,
     });
   const promptHash = hashAgentPromptFingerprint(agent);
   fs.writeFileSync(promptPath, `${prompt}\n`, "utf8");
@@ -216,8 +215,8 @@ export async function launchAgentSession(lanePaths, params, { runTmuxFn }) {
     `export WAVE_EXECUTOR_MODE=${shellQuote(resolvedExecutorMode)}`,
     ...executionLines,
     `node -e ${shellQuote(
-      "const fs=require('node:fs'); const statusPath=process.argv[1]; const payload={code:Number(process.argv[2]),promptHash:process.argv[3]||null,orchestratorId:process.argv[4]||null,completedAt:new Date().toISOString()}; fs.writeFileSync(statusPath, JSON.stringify(payload, null, 2)+'\\n', 'utf8');",
-    )} ${shellQuote(statusPath)} "$status" ${shellQuote(promptHash)} ${shellQuote(orchestratorId || "")}`,
+      "const fs=require('node:fs'); const statusPath=process.argv[1]; const payload={code:Number(process.argv[2]),promptHash:process.argv[3]||null,orchestratorId:process.argv[4]||null,attempt:Number(process.argv[5])||1,completedAt:new Date().toISOString()}; fs.writeFileSync(statusPath, JSON.stringify(payload, null, 2)+'\\n', 'utf8');",
+    )} ${shellQuote(statusPath)} "$status" ${shellQuote(promptHash)} ${shellQuote(orchestratorId || "")} ${shellQuote(String(attempt || 1))}`,
     `echo "[${lanePaths.lane}-wave-launcher] ${sessionName} finished with code $status"`,
     "exec bash -l",
   ].join("\n");

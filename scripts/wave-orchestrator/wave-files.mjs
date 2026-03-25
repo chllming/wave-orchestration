@@ -1253,7 +1253,11 @@ export function loadComponentCutoverMatrix(options = {}) {
   const matrixJsonPath =
     options.componentMatrixJsonPath ||
     (laneProfile
-      ? path.resolve(REPO_ROOT, laneProfile.paths.componentCutoverMatrixJsonPath)
+      ? path.resolve(
+          REPO_ROOT,
+          laneProfile?.paths?.componentCutoverMatrixJsonPath ||
+            "trace-bundle/component-cutover-matrix.json",
+        )
       : "trace-bundle/component-cutover-matrix.json");
   const payload =
     options.componentMatrixPayload !== undefined
@@ -1366,8 +1370,8 @@ export function requiredDocumentationStewardPathsForWave(waveNumber, options = {
   const componentThreshold = laneProfile.validation.requireComponentPromotionsFromWave;
   if (componentThreshold !== null && waveNumber >= componentThreshold) {
     out.push(
-      laneProfile.paths.componentCutoverMatrixDocPath,
-      laneProfile.paths.componentCutoverMatrixJsonPath,
+      laneProfile?.paths?.componentCutoverMatrixDocPath,
+      laneProfile?.paths?.componentCutoverMatrixJsonPath,
     );
   }
   return Array.from(new Set(out));
@@ -2353,18 +2357,16 @@ export function validateWaveComponentMatrixCurrentLevels(wave, options = {}) {
       securityRolePromptPath,
     }),
   );
-  if (
-    promotions.length === 0 &&
-    ((componentThreshold === null || wave.wave < componentThreshold) ||
-      implementationOwningAgents.length === 0)
-  ) {
+  if (promotions.length === 0) {
     return {
       ok: true,
       statusCode: "pass",
       detail:
         implementationOwningAgents.length === 0
           ? `Wave ${wave.wave} has no implementation-owned component promotions to reconcile.`
-          : "Component current-level gate is not active for this wave.",
+          : componentThreshold === null || wave.wave < componentThreshold
+            ? "Component current-level gate is not active for this wave."
+            : `Wave ${wave.wave} declares no promoted components to reconcile against the component matrix.`,
       componentId: null,
     };
   }

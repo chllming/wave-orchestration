@@ -1,7 +1,13 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { DEFAULT_EXECUTOR_MODE, normalizeExecutorMode, SUPPORTED_EXECUTOR_MODES } from "./config.mjs";
+import {
+  DEFAULT_CODEX_SANDBOX_MODE,
+  DEFAULT_EXECUTOR_MODE,
+  normalizeCodexSandboxMode,
+  normalizeExecutorMode,
+  SUPPORTED_EXECUTOR_MODES,
+} from "./config.mjs";
 import {
   DEFAULT_AGENT_LAUNCH_STAGGER_MS,
   DEFAULT_AGENT_RATE_LIMIT_BASE_DELAY_SECONDS,
@@ -18,16 +24,14 @@ import {
   sanitizeLaneName,
 } from "./shared.mjs";
 import {
-  DEFAULT_CODEX_SANDBOX_MODE,
-  normalizeCodexSandboxMode,
-} from "./launcher.mjs";
-import {
   maybeAnnouncePackageUpdate,
   WAVE_SUPPRESS_UPDATE_NOTICE_ENV,
 } from "./package-update-notice.mjs";
 import { readRunState } from "./wave-files.mjs";
 import { readDependencyTickets } from "./coordination-store.mjs";
 import { readWaveLedger } from "./ledger.mjs";
+
+const AUTONOMOUS_EXECUTOR_MODES = SUPPORTED_EXECUTOR_MODES.filter((mode) => mode !== "local");
 
 function printUsage() {
   console.log(`Usage: pnpm exec wave autonomous [options]
@@ -46,7 +50,7 @@ Options:
   --agent-launch-stagger-ms <n> Delay between agent launches (default: ${DEFAULT_AGENT_LAUNCH_STAGGER_MS})
   --orchestrator-id <id>        Orchestrator ID for coordination board
   --resident-orchestrator       Launch a resident orchestrator session for each live wave
-  --executor <mode>             Default executor passed to launcher: ${SUPPORTED_EXECUTOR_MODES.join(" | ")} (default: lane config)
+  --executor <mode>             Default executor passed to launcher: ${AUTONOMOUS_EXECUTOR_MODES.join(" | ")} (default: lane config)
   --codex-sandbox <mode>        Default Codex sandbox mode passed to launcher (default: ${DEFAULT_CODEX_SANDBOX_MODE})
   --dashboard                   Enable dashboards (default: disabled)
   --keep-sessions               Keep tmux sessions between waves

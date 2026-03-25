@@ -25,6 +25,17 @@ Those are related, but they are not the same.
 
 An implementation agent can be locally complete and still leave the wave blocked if it created open helper work, unresolved clarification chains, or required dependencies.
 
+At runtime, those distinctions map onto separate modules:
+
+- `implementation-engine.mjs` selects implementation work
+- `derived-state-engine.mjs` rebuilds the blackboard projections
+- `gate-engine.mjs` evaluates closure and barrier state from envelopes plus canonical logs
+- `retry-engine.mjs` decides what can safely resume
+- `closure-engine.mjs` sequences the staged closeout
+- `session-supervisor.mjs` only launches sessions and records observed facts
+
+Closure roles are resolved from the wave definition first, then from starter defaults. In other words, integration, documentation, `cont-QA`, `cont-EVAL`, and security review keep the same semantics even when a wave overrides the default role ids such as `A8`, `A9`, `A0`, `E0`, or `A7`.
+
 ## Durable State Surfaces
 
 The runtime writes several different artifacts, but they do different jobs:
@@ -52,6 +63,8 @@ The runtime writes several different artifacts, but they do different jobs:
 
 The important rule is that decisions come from the canonical authority set: wave definitions, the coordination log, the control-plane log, and immutable result envelopes. The markdown board is a projection for humans. See [wave-orchestrator.md](../plans/wave-orchestrator.md).
 
+That control-plane log also carries observed `wave_run`, `attempt`, and `agent_run` lifecycle facts from `session-supervisor.mjs`. When human feedback or escalation remains open, the reducer materializes the wave as `clarifying` with blocked `waveState` instead of flattening it into generic progress.
+
 Live waves now keep refreshing that derived state while agents are still running. Shared summaries, inboxes, dashboard coordination metrics, and clarification routing are not only recomputed at attempt boundaries; they are also refreshed during active wave execution so stale clarification and acknowledgement timing is machine-visible before the attempt ends.
 
 ## What Agents Should Use
@@ -61,7 +74,7 @@ Use the coordination log for conversational or workflow state:
 - `request`
   Use this when you need another agent or capability owner to do work. Target it explicitly. This is the kind that becomes a helper assignment.
 - `blocker`
-  Use this when the wave is blocked, but not because the launcher needs to route work to a specific assignee.
+  Use this when the wave is blocked, but not because the runtime needs to route work to a specific assignee.
 - `handoff`
   Use this for continuity and context transfer. This is informative by itself; it is not the same as a blocking helper assignment.
 - `evidence`
@@ -164,7 +177,7 @@ pnpm exec wave control task create \
 What happens next:
 
 - the request lands in the canonical coordination log
-- the launcher derives a helper assignment for `agent:A8`
+- the runtime derives a helper assignment for `agent:A8`
 - that assignment is written into the assignment snapshot
 - the shared summary and A8 inbox now show the open helper work
 
@@ -230,9 +243,9 @@ pnpm exec wave coord post \
 
 What happens next:
 
-1. the launcher triages the clarification from repo policy, ownership, prior decisions, and routing context
+1. the orchestrator triages the clarification from repo policy, ownership, prior decisions, and routing context
 2. if it can answer inside the wave, it writes the resolution back into coordination state
-3. if another owner can answer it, the launcher opens a targeted follow-up request and keeps the clarification chain blocking
+3. if another owner can answer it, the runtime opens a targeted follow-up request and keeps the clarification chain blocking
 4. only after policy and routed follow-up paths are exhausted does it create human feedback or escalation artifacts
 5. until that chain is resolved, clarification remains a closure barrier and any routed follow-up also remains blocking helper work
 
@@ -406,7 +419,7 @@ That gives Wave two useful properties:
 
 ## Targeted Retry Behavior
 
-When closure fails, the launcher does not always relaunch the entire wave.
+When closure fails, the runtime does not always relaunch the entire wave.
 
 It tries to relaunch only the implicated owners:
 
@@ -425,7 +438,7 @@ pnpm exec wave control rerun get --lane main --wave 10 --json
 pnpm exec wave control rerun request --lane main --wave 10 --agent A2 --agent A7 --clear-reuse A2 --reason "Resume sibling-owned component closure"
 ```
 
-The canonical rerun request is written under `.tmp/<lane>-wave-launcher/control-plane/`, projected to `.tmp/<lane>-wave-launcher/control/` for compatibility, consumed by the launcher on the next retry decision, and then cleared by default after one application. This is the supported path for:
+The canonical rerun request is written under `.tmp/<lane>-wave-launcher/control-plane/`, projected to `.tmp/<lane>-wave-launcher/control/` for compatibility, consumed by the retry engine on the next retry decision, and then cleared by default after one application. This is the supported path for:
 
 - rerunning only specific owners
 - preserving explicit reuse selectors such as attempt ids, proof bundle ids, derived-summary reuse, and invalidated component ids through the compatibility projection

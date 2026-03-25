@@ -8,7 +8,7 @@ import {
   readClarificationBarrier,
   readWaveAssignmentBarrier,
   readWaveDependencyBarrier,
-} from "./launcher-gates.mjs";
+} from "./gate-engine.mjs";
 import {
   isOpenCoordinationStatus,
   openClarificationLinkedRequests,
@@ -33,6 +33,7 @@ import {
 import { hashAgentPromptFingerprint } from "./context7.mjs";
 import {
   isSecurityReviewAgent,
+  resolveWaveRoleBindings,
 } from "./role-helpers.mjs";
 import {
   commandForExecutor,
@@ -121,6 +122,7 @@ export function persistedRelaunchPlanMatchesCurrentState(
   }
   const componentGate = readWaveComponentGate(waveDefinition, agentRuns, {
     laneProfile: lanePaths?.laneProfile,
+    mode: "live",
   });
   if (componentGate?.statusCode !== "shared-component-sibling-pending") {
     return true;
@@ -271,7 +273,10 @@ export function reconcileFailuresAgainstSharedComponentState(wave, agentRuns, fa
     return failures;
   }
   const summariesByAgentId = Object.fromEntries(
-    (agentRuns || []).map((runInfo) => [runInfo.agent.agentId, readRunExecutionSummary(runInfo, wave)]),
+    (agentRuns || []).map((runInfo) => [
+      runInfo.agent.agentId,
+      readRunExecutionSummary(runInfo, wave, { mode: "live" }),
+    ]),
   );
   const failureAgentIds = new Set(failures.map((failure) => failure.agentId).filter(Boolean));
   const consumedSatisfiedAgentIds = new Set();
@@ -337,13 +342,12 @@ export function hasReusableSuccessStatus(agent, statusPath, options = {}) {
   return true;
 }
 
-function isClosureAgentId(agent, lanePaths) {
-  return [
-    lanePaths.contEvalAgentId || "E0",
-    lanePaths.integrationAgentId || "A8",
-    lanePaths.documentationAgentId || "A9",
-    lanePaths.contQaAgentId || "A0",
-  ].includes(agent?.agentId) || isSecurityReviewAgent(agent);
+function isClosureAgentId(agent, lanePaths, waveDefinition = null) {
+  return (
+    resolveWaveRoleBindings(waveDefinition, lanePaths, waveDefinition?.agents).closureAgentIds.includes(
+      agent?.agentId,
+    ) || isSecurityReviewAgent(agent)
+  );
 }
 
 export function selectReusablePreCompletedAgentIds(
@@ -357,7 +361,7 @@ export function selectReusablePreCompletedAgentIds(
       .filter(
         (run) =>
           !retryOverrideClearedAgentIds.has(run.agent.agentId) &&
-          !isClosureAgentId(run.agent, lanePaths) &&
+          !isClosureAgentId(run.agent, lanePaths, wave) &&
           hasReusableSuccessStatus(run.agent, run.statusPath, {
             wave,
             derivedState,
@@ -369,9 +373,9 @@ export function selectReusablePreCompletedAgentIds(
   );
 }
 
-export function selectInitialWaveRuns(agentRuns, lanePaths) {
+export function selectInitialWaveRuns(agentRuns, lanePaths, waveDefinition = null) {
   const implementationRuns = (agentRuns || []).filter(
-    (run) => !isClosureAgentId(run?.agent, lanePaths),
+    (run) => !isClosureAgentId(run?.agent, lanePaths, waveDefinition),
   );
   return implementationRuns.length > 0 ? implementationRuns : agentRuns;
 }
@@ -560,7 +564,35 @@ function retryBarrierFromOutcomes(outcomes, failures) {
   };
 }
 
-export function resolveRelaunchRuns(agentRuns, failures, derivedState, lanePaths, waveDefinition = null) {
+function runsFromAgentIds(agentRuns, agentIds) {
+  const runsByAgentId = new Map((agentRuns || []).map((run) => [run.agent.agentId, run]));
+  return Array.from(new Set((agentIds || []).filter(Boolean)))
+    .map((agentId) => runsByAgentId.get(agentId))
+    .filter(Boolean);
+}
+
+function resolveRunsForResumePhase(agentRuns, lanePaths, resumePhase, waveDefinition = null) {
+  const roleBindings = resolveWaveRoleBindings(waveDefinition, lanePaths, waveDefinition?.agents);
+  if (resumePhase === "integrating") {
+    return runsFromAgentIds(agentRuns, [roleBindings.integrationAgentId]);
+  }
+  if (resumePhase === "security-review") {
+    return (agentRuns || []).filter((run) => isSecurityReviewAgent(run.agent));
+  }
+  if (resumePhase === "docs-closure") {
+    return runsFromAgentIds(agentRuns, [roleBindings.documentationAgentId]);
+  }
+  if (resumePhase === "cont-qa-closure") {
+    return runsFromAgentIds(agentRuns, [roleBindings.contQaAgentId]);
+  }
+  if (resumePhase === "cont-eval") {
+    return runsFromAgentIds(agentRuns, [roleBindings.contEvalAgentId]);
+  }
+  return [];
+}
+
+function resolveRelaunchRunsLegacy(agentRuns, failures, derivedState, lanePaths, waveDefinition = null) {
+  const roleBindings = resolveWaveRoleBindings(waveDefinition, lanePaths, waveDefinition?.agents);
   const runsByAgentId = new Map(agentRuns.map((run) => [run.agent.agentId, run]));
   const pendingFeedback = (derivedState?.coordinationState?.humanFeedback || []).filter((record) =>
     isOpenCoordinationStatus(record.status),
@@ -693,7 +725,7 @@ export function resolveRelaunchRuns(agentRuns, failures, derivedState, lanePaths
   }
   if (derivedState?.ledger?.phase === "docs-closure") {
     return {
-      runs: [runsByAgentId.get(lanePaths.documentationAgentId)].filter(Boolean),
+      runs: [runsByAgentId.get(roleBindings.documentationAgentId)].filter(Boolean),
       barrier: null,
     };
   }
@@ -705,19 +737,19 @@ export function resolveRelaunchRuns(agentRuns, failures, derivedState, lanePaths
   }
   if (derivedState?.ledger?.phase === "cont-eval") {
     return {
-      runs: [runsByAgentId.get(lanePaths.contEvalAgentId)].filter(Boolean),
+      runs: [runsByAgentId.get(roleBindings.contEvalAgentId)].filter(Boolean),
       barrier: null,
     };
   }
   if (derivedState?.ledger?.phase === "cont-qa-closure") {
     return {
-      runs: [runsByAgentId.get(lanePaths.contQaAgentId)].filter(Boolean),
+      runs: [runsByAgentId.get(roleBindings.contQaAgentId)].filter(Boolean),
       barrier: null,
     };
   }
   if (derivedState?.ledger?.phase === "integrating") {
     return {
-      runs: [runsByAgentId.get(lanePaths.integrationAgentId)].filter(Boolean),
+      runs: [runsByAgentId.get(roleBindings.integrationAgentId)].filter(Boolean),
       barrier: null,
     };
   }
@@ -740,6 +772,216 @@ export function resolveRelaunchRuns(agentRuns, failures, derivedState, lanePaths
     runs: agentRuns.filter((run) => failedAgentIds.has(run.agent.agentId)),
     barrier: null,
   };
+}
+
+function resolveRelaunchRunsFromWaveState(
+  agentRuns,
+  failures,
+  derivedState,
+  lanePaths,
+  waveDefinition,
+  waveState,
+) {
+  const roleBindings = resolveWaveRoleBindings(waveDefinition, lanePaths, waveDefinition?.agents);
+  const pendingFeedback = (waveState?.coordinationState?.humanFeedback || []).filter((record) =>
+    isOpenCoordinationStatus(record.status),
+  );
+  const pendingHumanEscalations = (waveState?.coordinationState?.humanEscalations || []).filter(
+    (record) => isOpenCoordinationStatus(record.status),
+  );
+  if (pendingFeedback.length > 0 || pendingHumanEscalations.length > 0) {
+    return { runs: [], barrier: null };
+  }
+
+  const nextAttemptNumber = Number(derivedState?.ledger?.attempt || 0) + 1;
+  const fallbackResolution = applyRetryFallbacks(
+    agentRuns,
+    failures,
+    lanePaths,
+    nextAttemptNumber,
+    waveDefinition,
+  );
+  const retryBarrier = retryBarrierFromOutcomes(fallbackResolution.outcomes, failures);
+  if (retryBarrier) {
+    return { runs: [], barrier: retryBarrier };
+  }
+
+  const clarificationTargets = new Set();
+  for (const record of openClarificationLinkedRequests(waveState?.coordinationState)) {
+    for (const target of record.targets || []) {
+      if (String(target).startsWith("agent:")) {
+        clarificationTargets.add(String(target).slice("agent:".length));
+      } else {
+        clarificationTargets.add(target);
+      }
+    }
+  }
+  if (clarificationTargets.size > 0) {
+    return {
+      runs: runsFromAgentIds(agentRuns, Array.from(clarificationTargets)),
+      barrier: null,
+    };
+  }
+
+  const blockingAssignments = (waveState?.capabilityAssignments || []).filter(
+    (assignment) => assignment.blocking,
+  );
+  if (blockingAssignments.length > 0) {
+    const unresolvedAssignments = blockingAssignments.filter((assignment) => !assignment.assignedAgentId);
+    if (unresolvedAssignments.length > 0) {
+      return {
+        runs: [],
+        barrier: {
+          statusCode: "helper-assignment-unresolved",
+          detail: `No matching assignee exists for helper requests (${unresolvedAssignments.map((assignment) => assignment.requestId).join(", ")}).`,
+          failures: unresolvedAssignments.map((assignment) => ({
+            agentId: null,
+            statusCode: "helper-assignment-unresolved",
+            logPath: null,
+            detail: assignment.assignmentDetail || assignment.summary || assignment.requestId,
+          })),
+        },
+      };
+    }
+    return {
+      runs: runsFromAgentIds(
+        agentRuns,
+        blockingAssignments.map((assignment) => assignment.assignedAgentId),
+      ),
+      barrier: null,
+    };
+  }
+
+  const unresolvedInboundAssignments =
+    waveState?.dependencySnapshot?.unresolvedInboundAssignments || [];
+  if (unresolvedInboundAssignments.length > 0) {
+    return {
+      runs: [],
+      barrier: {
+        statusCode: "dependency-assignment-unresolved",
+        detail: `Required inbound dependencies are not assigned (${unresolvedInboundAssignments.map((record) => record.id).join(", ")}).`,
+        failures: unresolvedInboundAssignments.map((record) => ({
+          agentId: null,
+          statusCode: "dependency-assignment-unresolved",
+          logPath: null,
+          detail: record.assignmentDetail || record.summary || record.id,
+        })),
+      },
+    };
+  }
+
+  const inboundDependencyAgentIds = new Set(
+    (waveState?.dependencySnapshot?.openInbound || [])
+      .map((record) => record.assignedAgentId)
+      .filter(Boolean),
+  );
+  if (inboundDependencyAgentIds.size > 0) {
+    return {
+      runs: runsFromAgentIds(agentRuns, Array.from(inboundDependencyAgentIds)),
+      barrier: null,
+    };
+  }
+
+  const blockerAgentIds = new Set();
+  for (const record of waveState?.coordinationState?.blockers || []) {
+    if (!isOpenCoordinationStatus(record.status)) {
+      continue;
+    }
+    blockerAgentIds.add(record.agentId);
+    for (const target of record.targets || []) {
+      if (String(target).startsWith("agent:")) {
+        blockerAgentIds.add(String(target).slice("agent:".length));
+      }
+    }
+  }
+  if (blockerAgentIds.size > 0) {
+    return {
+      runs: runsFromAgentIds(agentRuns, Array.from(blockerAgentIds)),
+      barrier: null,
+    };
+  }
+
+  const sharedComponentWaitingAgentIds = new Set(
+    (failures || [])
+      .filter((failure) => failure.statusCode === "shared-component-sibling-pending")
+      .flatMap((failure) => failure.waitingOnAgentIds || [])
+      .filter(Boolean),
+  );
+  if (sharedComponentWaitingAgentIds.size > 0) {
+    return {
+      runs: runsFromAgentIds(agentRuns, Array.from(sharedComponentWaitingAgentIds)),
+      barrier: null,
+    };
+  }
+
+  const resumePlan = buildResumePlan(waveState, {
+    waveDefinition,
+    lanePaths,
+  });
+  if (!resumePlan.canResume || resumePlan.reason === "human-request") {
+    return { runs: [], barrier: null };
+  }
+
+  const phaseRuns = resolveRunsForResumePhase(
+    agentRuns,
+    lanePaths,
+    resumePlan.resumeFromPhase,
+    waveDefinition,
+  );
+  if (phaseRuns.length > 0 && resumePlan.resumeFromPhase !== "implementation") {
+    return {
+      runs: phaseRuns,
+      barrier: null,
+    };
+  }
+
+  const retryTargetAgentIds = normalizeRetryTargets(waveState?.retryTargetSet).map(
+    (target) => target.agentId,
+  );
+  const implementationAgentIds =
+    resumePlan.invalidatedAgentIds.length > 0
+      ? resumePlan.invalidatedAgentIds
+      : retryTargetAgentIds;
+  if (implementationAgentIds.length > 0) {
+    return {
+      runs: runsFromAgentIds(agentRuns, implementationAgentIds),
+      barrier: null,
+    };
+  }
+
+  const failedAgentIds = new Set(failures.map((failure) => failure.agentId));
+  return {
+    runs: agentRuns.filter((run) => failedAgentIds.has(run.agent.agentId)),
+    barrier: null,
+  };
+}
+
+export function resolveRelaunchRuns(
+  agentRuns,
+  failures,
+  derivedState,
+  lanePaths,
+  waveDefinition = null,
+  options = {},
+) {
+  const waveState = options?.waveState || null;
+  if (!waveState) {
+    return resolveRelaunchRunsLegacy(
+      agentRuns,
+      failures,
+      derivedState,
+      lanePaths,
+      waveDefinition,
+    );
+  }
+  return resolveRelaunchRunsFromWaveState(
+    agentRuns,
+    failures,
+    derivedState,
+    lanePaths,
+    waveDefinition,
+    waveState,
+  );
 }
 
 export function preflightWavesForExecutorAvailability(waves, lanePaths) {
@@ -778,10 +1020,17 @@ function phaseFromGate(gateName) {
   switch (gateName) {
     case "implementationGate":
     case "componentGate":
-    case "contEvalGate":
+    case "helperAssignmentBarrier":
+    case "dependencyBarrier":
+    case "clarificationBarrier":
       return "implementation";
+    case "contEvalGate":
+      return "cont-eval";
+    case "securityGate":
+      return "security-review";
     case "integrationBarrier":
       return "integrating";
+    case "componentMatrixGate":
     case "documentationGate":
       return "docs-closure";
     case "contQaGate":

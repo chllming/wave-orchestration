@@ -11,24 +11,12 @@ import {
 } from "./config.mjs";
 import {
   appendOrchestratorBoardEntry,
-  buildResidentOrchestratorPrompt,
   ensureOrchestratorBoard,
   feedbackStateSignature,
   readWaveHumanFeedbackRequests,
 } from "./coordination.mjs";
 import {
-  appendCoordinationRecord,
   buildCoordinationResponseMetrics,
-  compileAgentInbox,
-  compileSharedSummary,
-  isOpenCoordinationStatus,
-  openClarificationLinkedRequests,
-  readMaterializedCoordinationState,
-  renderCoordinationBoardProjection,
-  updateSeedRecords,
-  writeCompiledInbox,
-  writeCoordinationBoardProjection,
-  writeJsonArtifact,
 } from "./coordination-store.mjs";
 import {
   applyContext7SelectionsToWave,
@@ -40,16 +28,12 @@ import {
   buildGlobalDashboardState,
   buildWaveDashboardState,
   getGlobalWaveEntry,
-  parseStructuredSignalsFromLog,
   readStatusCodeIfPresent,
   recordGlobalDashboardEvent,
   recordWaveDashboardEvent,
   refreshWaveDashboardAgentStates,
   setWaveDashboardAgent,
-  syncGlobalWaveFromWaveDashboard,
   updateWaveDashboardMessageBoard,
-  writeGlobalDashboard,
-  writeWaveDashboard,
 } from "./dashboard-state.mjs";
 import {
   DEFAULT_AGENT_LAUNCH_STAGGER_MS,
@@ -61,7 +45,6 @@ import {
   DEFAULT_MAX_RETRIES_PER_WAVE,
   DEFAULT_TIMEOUT_MINUTES,
   DEFAULT_WAVE_LANE,
-  compactSingleLine,
   parseVerdictFromText,
   readStatusRecordIfPresent,
   REPO_ROOT,
@@ -131,8 +114,6 @@ import {
   validateSecuritySummary,
   writeAgentExecutionSummary,
 } from "./agent-state.mjs";
-import { buildDocsQueue, readDocsQueue, writeDocsQueue } from "./docs-queue.mjs";
-import { deriveWaveLedger, readWaveLedger, writeWaveLedger } from "./ledger.mjs";
 import {
   augmentSummaryWithProofRegistry,
   readWaveProofRegistry,
@@ -140,41 +121,23 @@ import {
 } from "./proof-registry.mjs";
 import {
   clearWaveRetryOverride,
-  readWaveRelaunchPlanSnapshot,
   readWaveRetryOverride,
-  resolveRetryOverrideRuns,
-  waveRelaunchPlanPath,
 } from "./retry-control.mjs";
 import { appendWaveControlEvent, readControlPlaneEvents } from "./control-plane.mjs";
 import { materializeContradictionsFromControlPlaneEvents } from "./contradiction-entity.mjs";
-import { buildQualityMetrics, writeTraceBundle } from "./traces.mjs";
 import { flushWaveControlQueue } from "./wave-control-client.mjs";
-import { reduceWaveState } from "./wave-state-reducer.mjs";
-import { triageClarificationRequests } from "./clarification-triage.mjs";
 import { readProjectProfile, resolveDefaultTerminalSurface } from "./project-profile.mjs";
 import {
   isContEvalImplementationOwningAgent,
   isContEvalReportOnlyAgent,
+  isClosureRoleAgentId,
   isSecurityReviewAgent,
+  resolveWaveRoleBindings,
   resolveSecurityReviewReportPath,
 } from "./role-helpers.mjs";
 import {
   summarizeResolvedSkills,
 } from "./skills.mjs";
-import {
-  buildDependencySnapshot,
-  buildRequestAssignments,
-  renderDependencySnapshotMarkdown,
-  syncAssignmentRecords,
-  writeDependencySnapshotMarkdown,
-} from "./routing-state.mjs";
-import {
-  readWaveStateSnapshot,
-  writeAssignmentSnapshot,
-  writeDependencySnapshot,
-  writeRelaunchPlan,
-  writeWaveStateSnapshot,
-} from "./artifact-schemas.mjs";
 import {
   collectUnexpectedSessionFailures as collectUnexpectedSessionFailuresImpl,
   launchAgentSession as launchAgentSessionImpl,
@@ -184,9 +147,7 @@ import {
 import {
   readWaveInfraGate as readWaveInfraGateImpl,
   runClosureSweepPhase as runClosureSweepPhaseImpl,
-} from "./launcher-closure.mjs";
-
-// --- Re-exports from launcher-gates.mjs ---
+} from "./closure-engine.mjs";
 import {
   materializeAgentExecutionSummaryForRun,
   readRunExecutionSummary,
@@ -207,71 +168,28 @@ import {
   readWaveAssignmentBarrier,
   readWaveDependencyBarrier,
   buildGateSnapshot as buildGateSnapshotImpl,
-} from "./launcher-gates.mjs";
-
-export {
-  readWaveContQaGate,
-  readWaveContEvalGate,
-  readWaveEvaluatorGate,
-  readWaveImplementationGate,
-  readWaveComponentGate,
-  readWaveComponentMatrixGate,
-  readWaveDocumentationGate,
-  readWaveSecurityGate,
-  readWaveIntegrationGate,
-  readWaveIntegrationBarrier,
-  readClarificationBarrier,
-  readWaveAssignmentBarrier,
-  readWaveDependencyBarrier,
-};
-
-// --- Re-exports from launcher-derived-state.mjs ---
+} from "./gate-engine.mjs";
 import {
   waveAssignmentsPath,
   waveDependencySnapshotPath,
-  writeWaveDerivedState,
+  buildWaveDerivedState,
   applyDerivedStateToDashboard,
-  buildWaveSecuritySummary,
-  buildWaveIntegrationSummary,
-} from "./launcher-derived-state.mjs";
-
-export {
-  buildWaveSecuritySummary,
-  buildWaveIntegrationSummary,
-};
-
-// --- Re-exports from launcher-retry.mjs ---
+} from "./derived-state-engine.mjs";
 import {
-  buildResumePlan,
   readWaveRelaunchPlan,
-  writeWaveRelaunchPlan,
   clearWaveRelaunchPlan,
   resetPersistedWaveLaunchState,
   persistedRelaunchPlanMatchesCurrentState,
   resolveSharedComponentContinuationRuns,
-  relaunchReasonBuckets,
   applySharedComponentWaitStateToDashboard,
   reconcileFailuresAgainstSharedComponentState,
   hasReusableSuccessStatus,
   selectReusablePreCompletedAgentIds,
   selectInitialWaveRuns,
   resolveRelaunchRuns,
-  applyPersistedRelaunchPlan,
   executorFallbackChain,
   preflightWavesForExecutorAvailability,
-} from "./launcher-retry.mjs";
-
-export {
-  resetPersistedWaveLaunchState,
-  persistedRelaunchPlanMatchesCurrentState,
-  resolveSharedComponentContinuationRuns,
-  hasReusableSuccessStatus,
-  selectReusablePreCompletedAgentIds,
-  selectInitialWaveRuns,
-  resolveRelaunchRuns,
-};
-
-// --- Re-exports from launcher-supervisor.mjs ---
+} from "./retry-engine.mjs";
 import {
   markLauncherFailed,
   acquireLauncherLock,
@@ -286,50 +204,25 @@ import {
   launchWaveDashboardSession,
   cleanupLaneTmuxSessions,
   pruneDryRunExecutorPreviewDirs,
+  recordAttemptState,
+  recordWaveRunState,
   runTmux,
-} from "./launcher-supervisor.mjs";
-
-export {
-  markLauncherFailed,
-  acquireLauncherLock,
-  releaseLauncherLock,
-  reconcileStaleLauncherArtifacts,
-  collectUnexpectedSessionFailures,
-};
-
-// --- Original re-exports that stay ---
-export { CODEX_SANDBOX_MODES, DEFAULT_CODEX_SANDBOX_MODE, normalizeCodexSandboxMode, buildCodexExecInvocation };
-
-export function formatReconcileBlockedWaveLine(blockedWave) {
-  const parts = Array.isArray(blockedWave?.reasons)
-    ? blockedWave.reasons
-        .map((reason) => {
-          const code = compactSingleLine(reason?.code || "", 80);
-          const detail = compactSingleLine(reason?.detail || "", 240);
-          return code && detail ? `${code}=${detail}` : "";
-        })
-        .filter(Boolean)
-    : [];
-  return `[reconcile] wave ${blockedWave?.wave ?? "unknown"} not reconstructable: ${
-    parts.join("; ") || "unknown reason"
-  }`;
-}
-
-export function formatReconcilePreservedWaveLine(preservedWave) {
-  const parts = Array.isArray(preservedWave?.reasons)
-    ? preservedWave.reasons
-        .map((reason) => {
-          const code = compactSingleLine(reason?.code || "", 80);
-          const detail = compactSingleLine(reason?.detail || "", 240);
-          return code && detail ? `${code}=${detail}` : "";
-        })
-        .filter(Boolean)
-    : [];
-  const previousState = compactSingleLine(preservedWave?.previousState || "completed", 80);
-  return `[reconcile] wave ${preservedWave?.wave ?? "unknown"} preserved as ${previousState}: ${
-    parts.join("; ") || "unknown reason"
-  }`;
-}
+} from "./session-supervisor.mjs";
+import {
+  planInitialWaveAttempt,
+  planRetryWaveAttempt,
+} from "./implementation-engine.mjs";
+import {
+  writeDashboardProjections,
+  writeWaveDerivedProjections,
+  writeWaveAttemptTraceProjection,
+  writeWaveRelaunchProjection,
+} from "./projection-writer.mjs";
+import {
+  formatReconcileBlockedWaveLine,
+  formatReconcilePreservedWaveLine,
+} from "./reconcile-format.mjs";
+import { computeReducerSnapshot } from "./reducer-snapshot.mjs";
 
 function printUsage(lanePaths, terminalSurface) {
   console.log(`Usage: pnpm exec wave launch [options]
@@ -548,9 +441,9 @@ function parseArgs(argv) {
   return { help: false, lanePaths, options };
 }
 
-// --- Wrappers that bind local scope ---
+// --- Local wrappers that bind engine calls to launcher scope ---
 
-export async function runClosureSweepPhase({
+async function runClosureSweepPhase({
   lanePaths,
   wave,
   closureRuns,
@@ -590,15 +483,91 @@ export async function runClosureSweepPhase({
   });
 }
 
-export function readWaveInfraGate(agentRuns) {
+function readWaveInfraGate(agentRuns) {
   return readWaveInfraGateImpl(agentRuns);
 }
 
-export function buildGateSnapshot(params) {
+function buildGateSnapshot(params) {
   return buildGateSnapshotImpl({
     ...params,
     readWaveInfraGateFn: readWaveInfraGate,
   });
+}
+
+function waveGateLabel(gateName) {
+  switch (gateName) {
+    case "implementationGate":
+      return "Implementation exit contract";
+    case "componentGate":
+      return "Component promotion";
+    case "helperAssignmentBarrier":
+      return "Helper assignment barrier";
+    case "dependencyBarrier":
+      return "Dependency barrier";
+    case "contEvalGate":
+      return "cont-EVAL";
+    case "securityGate":
+      return "Security review";
+    case "integrationBarrier":
+      return "Integration gate";
+    case "documentationGate":
+      return "Documentation closure";
+    case "componentMatrixGate":
+      return "Component matrix update";
+    case "contQaGate":
+      return "cont-QA gate";
+    case "infraGate":
+      return "Infra gate";
+    case "clarificationBarrier":
+      return "Clarification barrier";
+    default:
+      return "Wave gate";
+  }
+}
+
+function waveGateActionRequested(gateName, lanePaths) {
+  switch (gateName) {
+    case "implementationGate":
+      return `Lane ${lanePaths.lane} owners should resolve the implementation contract gap before wave progression.`;
+    case "componentGate":
+      return `Lane ${lanePaths.lane} owners should close the component promotion gap before wave progression.`;
+    case "helperAssignmentBarrier":
+      return `Lane ${lanePaths.lane} owners should resolve helper assignments before wave progression.`;
+    case "dependencyBarrier":
+      return `Lane ${lanePaths.lane} owners should resolve required dependencies before wave progression.`;
+    case "contEvalGate":
+      return `Lane ${lanePaths.lane} owners should resolve cont-EVAL tuning gaps before integration closure.`;
+    case "securityGate":
+      return `Lane ${lanePaths.lane} owners should resolve blocked security findings or missing approvals before integration closure.`;
+    case "integrationBarrier":
+      return `Lane ${lanePaths.lane} owners should resolve integration contradictions or blockers before documentation and cont-QA closure.`;
+    case "documentationGate":
+      return `Lane ${lanePaths.lane} owners should resolve the shared-plan closure state before wave progression.`;
+    case "componentMatrixGate":
+      return `Lane ${lanePaths.lane} owners should update the component cutover matrix current levels before wave progression.`;
+    case "contQaGate":
+      return `Lane ${lanePaths.lane} owners should resolve the cont-QA gate before wave progression.`;
+    case "infraGate":
+      return `Lane ${lanePaths.lane} owners should resolve the infra gate before wave progression.`;
+    case "clarificationBarrier":
+      return `Lane ${lanePaths.lane} owners should resolve open clarification chains before wave progression.`;
+    default:
+      return `Lane ${lanePaths.lane} owners should resolve the failing gate before wave progression.`;
+  }
+}
+
+function buildFailureFromGate(gateName, gate, fallbackLogPath) {
+  return {
+    agentId: gate?.agentId || null,
+    statusCode: gate?.statusCode || gateName,
+    logPath: gate?.logPath || fallbackLogPath,
+    detail: gate?.detail || null,
+    componentId: gate?.componentId || null,
+    ownerAgentIds: gate?.ownerAgentIds || [],
+    satisfiedAgentIds: gate?.satisfiedAgentIds || [],
+    waitingOnAgentIds: gate?.waitingOnAgentIds || [],
+    failedOwnContractAgentIds: gate?.failedOwnContractAgentIds || [],
+  };
 }
 
 // --- Main entry point ---
@@ -699,16 +668,17 @@ export async function runLauncherCli(argv) {
         }),
       )
       .map((wave) =>
-        ({
-          ...applyContext7SelectionsToWave(wave, {
+        {
+          const waveWithContext7 = applyContext7SelectionsToWave(wave, {
             lane: lanePaths.lane,
             bundleIndex: context7BundleIndex,
-          }),
-          contQaAgentId: lanePaths.contQaAgentId,
-          contEvalAgentId: lanePaths.contEvalAgentId,
-          integrationAgentId: lanePaths.integrationAgentId,
-          documentationAgentId: lanePaths.documentationAgentId,
-        }),
+          });
+          return {
+            ...waveWithContext7,
+            lane: lanePaths.lane,
+            ...resolveWaveRoleBindings(waveWithContext7, lanePaths, waveWithContext7.agents),
+          };
+        },
       )
       .map((wave) => validateWaveDefinition(wave, { laneProfile: lanePaths.laneProfile }));
     const reconciliation = reconcileRunStateFromStatusFiles(
@@ -823,7 +793,7 @@ export async function runLauncherCli(argv) {
     if (options.dryRun) {
       pruneDryRunExecutorPreviewDirs(lanePaths, allWaves);
       for (const wave of filteredWaves) {
-        const derivedState = writeWaveDerivedState({
+        const derivedState = buildWaveDerivedState({
           lanePaths,
           wave,
           summariesByAgentId: {},
@@ -831,10 +801,14 @@ export async function runLauncherCli(argv) {
           attempt: 0,
           orchestratorId: options.orchestratorId,
         });
+        writeWaveDerivedProjections({ lanePaths, wave, derivedState });
         const agentRuns = wave.agents.map((agent) => {
           const safeName = `wave-${wave.wave}-${agent.slug}`;
           return {
             agent,
+            lane: lanePaths.lane,
+            wave: wave.wave,
+            resultsDir: lanePaths.resultsDir,
             sessionName: `dry-run-wave-${wave.wave}-${agent.slug}`,
             promptPath: path.join(lanePaths.promptsDir, `${safeName}.prompt.md`),
             logPath: path.join(lanePaths.logsDir, `${safeName}.log`),
@@ -892,7 +866,7 @@ export async function runLauncherCli(argv) {
       manifestOut: options.manifestOut,
       feedbackRequestsDir: lanePaths.feedbackRequestsDir,
     });
-    writeGlobalDashboard(lanePaths.globalDashboardPath, globalDashboard);
+    writeDashboardProjections({ lanePaths, globalDashboard });
 
     if (terminalRegistryEnabled && !options.keepTerminals) {
       const removed = removeLaneTemporaryTerminalEntries(lanePaths.terminalsPath, lanePaths);
@@ -911,7 +885,7 @@ export async function runLauncherCli(argv) {
         });
       }
     }
-    writeGlobalDashboard(lanePaths.globalDashboardPath, globalDashboard);
+    writeDashboardProjections({ lanePaths, globalDashboard });
 
     if (options.dashboard) {
       globalDashboardTerminalEntry = createGlobalDashboardTerminalEntry(
@@ -955,10 +929,10 @@ export async function runLauncherCli(argv) {
         status: "running",
         details: `agents=${wave.agents.map((agent) => agent.agentId).join(", ")}; wave_file=${wave.file}`,
       });
-      writeGlobalDashboard(lanePaths.globalDashboardPath, globalDashboard);
+      writeDashboardProjections({ lanePaths, globalDashboard });
 
       const runTag = crypto.randomBytes(3).toString("hex");
-      let derivedState = writeWaveDerivedState({
+      let derivedState = buildWaveDerivedState({
         lanePaths,
         wave,
         summariesByAgentId: {},
@@ -966,6 +940,7 @@ export async function runLauncherCli(argv) {
         attempt: 0,
         orchestratorId: options.orchestratorId,
       });
+      writeWaveDerivedProjections({ lanePaths, wave, derivedState });
       const messageBoardPath = derivedState.messageBoardPath;
       console.log(`Wave message board: ${path.relative(REPO_ROOT, messageBoardPath)}`);
 
@@ -977,12 +952,15 @@ export async function runLauncherCli(argv) {
       const residentOrchestratorState = { closed: false };
 
       const flushDashboards = () => {
-        if (!dashboardState) {
+        if (!dashboardState && !globalDashboard) {
           return;
         }
-        writeWaveDashboard(dashboardPath, dashboardState);
-        syncGlobalWaveFromWaveDashboard(globalDashboard, dashboardState);
-        writeGlobalDashboard(lanePaths.globalDashboardPath, globalDashboard);
+        writeDashboardProjections({
+          lanePaths,
+          globalDashboard,
+          dashboardState,
+          dashboardPath,
+        });
       };
 
       const recordCombinedEvent = ({ level = "info", agentId = null, message }) => {
@@ -1030,6 +1008,9 @@ export async function runLauncherCli(argv) {
           }
           return {
             agent,
+            lane: lanePaths.lane,
+            wave: wave.wave,
+            resultsDir: lanePaths.resultsDir,
             sessionName,
             promptPath: path.join(lanePaths.promptsDir, `${safeName}.prompt.md`),
             logPath: path.join(lanePaths.logsDir, `${safeName}.log`),
@@ -1048,6 +1029,7 @@ export async function runLauncherCli(argv) {
             inboxText: derivedState.inboxesByAgentId[agent.agentId]?.text || "",
           };
         });
+        const roleBindings = resolveWaveRoleBindings(wave, lanePaths, wave.agents);
 
         const refreshDerivedState = (attemptNumber = 0) => {
           const proofRegistry = readWaveProofRegistry(lanePaths, wave.wave);
@@ -1066,7 +1048,7 @@ export async function runLauncherCli(argv) {
             agentIds: agentRuns.map((run) => run.agent.agentId),
             orchestratorId: options.orchestratorId,
           });
-          derivedState = writeWaveDerivedState({
+          derivedState = buildWaveDerivedState({
             lanePaths,
             wave,
             agentRuns,
@@ -1075,6 +1057,7 @@ export async function runLauncherCli(argv) {
             attempt: attemptNumber,
             orchestratorId: options.orchestratorId,
           });
+          writeWaveDerivedProjections({ lanePaths, wave, derivedState });
           const controlPlaneLogPath = path.join(
             lanePaths.controlPlaneDir,
             `wave-${wave.wave}.jsonl`,
@@ -1096,6 +1079,20 @@ export async function runLauncherCli(argv) {
           }
           applyDerivedStateToDashboard(dashboardState, derivedState);
           return derivedState;
+        };
+
+        let latestReducerSnapshot = null;
+        const refreshReducerSnapshot = (attemptNumber = 0, extra = {}) => {
+          latestReducerSnapshot = computeReducerSnapshot({
+            lanePaths,
+            wave,
+            agentRuns,
+            derivedState,
+            attempt: attemptNumber,
+            options,
+            ...extra,
+          });
+          return latestReducerSnapshot;
         };
 
         refreshDerivedState(0);
@@ -1187,12 +1184,16 @@ export async function runLauncherCli(argv) {
         };
 
         const proofRegistryForReuse = readWaveProofRegistry(lanePaths, wave.wave);
-        const preCompletedAgentIds = selectReusablePreCompletedAgentIds(agentRuns, lanePaths, {
-          retryOverride,
+        const initialAttemptPlan = planInitialWaveAttempt({
+          agentRuns,
+          lanePaths,
           wave,
           derivedState,
           proofRegistry: proofRegistryForReuse,
+          retryOverride,
+          persistedRelaunchPlan,
         });
+        const preCompletedAgentIds = initialAttemptPlan.preCompletedAgentIds;
         for (const agentId of preCompletedAgentIds) {
           setWaveDashboardAgent(dashboardState, agentId, {
             state: "completed",
@@ -1201,13 +1202,7 @@ export async function runLauncherCli(argv) {
             detail: "Pre-existing status=0",
           });
         }
-        const staleCompletedAgentIds = agentRuns
-          .filter(
-            (run) =>
-              !preCompletedAgentIds.has(run.agent.agentId) &&
-              readStatusCodeIfPresent(run.statusPath) === 0,
-          )
-          .map((run) => run.agent.agentId);
+        const staleCompletedAgentIds = initialAttemptPlan.staleCompletedAgentIds;
         for (const agentId of staleCompletedAgentIds) {
           setWaveDashboardAgent(dashboardState, agentId, {
             state: "pending",
@@ -1283,26 +1278,11 @@ export async function runLauncherCli(argv) {
           }
         }
 
-        const availableRuns = agentRuns.filter((run) => !preCompletedAgentIds.has(run.agent.agentId));
-        if (
-          persistedRelaunchPlan &&
-          !persistedRelaunchPlanMatchesCurrentState(
-            agentRuns,
-            persistedRelaunchPlan,
-            lanePaths,
-            wave,
-          )
-        ) {
+        if (initialAttemptPlan.shouldClearPersistedRelaunchPlan) {
           clearWaveRelaunchPlan(lanePaths, wave.wave);
           persistedRelaunchPlan = null;
         }
-        const persistedRuns = applyPersistedRelaunchPlan(
-          availableRuns,
-          persistedRelaunchPlan,
-          lanePaths,
-          wave,
-        );
-        const overrideRuns = resolveRetryOverrideRuns(availableRuns, retryOverride, lanePaths, wave);
+        const overrideRuns = initialAttemptPlan.overrideResolution;
         if (overrideRuns.unknownAgentIds.length > 0) {
           appendCoordination({
             event: "retry_override_invalid",
@@ -1315,13 +1295,8 @@ export async function runLauncherCli(argv) {
           clearWaveRetryOverride(lanePaths, wave.wave);
           retryOverride = null;
         }
-        let runsToLaunch =
-          overrideRuns.unknownAgentIds.length === 0 && overrideRuns.runs.length > 0
-            ? overrideRuns.runs
-            : persistedRuns.length > 0
-              ? persistedRuns
-              : selectInitialWaveRuns(availableRuns, lanePaths);
-        if (overrideRuns.runs.length > 0) {
+        let runsToLaunch = initialAttemptPlan.selectedRuns;
+        if (initialAttemptPlan.source === "override" && overrideRuns.runs.length > 0) {
           appendCoordination({
             event: "retry_override_applied",
             waves: [wave.wave],
@@ -1338,35 +1313,9 @@ export async function runLauncherCli(argv) {
         let traceAttempt = 1;
         let completionGateSnapshot = null;
         let completionTraceDir = null;
-        const recordAttemptState = (attemptNumber, state, data = {}) =>
-          appendWaveControlEvent(lanePaths, wave.wave, {
-            entityType: "attempt",
-            entityId: `wave-${wave.wave}-attempt-${attemptNumber}`,
-            action: state,
-            source: "launcher",
-            actor: "launcher",
-            data: {
-              attemptId: `wave-${wave.wave}-attempt-${attemptNumber}`,
-              attemptNumber,
-              state,
-              selectedAgentIds: data.selectedAgentIds || [],
-              detail: data.detail || null,
-              updatedAt: toIsoTimestamp(),
-              ...(data.createdAt ? { createdAt: data.createdAt } : {}),
-            },
-          });
-        appendWaveControlEvent(lanePaths, wave.wave, {
-          entityType: "wave_run",
-          entityId: `wave-${wave.wave}`,
-          action: "started",
-          source: "launcher",
-          actor: "launcher",
-          data: {
-            waveId: `wave-${wave.wave}`,
-            waveNumber: wave.wave,
-            agentIds: wave.agents.map((agent) => agent.agentId),
-            runVariant: lanePaths.runVariant || "live",
-          },
+        recordWaveRunState(lanePaths, wave.wave, "started", {
+          agentIds: wave.agents.map((agent) => agent.agentId),
+          runVariant: lanePaths.runVariant || "live",
         });
 
         while (attempt <= options.maxRetriesPerWave + 1) {
@@ -1379,36 +1328,19 @@ export async function runLauncherCli(argv) {
           recordCombinedEvent({
             message: `Attempt ${attempt}/${options.maxRetriesPerWave + 1}; launching agents: ${runsToLaunch.map((run) => run.agent.agentId).join(", ") || "none"}`,
           });
-          recordAttemptState(attempt, "running", {
+          recordAttemptState(lanePaths, wave.wave, attempt, "running", {
             selectedAgentIds: runsToLaunch.map((run) => run.agent.agentId),
             detail: `Launching ${runsToLaunch.map((run) => run.agent.agentId).join(", ") || "no"} agents.`,
             createdAt: toIsoTimestamp(),
           });
 
           const launchedImplementationRuns = runsToLaunch.filter(
-            (run) =>
-              ![
-                lanePaths.contEvalAgentId,
-                lanePaths.contQaAgentId,
-                lanePaths.integrationAgentId,
-                lanePaths.documentationAgentId,
-              ].includes(
-                run.agent.agentId,
-              ),
+            (run) => !isClosureRoleAgentId(run.agent.agentId, roleBindings),
           );
           const closureOnlyRetry =
             runsToLaunch.length > 0 &&
             launchedImplementationRuns.length === 0 &&
-            runsToLaunch.every((run) =>
-              [
-                lanePaths.contEvalAgentId,
-                lanePaths.contQaAgentId,
-                lanePaths.integrationAgentId,
-                lanePaths.documentationAgentId,
-              ].includes(
-                run.agent.agentId,
-              ),
-            );
+            runsToLaunch.every((run) => isClosureRoleAgentId(run.agent.agentId, roleBindings));
 
           let failures = [];
           let timedOut = false;
@@ -1463,6 +1395,11 @@ export async function runLauncherCli(argv) {
                 agentRateLimitBaseDelaySeconds: options.agentRateLimitBaseDelaySeconds,
                 agentRateLimitMaxDelaySeconds: options.agentRateLimitMaxDelaySeconds,
                 context7Enabled: options.context7Enabled,
+                attempt,
+                controlPlane: {
+                  waveNumber: wave.wave,
+                  attempt,
+                },
               });
               runInfo.lastLaunchAttempt = attempt;
               runInfo.lastPromptHash = launchResult?.promptHash || null;
@@ -1473,23 +1410,6 @@ export async function runLauncherCli(argv) {
               setWaveDashboardAgent(dashboardState, runInfo.agent.agentId, {
                 state: "running",
                 detail: "Session launched",
-              });
-              appendWaveControlEvent(lanePaths, wave.wave, {
-                entityType: "agent_run",
-                entityId: `wave-${wave.wave}-attempt-${attempt}-agent-${runInfo.agent.agentId}`,
-                action: "started",
-                source: "launcher",
-                actor: runInfo.agent.agentId,
-                attempt,
-                data: {
-                  agentId: runInfo.agent.agentId,
-                  attemptNumber: attempt,
-                  sessionName: runInfo.sessionName,
-                  executorId: runInfo.lastExecutorId,
-                  promptPath: path.relative(REPO_ROOT, runInfo.promptPath),
-                  statusPath: path.relative(REPO_ROOT, runInfo.statusPath),
-                  logPath: path.relative(REPO_ROOT, runInfo.logPath),
-                },
               });
               recordCombinedEvent({
                 agentId: runInfo.agent.agentId,
@@ -1551,34 +1471,18 @@ export async function runLauncherCli(argv) {
                   flushDashboards();
                 }
               },
+              {
+                controlPlane: {
+                  waveNumber: wave.wave,
+                  attempt,
+                },
+              },
             );
             failures = waitResult.failures;
             timedOut = waitResult.timedOut;
           }
 
           materializeAgentExecutionSummaries(wave, agentRuns);
-          for (const runInfo of runsToLaunch) {
-            const statusRecord = readStatusRecordIfPresent(runInfo.statusPath);
-            const action = Number(statusRecord?.code) === 0 ? "completed" : "failed";
-            appendWaveControlEvent(lanePaths, wave.wave, {
-              entityType: "agent_run",
-              entityId: `wave-${wave.wave}-attempt-${attempt}-agent-${runInfo.agent.agentId}`,
-              action,
-              source: "launcher",
-              actor: runInfo.agent.agentId,
-              attempt,
-              data: {
-                agentId: runInfo.agent.agentId,
-                attemptNumber: attempt,
-                exitCode: statusRecord?.code ?? null,
-                completedAt: statusRecord?.completedAt || null,
-                promptHash: statusRecord?.promptHash || runInfo.lastPromptHash || null,
-                executorId: runInfo.lastExecutorId || null,
-                logPath: path.relative(REPO_ROOT, runInfo.logPath),
-                statusPath: path.relative(REPO_ROOT, runInfo.statusPath),
-              },
-            });
-          }
           refreshDerivedState(attempt);
           lastLiveCoordinationRefreshAt = Date.now();
           emitCoordinationAlertEvents(derivedState);
@@ -1627,6 +1531,7 @@ export async function runLauncherCli(argv) {
             } else {
               const componentGate = readWaveComponentGate(wave, agentRuns, {
                 laneProfile: lanePaths.laneProfile,
+                mode: "live",
               });
               if (!componentGate.ok) {
                 if (componentGate.statusCode === "shared-component-sibling-pending") {
@@ -1658,8 +1563,13 @@ export async function runLauncherCli(argv) {
                   actionRequested: `Lane ${lanePaths.lane} owners should close the component promotion gap before wave progression.`,
                 });
               } else if (launchedImplementationRuns.length > 0) {
-                const helperAssignmentBarrier = readWaveAssignmentBarrier(derivedState);
-                const dependencyBarrier = readWaveDependencyBarrier(derivedState);
+                const reducerDecision = refreshReducerSnapshot(attempt);
+                const helperAssignmentBarrier =
+                  reducerDecision?.reducerState?.gateSnapshot?.helperAssignmentBarrier ||
+                  readWaveAssignmentBarrier(derivedState);
+                const dependencyBarrier =
+                  reducerDecision?.reducerState?.gateSnapshot?.dependencyBarrier ||
+                  readWaveDependencyBarrier(derivedState);
                 if (!helperAssignmentBarrier.ok) {
                   failures = [
                     {
@@ -1708,14 +1618,7 @@ export async function runLauncherCli(argv) {
                     lanePaths,
                     wave,
                     closureRuns: agentRuns.filter((run) =>
-                      [
-                        lanePaths.contEvalAgentId,
-                        lanePaths.contQaAgentId,
-                        lanePaths.integrationAgentId,
-                        lanePaths.documentationAgentId,
-                      ].includes(
-                        run.agent.agentId,
-                      ),
+                      isClosureRoleAgentId(run.agent.agentId, roleBindings),
                     ),
                     coordinationLogPath: derivedState.coordinationLogPath,
                     refreshDerivedState,
@@ -1740,7 +1643,10 @@ export async function runLauncherCli(argv) {
           }
 
           if (failures.length === 0) {
-            const helperAssignmentBarrier = readWaveAssignmentBarrier(derivedState);
+            const reducerDecision = refreshReducerSnapshot(attempt);
+            const helperAssignmentBarrier =
+              reducerDecision?.reducerState?.gateSnapshot?.helperAssignmentBarrier ||
+              readWaveAssignmentBarrier(derivedState);
             if (!helperAssignmentBarrier.ok) {
               failures = [
                 {
@@ -1765,7 +1671,10 @@ export async function runLauncherCli(argv) {
           }
 
           if (failures.length === 0) {
-            const dependencyBarrier = readWaveDependencyBarrier(derivedState);
+            const reducerDecision = refreshReducerSnapshot(attempt);
+            const dependencyBarrier =
+              reducerDecision?.reducerState?.gateSnapshot?.dependencyBarrier ||
+              readWaveDependencyBarrier(derivedState);
             if (!dependencyBarrier.ok) {
               failures = [
                 {
@@ -1790,140 +1699,44 @@ export async function runLauncherCli(argv) {
           }
 
           if (failures.length === 0) {
-            const contEvalGate = readWaveContEvalGate(wave, agentRuns, {
-              contEvalAgentId: lanePaths.contEvalAgentId,
-              mode: "live",
-              evalTargets: wave.evalTargets,
-              benchmarkCatalogPath: lanePaths.laneProfile?.paths?.benchmarkCatalogPath,
-            });
-            if (!contEvalGate.ok) {
+            const reducerDecision = refreshReducerSnapshot(attempt);
+            const authoritativeGateSnapshot = reducerDecision?.reducerState?.gateSnapshot;
+            completionGateSnapshot = authoritativeGateSnapshot;
+            const failingGateName = authoritativeGateSnapshot?.overall?.ok === false
+              ? authoritativeGateSnapshot.overall.gate
+              : null;
+            const failingGate =
+              failingGateName && authoritativeGateSnapshot
+                ? authoritativeGateSnapshot[failingGateName]
+                : null;
+            if (failingGateName && failingGate) {
+              if (
+                failingGateName === "componentGate" &&
+                failingGate.statusCode === "shared-component-sibling-pending"
+              ) {
+                applySharedComponentWaitStateToDashboard(failingGate, dashboardState);
+              }
               failures = [
-                {
-                  agentId: contEvalGate.agentId,
-                  statusCode: contEvalGate.statusCode,
-                  logPath: contEvalGate.logPath || path.relative(REPO_ROOT, messageBoardPath),
-                },
+                buildFailureFromGate(
+                  failingGateName,
+                  failingGate,
+                  path.relative(REPO_ROOT, messageBoardPath),
+                ),
               ];
               recordCombinedEvent({
                 level: "error",
-                agentId: contEvalGate.agentId,
-                message: `cont-EVAL blocked wave ${wave.wave}: ${contEvalGate.detail}`,
+                agentId: failingGate.agentId || null,
+                message: `${waveGateLabel(failingGateName)} blocked wave ${wave.wave}: ${failingGate.detail}`,
               });
               appendCoordination({
                 event: "wave_gate_blocked",
                 waves: [wave.wave],
                 status: "blocked",
-                details: `agent=${contEvalGate.agentId}; reason=${contEvalGate.statusCode}; ${contEvalGate.detail}`,
-                actionRequested: `Lane ${lanePaths.lane} owners should resolve cont-EVAL tuning gaps before integration closure.`,
+                details: `${failingGate.componentId ? `component=${failingGate.componentId}; ` : ""}${failingGate.agentId ? `agent=${failingGate.agentId}; ` : ""}reason=${failingGate.statusCode}; ${failingGate.detail}`,
+                actionRequested: waveGateActionRequested(failingGateName, lanePaths),
               });
-            }
-          }
-
-          if (failures.length === 0) {
-            const integrationGate = readWaveIntegrationGate(wave, agentRuns, {
-              integrationAgentId: lanePaths.integrationAgentId,
-              requireIntegrationStewardFromWave: lanePaths.requireIntegrationStewardFromWave,
-            });
-            if (!integrationGate.ok) {
-              failures = [
-                {
-                  agentId: integrationGate.agentId,
-                  statusCode: integrationGate.statusCode,
-                  logPath: integrationGate.logPath || path.relative(REPO_ROOT, messageBoardPath),
-                },
-              ];
-              recordCombinedEvent({
-                level: "error",
-                agentId: integrationGate.agentId,
-                message: `Integration gate blocked wave ${wave.wave}: ${integrationGate.detail}`,
-              });
-              appendCoordination({
-                event: "wave_gate_blocked",
-                waves: [wave.wave],
-                status: "blocked",
-                details: `agent=${integrationGate.agentId}; reason=${integrationGate.statusCode}; ${integrationGate.detail}`,
-                actionRequested: `Lane ${lanePaths.lane} owners should resolve integration contradictions or blockers before documentation and cont-QA closure.`,
-              });
-            }
-          }
-
-          if (failures.length === 0) {
-            const documentationGate = readWaveDocumentationGate(wave, agentRuns);
-            if (!documentationGate.ok) {
-              failures = [
-                {
-                  agentId: documentationGate.agentId,
-                  statusCode: documentationGate.statusCode,
-                  logPath: documentationGate.logPath || path.relative(REPO_ROOT, messageBoardPath),
-                },
-              ];
-              recordCombinedEvent({
-                level: "error",
-                agentId: documentationGate.agentId,
-                message: `Documentation closure blocked wave ${wave.wave}: ${documentationGate.detail}`,
-              });
-              appendCoordination({
-                event: "wave_gate_blocked",
-                waves: [wave.wave],
-                status: "blocked",
-                details: `agent=${documentationGate.agentId}; reason=${documentationGate.statusCode}; ${documentationGate.detail}`,
-                actionRequested: `Lane ${lanePaths.lane} owners should resolve the shared-plan closure state before wave progression.`,
-              });
-            }
-          }
-
-          if (failures.length === 0) {
-            const componentMatrixGate = readWaveComponentMatrixGate(wave, agentRuns, {
-              laneProfile: lanePaths.laneProfile,
-              documentationAgentId: lanePaths.documentationAgentId,
-            });
-            if (!componentMatrixGate.ok) {
-              failures = [
-                {
-                  agentId: componentMatrixGate.agentId,
-                  statusCode: componentMatrixGate.statusCode,
-                  logPath:
-                    componentMatrixGate.logPath || path.relative(REPO_ROOT, messageBoardPath),
-                },
-              ];
-              recordCombinedEvent({
-                level: "error",
-                agentId: componentMatrixGate.agentId,
-                message: `Component matrix update blocked wave ${wave.wave}: ${componentMatrixGate.detail}`,
-              });
-              appendCoordination({
-                event: "wave_gate_blocked",
-                waves: [wave.wave],
-                status: "blocked",
-                details: `component=${componentMatrixGate.componentId || "unknown"}; reason=${componentMatrixGate.statusCode}; ${componentMatrixGate.detail}`,
-                actionRequested: `Lane ${lanePaths.lane} owners should update the component cutover matrix current levels before wave progression.`,
-              });
-            }
-          }
-
-          if (failures.length === 0) {
-            const contQaGate = readWaveContQaGate(wave, agentRuns, { mode: "live" });
-            if (!contQaGate.ok) {
-              failures = [
-                {
-                  agentId: contQaGate.agentId,
-                  statusCode: contQaGate.statusCode,
-                  logPath: contQaGate.logPath || path.relative(REPO_ROOT, messageBoardPath),
-                },
-              ];
-              recordCombinedEvent({
-                level: "error",
-                agentId: contQaGate.agentId,
-                message: `cont-QA gate blocked wave ${wave.wave}: ${contQaGate.detail}`,
-              });
-              appendCoordination({
-                event: "wave_gate_blocked",
-                waves: [wave.wave],
-                status: "blocked",
-                details: `agent=${contQaGate.agentId}; reason=${contQaGate.statusCode}; ${contQaGate.detail}`,
-                actionRequested: `Lane ${lanePaths.lane} owners should resolve the cont-QA gate before wave progression.`,
-              });
-            } else {
+            } else if (authoritativeGateSnapshot?.contQaGate?.ok) {
+              const contQaGate = authoritativeGateSnapshot.contQaGate;
               setWaveDashboardAgent(dashboardState, contQaGate.agentId, {
                 detail: contQaGate.detail
                   ? `Exit 0; cont-QA PASS (${contQaGate.detail})`
@@ -1938,127 +1751,21 @@ export async function runLauncherCli(argv) {
             }
           }
 
-          if (failures.length === 0) {
-            const infraGate = readWaveInfraGate(agentRuns);
-            if (!infraGate.ok) {
-              failures = [
-                {
-                  agentId: infraGate.agentId,
-                  statusCode: infraGate.statusCode,
-                  logPath: infraGate.logPath || path.relative(REPO_ROOT, messageBoardPath),
-                },
-              ];
-              recordCombinedEvent({
-                level: "error",
-                agentId: infraGate.agentId,
-                message: `Infra gate blocked wave ${wave.wave}: ${infraGate.detail}`,
-              });
-              appendCoordination({
-                event: "wave_gate_blocked",
-                waves: [wave.wave],
-                status: "blocked",
-                details: `agent=${infraGate.agentId}; reason=${infraGate.statusCode}; ${infraGate.detail}`,
-                actionRequested: `Lane ${lanePaths.lane} owners should resolve the infra gate before wave progression.`,
-              });
-            }
-          }
-
-          if (failures.length === 0) {
-            const clarificationBarrier = readClarificationBarrier(derivedState);
-            if (!clarificationBarrier.ok) {
-              failures = [
-                {
-                  agentId: lanePaths.integrationAgentId,
-                  statusCode: clarificationBarrier.statusCode,
-                  logPath: path.relative(REPO_ROOT, messageBoardPath),
-                  detail: clarificationBarrier.detail,
-                },
-              ];
-              recordCombinedEvent({
-                level: "error",
-                agentId: lanePaths.integrationAgentId,
-                message: `Clarification barrier blocked wave ${wave.wave}: ${clarificationBarrier.detail}`,
-              });
-              appendCoordination({
-                event: "wave_gate_blocked",
-                waves: [wave.wave],
-                status: "blocked",
-                details: `reason=${clarificationBarrier.statusCode}; ${clarificationBarrier.detail}`,
-                actionRequested: `Lane ${lanePaths.lane} owners should resolve open clarification chains before wave progression.`,
-              });
-            }
-          }
-
-          const structuredSignals = Object.fromEntries(
-            agentRuns.map((run) => [run.agent.agentId, parseStructuredSignalsFromLog(run.logPath)]),
-          );
-          const summariesByAgentId = Object.fromEntries(
-            agentRuns
-              .map((run) => [run.agent.agentId, readRunExecutionSummary(run, wave)])
-              .filter(([, summary]) => summary),
-          );
-          const gateSnapshot = buildGateSnapshot({
-            wave,
-            agentRuns,
-            derivedState,
-            lanePaths,
-            validationMode: "live",
-          });
+          const gateSnapshot =
+            completionGateSnapshot || refreshReducerSnapshot(attempt).reducerState.gateSnapshot;
           completionGateSnapshot = gateSnapshot;
-          try {
-            computeReducerSnapshot({
-              lanePaths,
-              wave,
-              agentRuns,
-              derivedState,
-              attempt,
-              options,
-            });
-          } catch (error) {
-            recordCombinedEvent({
-              level: "warn",
-              agentId: lanePaths.integrationAgentId,
-              message: `Reducer shadow snapshot failed for wave ${wave.wave}: ${error instanceof Error ? error.message : String(error)}`,
-            });
-          }
-          const traceDir = writeTraceBundle({
+          const traceProjection = writeWaveAttemptTraceProjection({
             tracesDir: lanePaths.tracesDir,
             lanePaths,
             launcherOptions: options,
             wave,
             attempt: traceAttempt,
             manifest: buildManifest(lanePaths, [wave]),
-            coordinationLogPath: derivedState.coordinationLogPath,
-            coordinationState: derivedState.coordinationState,
-            ledger: derivedState.ledger,
-            docsQueue: derivedState.docsQueue,
-            capabilityAssignments: derivedState.capabilityAssignments,
-            dependencySnapshot: derivedState.dependencySnapshot,
-            securitySummary: derivedState.securitySummary,
-            integrationSummary: derivedState.integrationSummary,
-            integrationMarkdownPath: derivedState.integrationMarkdownPath,
-            proofRegistryPath: waveProofRegistryPath(lanePaths, wave.wave),
-            controlPlanePath: path.join(lanePaths.controlPlaneDir, `wave-${wave.wave}.jsonl`),
-            clarificationTriage: derivedState.clarificationTriage,
             agentRuns,
-            structuredSignals,
             gateSnapshot,
-            quality: buildQualityMetrics({
-              tracesDir: lanePaths.tracesDir,
-              wave,
-              coordinationState: derivedState.coordinationState,
-              integrationSummary: derivedState.integrationSummary,
-              ledger: derivedState.ledger,
-              docsQueue: derivedState.docsQueue,
-              capabilityAssignments: derivedState.capabilityAssignments,
-              dependencySnapshot: derivedState.dependencySnapshot,
-              summariesByAgentId,
-              agentRuns,
-              gateSnapshot,
-              attempt: traceAttempt,
-              coordinationLogPath: derivedState.coordinationLogPath,
-            }),
+            derivedState,
           });
+          const traceDir = traceProjection.traceDir;
           completionTraceDir = traceDir;
           appendWaveControlEvent(lanePaths, wave.wave, {
             entityType: "gate",
@@ -2092,7 +1799,7 @@ export async function runLauncherCli(argv) {
             wave,
           );
           if (sharedComponentContinuationRuns.length > 0) {
-            recordAttemptState(attempt, "completed", {
+            recordAttemptState(lanePaths, wave.wave, attempt, "completed", {
               selectedAgentIds: runsToLaunch.map((run) => run.agent.agentId),
               detail: `Attempt completed; continuing with sibling owners ${sharedComponentContinuationRuns.map((run) => run.agent.agentId).join(", ")}.`,
             });
@@ -2115,22 +1822,13 @@ export async function runLauncherCli(argv) {
                 detail: "Queued for shared component closure",
               });
             }
-            writeWaveRelaunchPlan(lanePaths, wave.wave, {
-              wave: wave.wave,
+            writeWaveRelaunchProjection({
+              lanePaths,
+              wave,
               attempt,
-              phase: derivedState?.ledger?.phase || null,
-              selectedAgentIds: nextAgentIds,
-              reasonBuckets: relaunchReasonBuckets(runsToLaunch, failures, derivedState),
-              executorStates: Object.fromEntries(
-                runsToLaunch.map((run) => [run.agent.agentId, run.agent.executorResolved || null]),
-              ),
-              fallbackHistory: Object.fromEntries(
-                runsToLaunch.map((run) => [
-                  run.agent.agentId,
-                  run.agent.executorResolved?.executorHistory || [],
-                ]),
-              ),
-              createdAt: toIsoTimestamp(),
+              runs: runsToLaunch,
+              failures,
+              derivedState,
             });
             flushDashboards();
             traceAttempt += 1;
@@ -2138,23 +1836,14 @@ export async function runLauncherCli(argv) {
           }
 
           if (failures.length === 0) {
-            recordAttemptState(attempt, "completed", {
+            recordAttemptState(lanePaths, wave.wave, attempt, "completed", {
               selectedAgentIds: runsToLaunch.map((run) => run.agent.agentId),
               detail: "Wave gates passed for this attempt.",
             });
-            appendWaveControlEvent(lanePaths, wave.wave, {
-              entityType: "wave_run",
-              entityId: `wave-${wave.wave}`,
-              action: "completed",
-              source: "launcher",
-              actor: "launcher",
-              data: {
-                waveId: `wave-${wave.wave}`,
-                waveNumber: wave.wave,
-                attempts: attempt,
-                traceDir: completionTraceDir ? path.relative(REPO_ROOT, completionTraceDir) : null,
-                gateSnapshot: completionGateSnapshot,
-              },
+            recordWaveRunState(lanePaths, wave.wave, "completed", {
+              attempts: attempt,
+              traceDir: completionTraceDir ? path.relative(REPO_ROOT, completionTraceDir) : null,
+              gateSnapshot: completionGateSnapshot,
             });
             dashboardState.status = "completed";
             recordCombinedEvent({ message: `Wave ${wave.wave} completed successfully.` });
@@ -2168,30 +1857,21 @@ export async function runLauncherCli(argv) {
           }
 
           if (attempt >= options.maxRetriesPerWave + 1) {
-            recordAttemptState(attempt, "failed", {
+            recordAttemptState(lanePaths, wave.wave, attempt, "failed", {
               selectedAgentIds: runsToLaunch.map((run) => run.agent.agentId),
               detail: failures
                 .map((failure) => `${failure.agentId || "wave"}:${failure.statusCode}`)
                 .join(", "),
             });
-            appendWaveControlEvent(lanePaths, wave.wave, {
-              entityType: "wave_run",
-              entityId: `wave-${wave.wave}`,
-              action: "failed",
-              source: "launcher",
-              actor: "launcher",
-              data: {
-                waveId: `wave-${wave.wave}`,
-                waveNumber: wave.wave,
-                attempts: attempt,
-                traceDir: completionTraceDir ? path.relative(REPO_ROOT, completionTraceDir) : null,
-                gateSnapshot: completionGateSnapshot,
-                failures: failures.map((failure) => ({
-                  agentId: failure.agentId || null,
-                  statusCode: failure.statusCode,
-                  detail: failure.detail || null,
-                })),
-              },
+            recordWaveRunState(lanePaths, wave.wave, "failed", {
+              attempts: attempt,
+              traceDir: completionTraceDir ? path.relative(REPO_ROOT, completionTraceDir) : null,
+              gateSnapshot: completionGateSnapshot,
+              failures: failures.map((failure) => ({
+                agentId: failure.agentId || null,
+                statusCode: failure.statusCode,
+                detail: failure.detail || null,
+              })),
             });
             dashboardState.status = timedOut ? "timed_out" : "failed";
             for (const failure of failures) {
@@ -2225,7 +1905,7 @@ export async function runLauncherCli(argv) {
 
           const failedAgentIds = new Set(failures.map((failure) => failure.agentId));
           const failedList = Array.from(failedAgentIds).join(", ");
-          recordAttemptState(attempt, "failed", {
+          recordAttemptState(lanePaths, wave.wave, attempt, "failed", {
             selectedAgentIds: runsToLaunch.map((run) => run.agent.agentId),
             detail: failures
               .map((failure) => `${failure.agentId || "wave"}:${failure.statusCode}`)
@@ -2241,20 +1921,19 @@ export async function runLauncherCli(argv) {
             details: `attempt=${attempt + 1}/${options.maxRetriesPerWave + 1}; failed_agents=${failedList}; timed_out=${timedOut ? "yes" : "no"}`,
             actionRequested: `Lane ${lanePaths.lane} owners should inspect failed agent logs before retry completion.`,
           });
-          const relaunchResolution = resolveRelaunchRuns(
+          retryOverride = readWaveRetryOverride(lanePaths, wave.wave);
+          const reducerDecision = refreshReducerSnapshot(attempt);
+          const retryPlan = planRetryWaveAttempt({
             agentRuns,
             failures,
             derivedState,
             lanePaths,
             wave,
-          );
-          retryOverride = readWaveRetryOverride(lanePaths, wave.wave);
-          const overrideResolution = resolveRetryOverrideRuns(
-            agentRuns,
             retryOverride,
-            lanePaths,
-            wave,
-          );
+            waveState: reducerDecision?.reducerState || null,
+          });
+          const relaunchResolution = retryPlan.relaunchResolution;
+          const overrideResolution = retryPlan.overrideResolution;
           if (overrideResolution.unknownAgentIds.length > 0) {
             appendCoordination({
               event: "retry_override_invalid",
@@ -2266,8 +1945,8 @@ export async function runLauncherCli(argv) {
             });
             clearWaveRetryOverride(lanePaths, wave.wave);
             retryOverride = null;
-          } else if (overrideResolution.runs.length > 0) {
-            runsToLaunch = overrideResolution.runs;
+          } else if (retryPlan.source === "override" && overrideResolution.runs.length > 0) {
+            runsToLaunch = retryPlan.selectedRuns;
             appendCoordination({
               event: "retry_override_applied",
               waves: [wave.wave],
@@ -2306,7 +1985,7 @@ export async function runLauncherCli(argv) {
             error.exitCode = 43;
             throw error;
           } else {
-            runsToLaunch = relaunchResolution.runs;
+            runsToLaunch = retryPlan.selectedRuns;
           }
           if (runsToLaunch.length === 0) {
             clearWaveRelaunchPlan(lanePaths, wave.wave);
@@ -2322,22 +2001,13 @@ export async function runLauncherCli(argv) {
               detail: "Queued for retry",
             });
           }
-          writeWaveRelaunchPlan(lanePaths, wave.wave, {
-            wave: wave.wave,
+          writeWaveRelaunchProjection({
+            lanePaths,
+            wave,
             attempt: attempt + 1,
-            phase: derivedState?.ledger?.phase || null,
-            selectedAgentIds: runsToLaunch.map((run) => run.agent.agentId),
-            reasonBuckets: relaunchReasonBuckets(runsToLaunch, failures, derivedState),
-            executorStates: Object.fromEntries(
-              runsToLaunch.map((run) => [run.agent.agentId, run.agent.executorResolved || null]),
-            ),
-            fallbackHistory: Object.fromEntries(
-              runsToLaunch.map((run) => [
-                run.agent.agentId,
-                run.agent.executorResolved?.executorHistory || [],
-              ]),
-            ),
-            createdAt: toIsoTimestamp(),
+            runs: runsToLaunch,
+            failures,
+            derivedState,
           });
           flushDashboards();
           attempt += 1;
@@ -2390,14 +2060,14 @@ export async function runLauncherCli(argv) {
           if (WAVE_TERMINAL_STATES.has(globalWave.status)) {
             globalWave.completedAt = toIsoTimestamp();
           }
-          writeGlobalDashboard(lanePaths.globalDashboardPath, globalDashboard);
+          writeDashboardProjections({ lanePaths, globalDashboard });
         }
       }
     }
 
     globalDashboard.status = "completed";
     recordGlobalDashboardEvent(globalDashboard, { message: "All selected waves completed." });
-    writeGlobalDashboard(lanePaths.globalDashboardPath, globalDashboard);
+    writeDashboardProjections({ lanePaths, globalDashboard });
     appendCoordination({
       event: "launcher_finish",
       waves: selectedWavesForCoordination,
@@ -2412,6 +2082,7 @@ export async function runLauncherCli(argv) {
       appendCoordination,
       error,
     );
+    writeDashboardProjections({ lanePaths, globalDashboard });
     throw error;
   } finally {
     if (globalDashboardTerminalAppended && globalDashboardTerminalEntry && !options.keepTerminals) {
@@ -2445,128 +2116,4 @@ export async function runLauncherCli(argv) {
       releaseLauncherLock(lanePaths.launcherLockPath);
     }
   }
-}
-
-/**
- * Compute and persist a reducer snapshot alongside the traditional gate evaluation.
- * Shadow mode: the reducer runs and its output is written to disk, but decisions
- * still come from the traditional gate readers. This enables comparison and validation.
- *
- * @param {object} params
- * @param {object} params.lanePaths
- * @param {object} params.wave - Wave definition
- * @param {object} params.agentRuns - Array of run info objects
- * @param {object} params.derivedState - Current derived state
- * @param {number} params.attempt - Current attempt number
- * @param {object} params.options - Launcher options
- * @returns {object} { reducerState, resumePlan, snapshotPath }
- */
-export function computeReducerSnapshot({
-  lanePaths,
-  wave,
-  agentRuns,
-  derivedState,
-  attempt,
-  options = {},
-}) {
-  // Build agentResults from agentRuns
-  const agentResults = {};
-  for (const run of agentRuns) {
-    const summary = readRunExecutionSummary(run, wave);
-    if (summary) {
-      agentResults[run.agent.agentId] = summary;
-    }
-  }
-
-  // Load canonical event sources
-  const controlPlaneLogPath = path.join(
-    lanePaths.controlPlaneDir,
-    `wave-${wave.wave}.jsonl`,
-  );
-  const controlPlaneEvents = fs.existsSync(controlPlaneLogPath)
-    ? readControlPlaneEvents(controlPlaneLogPath)
-    : [];
-
-  const coordinationLogPath = path.join(
-    lanePaths.coordinationDir,
-    `wave-${wave.wave}.jsonl`,
-  );
-  const coordinationRecords = fs.existsSync(coordinationLogPath)
-    ? readMaterializedCoordinationState(coordinationLogPath)
-    : null;
-
-  const feedbackRequests = readWaveHumanFeedbackRequests({
-    feedbackRequestsDir: lanePaths.feedbackRequestsDir,
-    lane: lanePaths.lane,
-    waveNumber: wave.wave,
-    agentIds: (agentRuns || []).map((run) => run.agent.agentId),
-    orchestratorId: options.orchestratorId,
-  });
-
-  // Build dependency tickets from derivedState
-  const dependencyTickets = derivedState?.dependencySnapshot || null;
-
-  // Run the reducer
-  const reducerState = reduceWaveState({
-    controlPlaneEvents,
-    coordinationRecords: coordinationRecords?.latestRecords || [],
-    agentResults,
-    waveDefinition: wave,
-    dependencyTickets,
-    feedbackRequests: feedbackRequests || [],
-    laneConfig: {
-      lane: lanePaths.lane,
-      contQaAgentId: lanePaths.contQaAgentId || "A0",
-      contEvalAgentId: lanePaths.contEvalAgentId || "E0",
-      integrationAgentId: lanePaths.integrationAgentId || "A8",
-      documentationAgentId: lanePaths.documentationAgentId || "A9",
-      validationMode: "live",
-      evalTargets: wave.evalTargets,
-      benchmarkCatalogPath: lanePaths.laneProfile?.paths?.benchmarkCatalogPath,
-      laneProfile: lanePaths.laneProfile,
-      requireIntegrationStewardFromWave: lanePaths.requireIntegrationStewardFromWave,
-      capabilityRouting: lanePaths.capabilityRouting,
-    },
-  });
-
-  // Build resume plan
-  const resumePlan = buildResumePlan(reducerState, {
-    waveDefinition: wave,
-    lanePaths,
-  });
-
-  // Persist snapshot
-  const stateDir = path.join(lanePaths.stateDir, "reducer");
-  ensureDirectory(stateDir);
-  const snapshotPath = path.join(stateDir, `wave-${wave.wave}.json`);
-  writeWaveStateSnapshot(snapshotPath, {
-    ...reducerState,
-    attempt,
-    resumePlan,
-  }, {
-    lane: lanePaths.lane,
-    wave: wave.wave,
-  });
-
-  return {
-    reducerState,
-    resumePlan,
-    snapshotPath,
-  };
-}
-
-/**
- * Read a previously persisted reducer snapshot from disk.
- *
- * @param {object} lanePaths
- * @param {number} waveNumber
- * @returns {object|null} The persisted snapshot, or null if not found
- */
-export function readPersistedReducerSnapshot(lanePaths, waveNumber) {
-  const stateDir = path.join(lanePaths.stateDir, "reducer");
-  const snapshotPath = path.join(stateDir, `wave-${waveNumber}.json`);
-  return readWaveStateSnapshot(snapshotPath, {
-    lane: lanePaths.lane,
-    wave: waveNumber,
-  });
 }

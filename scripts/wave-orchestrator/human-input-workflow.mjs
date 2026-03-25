@@ -287,3 +287,107 @@ export function computeHumanInputMetrics(requests) {
       : null,
   };
 }
+
+export function buildHumanFeedbackWorkflowUpdate({
+  request,
+  lane,
+  waveNumber,
+  existingEscalation = null,
+}) {
+  const question = request?.question || "n/a";
+  const context = request?.context ? `; context=${request.context}` : "";
+  const agentId = request?.agentId || "human";
+  const responseOperator = request?.responseOperator || "human-operator";
+  const responseText = request?.responseText || "(empty response)";
+  if (request?.status === "pending") {
+    return {
+      combinedEvent: {
+        level: "warn",
+        agentId: request.agentId,
+        message: `Human feedback requested (${request.id}): ${question}`,
+      },
+      coordinationNotice: {
+        event: "human_feedback_requested",
+        waves: [waveNumber],
+        status: "waiting-human",
+        details: `request_id=${request.id}; agent=${request.agentId}; question=${question}${context}`,
+        actionRequested:
+          `Launcher operator should ask or answer in the parent session, then run: pnpm exec wave control task act answer --lane ${lane} --wave ${waveNumber} --id ${request.id} --response "<answer>" --operator "<name>"`,
+      },
+      consoleLines: [
+        `[human-feedback] wave=${waveNumber} agent=${request.agentId} request=${request.id} pending: ${question}`,
+        `[human-feedback] respond with: pnpm exec wave control task act answer --lane ${lane} --wave ${waveNumber} --id ${request.id} --response "<answer>" --operator "<name>"`,
+      ],
+      coordinationUpdates: [
+        {
+          id: request.id,
+          lane,
+          wave: waveNumber,
+          agentId,
+          kind: "human-feedback",
+          targets: request.agentId ? [`agent:${request.agentId}`] : [],
+          priority: "high",
+          summary: question,
+          detail: request.context || "",
+          status: "open",
+          source: "feedback",
+        },
+      ],
+      triageUpdates: [],
+    };
+  }
+  if (request?.status === "answered") {
+    const escalationId = `escalation-${request.id}`;
+    const escalationRecord = {
+      id: escalationId,
+      lane,
+      wave: waveNumber,
+      agentId,
+      kind: "human-escalation",
+      targets:
+        existingEscalation?.targets ||
+        (request.agentId ? [`agent:${request.agentId}`] : []),
+      dependsOn: existingEscalation?.dependsOn || [],
+      closureCondition: existingEscalation?.closureCondition || "",
+      priority: "high",
+      summary: question,
+      detail: responseText,
+      artifactRefs: [request.id],
+      status: "resolved",
+      source: "feedback",
+    };
+    return {
+      combinedEvent: {
+        level: "info",
+        agentId: request.agentId,
+        message: `Human feedback answered (${request.id}) by ${responseOperator}: ${responseText}`,
+      },
+      coordinationNotice: {
+        event: "human_feedback_answered",
+        waves: [waveNumber],
+        status: "resolved",
+        details: `request_id=${request.id}; agent=${request.agentId}; operator=${responseOperator}; response=${responseText}`,
+        actionRequested: "None",
+      },
+      consoleLines: [],
+      coordinationUpdates: [
+        escalationRecord,
+        {
+          id: request.id,
+          lane,
+          wave: waveNumber,
+          agentId,
+          kind: "human-feedback",
+          targets: request.agentId ? [`agent:${request.agentId}`] : [],
+          priority: "high",
+          summary: question,
+          detail: responseText,
+          status: "resolved",
+          source: "feedback",
+        },
+      ],
+      triageUpdates: [escalationRecord],
+    };
+  }
+  return null;
+}

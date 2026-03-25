@@ -55,11 +55,17 @@ function fileHashOrNull(filePath) {
   if (!filePath || !fs.existsSync(filePath)) {
     return null;
   }
+  if (!fs.statSync(filePath).isFile()) {
+    return null;
+  }
   return hashText(fs.readFileSync(filePath, "utf8"));
 }
 
 function copyFileIfExists(sourcePath, destPath) {
   if (!sourcePath || !fs.existsSync(sourcePath)) {
+    return false;
+  }
+  if (!fs.statSync(sourcePath).isFile()) {
     return false;
   }
   ensureDirectory(path.dirname(destPath));
@@ -603,7 +609,10 @@ function normalizeGateLogPath(gate, agentArtifacts) {
   }
   return {
     ...gate,
-    logPath: artifact.path,
+    // Log artifacts are already described in the bundle manifest. Nulling the
+    // inline path keeps replay parity focused on gate semantics instead of the
+    // copied artifact layout.
+    logPath: null,
   };
 }
 

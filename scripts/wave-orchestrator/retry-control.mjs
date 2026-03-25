@@ -194,6 +194,11 @@ export function resolveRetryOverrideAgentIds(waveDefinition, lanePaths, override
   if (resumePhase === "integrating") {
     return [lanePaths?.integrationAgentId || "A8"];
   }
+  if (resumePhase === "security-review") {
+    return agents
+      .filter((agent) => isSecurityReviewAgent(agent))
+      .map((agent) => agent.agentId);
+  }
   if (resumePhase === "docs-closure") {
     return [lanePaths?.documentationAgentId || "A9"];
   }

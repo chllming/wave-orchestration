@@ -39,8 +39,12 @@ The useful path is journey-first:
   Read [plans/wave-orchestrator.md](./plans/wave-orchestrator.md) and the standing reviewer prompt in [agents/wave-security-role.md](./agents/wave-security-role.md).
 - Upgrading an existing repo:
   Read [plans/migration.md](./plans/migration.md), then review the release notes in [../CHANGELOG.md](../CHANGELOG.md) before running `pnpm exec wave upgrade`.
-- Tracking the architecture hardening cutover:
-  Read [plans/architecture-hardening-migration.md](./plans/architecture-hardening-migration.md) for the staged migration from launcher-centric decisions to reducer and phase-engine ownership.
+- Want the concrete runtime module map:
+  Read [plans/end-state-architecture.md](./plans/end-state-architecture.md) for the engine-by-engine architecture and artifact ownership model.
+- Want the CLI surface map:
+  Read [reference/cli-reference.md](./reference/cli-reference.md) for the shipped commands, flags, and compatibility surfaces.
+- Want the historical architecture migration notes:
+  Read [plans/architecture-hardening-migration.md](./plans/architecture-hardening-migration.md) for the completed cutover record.
 - Looking for concrete example waves:
   Read [reference/sample-waves.md](./reference/sample-waves.md) for showcase-first examples that demonstrate the current authored wave surface.
 - Release notes and shipped deltas:

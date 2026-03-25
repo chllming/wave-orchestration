@@ -127,6 +127,9 @@ describe("reduceWaveState", () => {
       expect(state.taskGraph.edges).toEqual([]);
       expect(state.assignments).toBeInstanceOf(Map);
       expect(state.assignments.size).toBe(0);
+      expect(Array.isArray(state.capabilityAssignments)).toBe(true);
+      expect(state.coordinationState).toBeTruthy();
+      expect(state.dependencySnapshot).toBe(null);
     });
   });
 
@@ -431,6 +434,28 @@ describe("reduceWaveState", () => {
       });
       expect(state.phase).toBe("clarifying");
       expect(state.waveState).toBe("blocked");
+    });
+
+    it("returns clarifying when human feedback is still open", () => {
+      const state = reduceWaveState({
+        waveDefinition: makeWaveDefinition(),
+        coordinationRecords: [
+          {
+            id: "human-1",
+            kind: "human-feedback",
+            status: "open",
+            agentId: "A1",
+            summary: "Need operator answer",
+            recordedAt: new Date().toISOString(),
+          },
+        ],
+      });
+      expect(state.phase).toBe("clarifying");
+      expect(state.waveState).toBe("blocked");
+      expect(state.gateSnapshot.clarificationBarrier).toMatchObject({
+        ok: false,
+        statusCode: "human-feedback-open",
+      });
     });
 
     it("returns blocked when high-priority blockers exist", () => {

@@ -1,7 +1,8 @@
 import path from "node:path";
 import { augmentSummaryWithProofRegistry } from "./proof-registry.mjs";
 import { readJsonOrNull } from "./shared.mjs";
-import { buildGateSnapshot } from "./launcher.mjs";
+import { buildGateSnapshot } from "./gate-engine.mjs";
+import { materializeContradictionsFromControlPlaneEvents } from "./contradiction-entity.mjs";
 import {
   buildQualityMetrics,
   loadTraceBundle,
@@ -188,6 +189,7 @@ export function replayTraceBundle(dir) {
     capabilityAssignments: bundle.capabilityAssignments || [],
     dependencySnapshot: bundle.dependencySnapshot || null,
     integrationSummary: bundle.integrationSummary,
+    contradictions: materializeContradictionsFromControlPlaneEvents(bundle.controlPlaneEvents),
   };
   const gateSnapshot = normalizeGateSnapshotForBundle(
     buildGateSnapshot({
