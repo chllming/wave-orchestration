@@ -90,6 +90,8 @@ The planner agent reads repo-local planning sources directly, and it can also
 prefetch a planner-specific Context7 bundle when
 `planner.agentic.context7Bundle` points at a published library. The tracked
 source corpus for that library lives under `docs/context7/planner-agent/`.
+The starter repo keeps that bundle as a placeholder until the planner corpus is
+actually published and the exact `libraryId` is known.
 
 Supported templates today:
 

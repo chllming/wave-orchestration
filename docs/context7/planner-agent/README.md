@@ -13,7 +13,10 @@ Why it exists:
 Publish target:
 
 - bundle id: `planner-agentic`
-- library name: `wave-planner-agentic`
+- committed repo config should stay empty until the planner corpus is published
+  and Context7 returns an exact `libraryId`
+- once published, record that returned `libraryId` in
+  `docs/context7/bundles.json` instead of committing a guessed library name
 
 Refresh the copied corpus after updating the agent-context cache:
 

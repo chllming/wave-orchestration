@@ -34,11 +34,12 @@ pnpm context7:api-check
 ```
 
 4. Review [docs/context7/bundles.json](../context7/bundles.json) and trim it to the external libraries your repository actually uses.
+5. Prefer exact `libraryId` values. Use `libraryName` only during one-off discovery, then replace it with the pinned id returned by Context7 before committing the bundle.
 
 ## Planner Bundle
 
-The shipped bundle index includes `planner-agentic`, which expects a published
-Context7 library named `wave-planner-agentic`.
+The shipped bundle index includes `planner-agentic`, but it is intentionally a
+local-only placeholder by default.
 
 The source files for that library live under `docs/context7/planner-agent/`.
 Refresh that folder from the ignored agent-context cache with:
@@ -47,8 +48,8 @@ Refresh that folder from the ignored agent-context cache with:
 pnpm research:sync-planner-context7
 ```
 
-After you publish the folder to Context7, the agentic planner will prefetch that
-bundle through `planner.agentic.context7Bundle`.
+After you publish the folder to Context7, replace the placeholder bundle entry
+with the exact published `libraryId`. Do not commit a guessed `libraryName`.
 
 ## Resolution Order
 
@@ -59,7 +60,8 @@ bundle through `planner.agentic.context7Bundle`.
 
 ## Bundle Authoring
 
-Each bundle should be small and task-shaped. A bundle entry can name libraries by `libraryName` and optionally add a `queryHint` to keep fetched docs focused.
+Each bundle should be small and task-shaped. Prefer exact `libraryId` values and
+add a `queryHint` to keep fetched docs focused.
 
 Example:
 
@@ -70,11 +72,11 @@ Example:
       "description": "Node.js and TypeScript runtime docs.",
       "libraries": [
         {
-          "libraryName": "nodejs",
+          "libraryId": "/nodejs/node",
           "queryHint": "child processes, streams, filesystem, process lifecycle"
         },
         {
-          "libraryName": "typescript",
+          "libraryId": "/microsoft/typescript",
           "queryHint": "module resolution, declarations, compiler behavior"
         }
       ]
@@ -104,6 +106,20 @@ Agent-level override:
 - bundle: node-typescript
 - query: "TypeScript declarations and module resolution"
 ````
+
+## Making Attachment Explicit
+
+If you want Context7 attachment to be reviewable instead of implied, make all of
+these explicit:
+
+1. The wave or agent selects a concrete bundle id in `## Context7 defaults` or
+   `### Context7`.
+2. `docs/context7/bundles.json` pins the bundle's libraries by exact
+   `libraryId`, not a guessed `libraryName`.
+3. Placeholder bundles stay empty until the real published `libraryId` exists.
+4. `pnpm context7:api-check` succeeds against the committed ids.
+5. The launcher log shows `Context7 bundle <bundle-id> attached (...)` for the
+   run, or a fail-open warning if the API was unavailable.
 
 ## Injection
 
@@ -150,3 +166,4 @@ Those inbox artifacts are repository-state summaries. Context7 stays reserved fo
 - Do not use Context7 for repository architecture, plan decisions, ownership rules, or internal contracts.
 - Prefer one active backend family in a bundle instead of mixing competing frameworks.
 - Keep queries specific enough that the prefetched block stays small and useful.
+- Run `pnpm context7:api-check` after editing bundle ids to verify every pinned library still resolves and returns promptable context.

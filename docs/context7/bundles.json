@@ -13,33 +13,28 @@
       "description": "Node.js and TypeScript runtime docs for JavaScript service and tooling work.",
       "libraries": [
         {
-          "libraryName": "nodejs",
+          "libraryId": "/nodejs/node",
           "queryHint": "runtime APIs, child processes, streams, filesystem behavior, and process lifecycle"
         },
         {
-          "libraryName": "typescript",
+          "libraryId": "/microsoft/typescript",
           "queryHint": "types, declarations, module resolution, tsconfig, and compiler behavior"
         }
       ]
     },
     "planner-agentic": {
-      "description": "Repo-curated planning research published as a custom Context7 library for the agentic planner.",
-      "libraries": [
-        {
-          "libraryName": "wave-planner-agentic",
-          "queryHint": "wave planning best practices, maturity alignment, closure gates, proof surfaces, rollout evidence, and coordination failure prevention"
-        }
-      ]
+      "description": "Placeholder bundle for a repo-published planner corpus. Keep this empty until the planner corpus is published to Context7 and the exact libraryId is known.",
+      "libraries": []
     },
     "react-web": {
       "description": "React and Next.js docs for frontend work.",
       "libraries": [
         {
-          "libraryName": "react",
+          "libraryId": "/reactjs/react.dev",
           "queryHint": "components, hooks, rendering, forms, and data flow"
         },
         {
-          "libraryName": "nextjs",
+          "libraryId": "/websites/nextjs",
           "queryHint": "routing, server components, data fetching, and app router behavior"
         }
       ]
@@ -48,11 +43,11 @@
       "description": "Python backend docs for API and worker services.",
       "libraries": [
         {
-          "libraryName": "python",
+          "libraryId": "/websites/python_3",
           "queryHint": "language features, packaging, typing, and standard library behavior"
         },
         {
-          "libraryName": "fastapi",
+          "libraryId": "/fastapi/fastapi",
           "queryHint": "routing, request validation, dependency injection, and OpenAPI behavior"
         }
       ]
@@ -61,11 +56,15 @@
       "description": "Go service and workflow docs for backend work.",
       "libraries": [
         {
-          "libraryName": "golang",
-          "queryHint": "packages, testing, concurrency, errors, and module layout"
+          "libraryId": "/websites/go_dev_ref_spec",
+          "queryHint": "language syntax, testing, concurrency, errors, and module semantics"
         },
         {
-          "libraryName": "temporal",
+          "libraryId": "/websites/pkg_go_dev",
+          "queryHint": "standard packages, modules, package layout, and reference behavior"
+        },
+        {
+          "libraryId": "/temporalio/documentation",
           "queryHint": "workflow setup, activities, schedules, retries, and worker bootstrap"
         }
       ]
@@ -74,11 +73,11 @@
       "description": "Database and storage docs for persistence work.",
       "libraries": [
         {
-          "libraryName": "postgresql",
+          "libraryId": "/websites/postgresql_current",
           "queryHint": "schema changes, indexes, transactions, constraints, and query behavior"
         },
         {
-          "libraryName": "sqlite",
+          "libraryId": "/websites/sqlite_docs",
           "queryHint": "local persistence, fts, schema migration, and durability patterns"
         }
       ]
@@ -87,11 +86,11 @@
       "description": "Infrastructure and service-manager docs for deployment and operations work.",
       "libraries": [
         {
-          "libraryName": "docker",
+          "libraryId": "/docker/docs",
           "queryHint": "images, builds, volumes, networking, and runtime configuration"
         },
         {
-          "libraryName": "systemd",
+          "libraryId": "/websites/systemd_io",
           "queryHint": "units, dependencies, restart policies, readiness, and service management"
         }
       ]
