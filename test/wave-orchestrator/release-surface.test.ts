@@ -134,4 +134,33 @@ describe("release surface alignment", () => {
     expect(cliReference).toContain("`--resume-control-state`");
     expect(runbook).toContain("clears the previous auto-generated relaunch plan");
   });
+
+  it("documents pinned Context7 library ids and keeps the planner bundle as a placeholder until published", () => {
+    const context7Guide = fs.readFileSync(
+      path.join(repoRoot, "docs", "plans", "context7-wave-orchestrator.md"),
+      "utf8",
+    );
+    const plannerGuide = fs.readFileSync(
+      path.join(repoRoot, "docs", "guides", "planner.md"),
+      "utf8",
+    );
+    const plannerCorpusGuide = fs.readFileSync(
+      path.join(repoRoot, "docs", "context7", "planner-agent", "README.md"),
+      "utf8",
+    );
+    const bundles = JSON.parse(
+      fs.readFileSync(path.join(repoRoot, "docs", "context7", "bundles.json"), "utf8"),
+    );
+
+    expect(context7Guide).toContain("Prefer exact `libraryId` values.");
+    expect(context7Guide).toContain("Do not commit a guessed `libraryName`.");
+    expect(context7Guide).toContain("## Making Attachment Explicit");
+    expect(context7Guide).toContain("pnpm context7:api-check");
+    expect(plannerGuide).toContain("starter repo keeps that bundle as a placeholder");
+    expect(plannerGuide).toContain("exact `libraryId` is known");
+    expect(plannerCorpusGuide).toContain("exact `libraryId`");
+    expect(bundles.bundles["planner-agentic"].libraries).toEqual([]);
+    expect(bundles.bundles["node-typescript"].libraries[0].libraryId).toBe("/nodejs/node");
+    expect(bundles.bundles["react-web"].libraries[0].libraryId).toBe("/reactjs/react.dev");
+  });
 });
