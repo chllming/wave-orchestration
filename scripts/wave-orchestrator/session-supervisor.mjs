@@ -350,7 +350,11 @@ export function buildResidentOrchestratorRun({
     executorResolved,
   };
   const baseName = `wave-${wave.wave}-resident-orchestrator`;
-  const sessionName = createWaveAgentSessionName(lanePaths, wave.wave, "resident_orchestrator");
+  const sessionName = createWaveAgentSessionName(
+    lanePaths,
+    wave.wave,
+    "resident_orchestrator",
+  );
   return {
     run: {
       agent,
@@ -647,7 +651,7 @@ export function launchWaveDashboardSession(lanePaths, { sessionName, dashboardPa
     `node ${shellQuote(path.join(PACKAGE_ROOT, "scripts", "wave-dashboard.mjs"))} --dashboard-file ${shellQuote(
       dashboardPath,
     )}${messageBoardArg} --lane ${shellQuote(lanePaths.lane)} --watch`,
-    "exit $?",
+    "exec bash -l",
   ].join("; ");
   runTmux(
     lanePaths,

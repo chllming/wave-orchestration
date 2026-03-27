@@ -10,6 +10,19 @@ Use it when you are:
 
 For the completed internal architecture cutover record, see [architecture-hardening-migration.md](./architecture-hardening-migration.md). That document is historical. This one is the operator-facing upgrade checklist.
 
+## Current Main Delta Headed For `0.8.7`
+
+If you are testing current `main` ahead of the next package cut, the important delta on top of `0.8.6` is policy consistency rather than a brand-new feature family.
+
+The practical changes are:
+
+- generic `budget.turns` stays advisory metadata unless the runtime-specific ceiling is set explicitly with `claude.maxTurns` or `opencode.steps`
+- capability-targeted helper routing now treats demonstrated same-wave success as capability-specific evidence; unrelated completed work no longer makes an agent the preferred helper owner
+- advisory or stale clarification and human-input records remain visible in coordination history and reducer blocker views, but they no longer reopen `clarifying` or blocked reducer state by themselves
+- wave-agent and resident-orchestrator tmux sessions now reuse stable per-wave session names, so relaunches and stale launcher exits stop accumulating extra tmux sessions for the same wave
+
+If your repo copied starter docs, shell automation, or operator runbooks, these are the areas most likely to need a sync before the `0.8.7` package cut.
+
 ## What `0.8.6` Changes
 
 `0.8.6` keeps the `0.8.5` design-role surface and adds a new signal-driven operator and long-running-agent model.

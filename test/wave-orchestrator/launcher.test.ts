@@ -966,6 +966,57 @@ describe("resolveRelaunchRuns", () => {
     expect(selected.runs.map((run) => run.agent.agentId)).toEqual(["A2"]);
   });
 
+  it("prefers same-wave capability owners before least-busy fallback", () => {
+    const agentRuns = [
+      { agent: { agentId: "A1", capabilities: ["runtime"] } },
+      { agent: { agentId: "A2", capabilities: ["runtime"] } },
+    ];
+
+    const selected = resolveRelaunchRuns(
+      agentRuns,
+      [{ agentId: "A2", statusCode: "failed" }],
+      {
+        coordinationState: {
+          humanFeedback: [],
+          requests: [
+            {
+              id: "request-runtime",
+              kind: "request",
+              source: "agent",
+              status: "open",
+              targets: ["capability:runtime"],
+            },
+          ],
+          blockers: [],
+        },
+        ledger: {
+          phase: "running",
+          tasks: [
+            { id: "done-1", owner: "A1", state: "done", capability: "docs" },
+            { id: "t3", owner: "A1", state: "in_progress" },
+          ],
+          capabilityAssignments: [
+            {
+              id: "assignment-runtime-a1",
+              assignedAgentId: "A1",
+              capability: "runtime",
+              state: "resolved",
+            },
+          ],
+        },
+      },
+      {
+        documentationAgentId: "A9",
+        contQaAgentId: "A0",
+        integrationAgentId: "A8",
+        capabilityRouting: { preferredAgents: {} },
+      },
+    );
+
+    expect(selected.barrier).toBe(null);
+    expect(selected.runs.map((run) => run.agent.agentId)).toEqual(["A1"]);
+  });
+
   it("halts retries while human escalation remains unresolved", () => {
     const agentRuns = [{ agent: { agentId: "A1", capabilities: ["runtime"] } }];
 
@@ -997,6 +1048,42 @@ describe("resolveRelaunchRuns", () => {
     );
 
     expect(selected).toEqual({ runs: [], barrier: null });
+  });
+
+  it("does not halt retries for non-blocking human escalations", () => {
+    const agentRuns = [{ agent: { agentId: "A1", capabilities: ["runtime"] } }];
+
+    const selected = resolveRelaunchRuns(
+      agentRuns,
+      [{ agentId: "A1", statusCode: "failed" }],
+      {
+        coordinationState: {
+          humanFeedback: [],
+          humanEscalations: [
+            {
+              id: "escalation-1",
+              kind: "human-escalation",
+              status: "open",
+              blocking: false,
+              blockerSeverity: "advisory",
+              targets: ["agent:A1"],
+            },
+          ],
+          requests: [],
+          blockers: [],
+        },
+        ledger: { phase: "running", tasks: [] },
+      },
+      {
+        documentationAgentId: "A9",
+        contQaAgentId: "A0",
+        integrationAgentId: "A8",
+        capabilityRouting: { preferredAgents: {} },
+      },
+    );
+
+    expect(selected.barrier).toBe(null);
+    expect(selected.runs.map((run) => run.agent.agentId)).toEqual(["A1"]);
   });
 
   it("prioritizes launcher-routed clarification follow-up requests", () => {

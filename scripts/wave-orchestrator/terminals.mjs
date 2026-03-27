@@ -133,7 +133,9 @@ export function createTemporaryTerminalEntries(
 }
 
 export function createGlobalDashboardTerminalEntry(lanePaths, runTag) {
-  const sessionName = sanitizeTmuxSessionName(`${lanePaths.tmuxGlobalDashboardSessionPrefix}_current`);
+  const sessionName = sanitizeTmuxSessionName(
+    `${lanePaths.tmuxGlobalDashboardSessionPrefix}_current`,
+  );
   return {
     terminalName: lanePaths.globalDashboardTerminalName,
     sessionName,
