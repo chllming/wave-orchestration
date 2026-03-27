@@ -3360,7 +3360,7 @@ describe("reconcileStaleLauncherArtifacts", () => {
           terminals: [
             {
               name: "leap-claw-wave4-a1",
-              command: `TMUX= tmux -L ${lanePaths.tmuxSocketName} new -As oc_leap_claw_wave4_a1_deadbeef`,
+              command: `TMUX= tmux -L ${lanePaths.tmuxSocketName} new -As oc_leap_claw_wave4_a1`,
             },
             {
               name: "codex1",
@@ -3406,7 +3406,7 @@ describe("collectUnexpectedSessionFailures", () => {
         [
           {
             agent: { agentId: "A1" },
-            sessionName: "oc_leap_claw_wave4_a1_deadbeef",
+            sessionName: "oc_leap_claw_wave4_a1",
             statusPath,
             logPath,
           },
