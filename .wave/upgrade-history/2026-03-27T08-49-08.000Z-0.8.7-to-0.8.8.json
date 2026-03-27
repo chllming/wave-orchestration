@@ -1,0 +1,33 @@
+{
+  "packageName": "@chllming/wave-orchestration",
+  "previousVersion": "0.8.7",
+  "currentVersion": "0.8.8",
+  "generatedAt": "2026-03-27T08:49:08.000Z",
+  "initMode": "adopt-existing",
+  "releases": [
+    {
+      "version": "0.8.8",
+      "date": "2026-03-27",
+      "summary": "0.8.8 release-surface alignment, packaged operating recommendations, and install-state fixture refresh.",
+      "features": [
+        "The practical operating recommendations guide now ships as `docs/guides/recommendations-0.8.8.md`, and the README, migration, coordination, and runtime-config docs now point at the same current package surface.",
+        "The tracked `.wave/install-state.json` fixture and upgrade-history metadata now align with the `0.8.8` package version so `wave doctor --json` no longer reports stale install-state versioning after the follow-up docs release.",
+        "Release-surface regression coverage now derives the recommendations-guide path from `package.json` instead of a hard-coded `0.8.7` filename, which hardens future release cuts against the same doc-link drift."
+      ],
+      "manualSteps": [
+        "Run `pnpm exec wave doctor` and `pnpm exec wave launch --lane main --dry-run --no-dashboard` after upgrading so the repo validates against the `0.8.8` release surface.",
+        "If your repo copied current-surface docs or runbooks, sync `README.md`, `docs/README.md`, `docs/plans/current-state.md`, `docs/plans/migration.md`, `docs/reference/coordination-and-closure.md`, `docs/reference/runtime-config/README.md`, and `docs/guides/recommendations-0.8.8.md` so local guidance matches the packaged release.",
+        "If your repo tracks the install-state fixture in source control, refresh `.wave/install-state.json` and the matching upgrade-history report so repo-owned validation stays aligned with the installed package."
+      ],
+      "breaking": false
+    }
+  ],
+  "doctor": {
+    "ok": true,
+    "workspaceRoot": "/home/coder/wave-orchestration",
+    "packageName": "@chllming/wave-orchestration",
+    "packageVersion": "0.8.8",
+    "errors": [],
+    "warnings": []
+  }
+}

@@ -117,9 +117,10 @@ describe("release surface alignment", () => {
     expect(JSON.stringify(manifest.releases[0])).toContain("planner-agentic");
   });
 
-  it("documents the 0.8.7 operating recommendations for softer states and advisory turns", () => {
+  it("documents the current operating recommendations for softer states and advisory turns", () => {
+    const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));
     const guide = fs.readFileSync(
-      path.join(repoRoot, "docs", "guides", "recommendations-0.8.7.md"),
+      path.join(repoRoot, "docs", "guides", `recommendations-${packageJson.version}.md`),
       "utf8",
     );
     const docsReadme = fs.readFileSync(path.join(repoRoot, "docs", "README.md"), "utf8");
@@ -130,7 +131,7 @@ describe("release surface alignment", () => {
     expect(guide).toContain("mark-stale");
     expect(guide).toContain("resolve-policy");
     expect(guide).toContain("targeted recovery");
-    expect(docsReadme).toContain("guides/recommendations-0.8.7.md");
+    expect(docsReadme).toContain(`guides/recommendations-${packageJson.version}.md`);
   });
 
   it("documents fresh-launch relaunch-plan reset behavior", () => {
