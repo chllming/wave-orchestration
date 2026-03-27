@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## 0.8.8 - 2026-03-27
+
+### Changed
+
+- The current release surface now ships the practical operating recommendations guide as `docs/guides/recommendations-0.8.8.md`, and the README, current-state notes, migration guide, coordination docs, and runtime-config docs now all point at the same `0.8.8` package surface.
+- The tracked install-state fixture and upgrade-history records now advance to `0.8.8`, so repo-owned validation no longer lags the published package version after the follow-up docs cut.
+
+### Fixed And Hardened
+
+- Release-surface regression coverage now derives the recommendations-guide path from the current package version instead of a hard-coded `0.8.7` file name, which prevents the same drift on the next release.
+
+### Testing And Validation
+
+- `node scripts/wave.mjs doctor --json`
+- `pnpm test -- test/wave-orchestrator/release-surface.test.ts`
+
 ## 0.8.7 - 2026-03-27
 
 ### Changed
