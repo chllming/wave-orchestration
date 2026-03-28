@@ -486,6 +486,10 @@ class PromptSession {
     }
   }
 
+  describe(text) {
+    stderr.write(`  ${text}\n`);
+  }
+
   async close() {
     this.interface?.close();
   }
@@ -2924,7 +2928,11 @@ async function runProjectSetupFlow(options = {}) {
     const laneChoices = Array.from(
       new Set([config.defaultLane, ...projectLanes, ...Object.keys(config.lanes || {})].filter(Boolean)),
     );
+    stderr.write("\n  Wave project setup — answer a few questions so Wave can tailor defaults for this repo.\n  Press Enter to accept the default shown in [brackets].\n\n");
+    prompt.describe("Has Wave been used in this repo before? Say 'y' for a fresh start.");
     const newProject = await prompt.askBoolean("Treat this repository as a new project?", base.newProject);
+    prompt.describe("'oversight' = you review agent progress and approve risky steps (recommended).");
+    prompt.describe("'dark-factory' = agents run end-to-end without human checkpoints.");
     const defaultOversightMode = normalizeOversightMode(
       await prompt.askChoice(
         "Default execution posture",
@@ -2932,6 +2940,7 @@ async function runProjectSetupFlow(options = {}) {
         base.defaultOversightMode,
       ),
     );
+    prompt.describe("How you'll watch agent sessions — 'tmux' for terminal, 'vscode' for VS Code.");
     const defaultTerminalSurface = normalizeTerminalSurface(
       await prompt.askChoice(
         "Default terminal surface",
@@ -2939,6 +2948,7 @@ async function runProjectSetupFlow(options = {}) {
         base.defaultTerminalSurface,
       ),
     );
+    prompt.describe("What kind of work waves will default to — most repos use 'implementation'.");
     const template = normalizeDraftTemplate(
       await prompt.askChoice(
         "Default draft template",
@@ -2946,11 +2956,14 @@ async function runProjectSetupFlow(options = {}) {
         base.plannerDefaults.template,
       ),
     );
+    prompt.describe("The lane is a sequence of waves. 'main' is the default and usually fine.");
     const lane = await prompt.askChoice(
       "Default draft lane",
       laneChoices,
       base.plannerDefaults.lane,
     );
+    prompt.describe("Deploy environments are where agents push code (e.g. staging, production).");
+    prompt.describe("You can skip this for now and add them later with 'wave project setup'.");
     const deployEnvironmentCount = await prompt.askInteger(
       "How many deploy environments should the planner remember?",
       base.deployEnvironments.length,

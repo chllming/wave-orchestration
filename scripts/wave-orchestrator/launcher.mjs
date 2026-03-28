@@ -326,7 +326,7 @@ function parseArgs(argv) {
       continue;
     }
     if (arg === "--help" || arg === "-h") {
-      return { help: true, lanePaths, options };
+      return { help: true, lanePaths, options, config };
     }
     if (arg === "--dry-run") {
       options.dryRun = true;
@@ -465,7 +465,7 @@ function parseArgs(argv) {
   if (!options.dryRun && options.terminalSurface === "none") {
     throw new Error("--terminal-surface none is only supported with --dry-run");
   }
-  return { help: false, lanePaths, options };
+  return { help: false, lanePaths, options, config };
 }
 
 // --- Local wrappers that bind engine calls to launcher scope ---
@@ -746,7 +746,25 @@ export async function runLauncherCli(argv) {
     printUsage(parsed.lanePaths, parsed.options.terminalSurface);
     return;
   }
-  const { lanePaths, options } = parsed;
+  const { lanePaths, options, config } = parsed;
+
+  // Auto-run project setup on first launch if no profile exists yet.
+  const projectId = options.project || config.defaultProject;
+  if (!readProjectProfile({ config, project: projectId })) {
+    const { stderr: stderrStream } = await import("node:process");
+    stderrStream.write(
+      "\n  No project profile found — running first-time setup.\n" +
+        "  You can re-run this later with: wave project setup\n\n",
+    );
+    const { runPlannerCli } = await import("./planner.mjs");
+    await runPlannerCli(["project", "setup", ...(projectId ? ["--project", projectId] : [])]);
+    // Re-read the terminal surface from the newly created profile.
+    const freshProfile = readProjectProfile({ config, project: projectId });
+    if (freshProfile) {
+      options.terminalSurface = resolveDefaultTerminalSurface(freshProfile);
+    }
+  }
+
   if (!options.reconcileStatus) {
     await maybeAnnouncePackageUpdate();
   }
