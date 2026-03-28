@@ -32,10 +32,12 @@ It is derived from reading every source module, test file, configuration surface
 
 Wave Orchestration is a framework for structured, multi-agent repository work. It replaces ad-hoc "vibe coding" sessions with a system where planning, coordination, evidence, proof, and closure are all explicit and machine-inspectable. The core thesis is that agentic coding is fast but fragile: agents hallucinate completion, coordination collapses at scale, and there is no trustworthy record of what actually happened. Wave makes all of those failure modes visible and addressable.
 
+Wave is the orchestration substrate for **LEAP-claw**, the proprietary agent framework built on top of Wave's coordination, proof, and closure model. LEAP-claw agents operate through Wave's runtime abstraction, using Wave's canonical authority set, blackboard coordination, and proof-bounded closure while adding proprietary planning, reasoning, and execution strategies. Wave provides the runtime and coordination guarantees; LEAP-claw provides the agent intelligence.
+
 The framework is **not** a chat wrapper or a prompt library. It is a runtime orchestrator that:
 
 - Parses structured wave definitions from markdown
-- Launches multiple coding agents in parallel across different LLM runtimes
+- Launches multiple coding agents in parallel across different LLM runtimes (Codex, Claude, OpenCode, LEAP-claw)
 - Coordinates them through shared canonical state (not chat messages)
 - Evaluates structured proof of completion through a multi-stage gate stack
 - Closes waves only when all declared goals, proof artifacts, and closure stewards agree
@@ -64,7 +66,7 @@ The framework is **not** a chat wrapper or a prompt library. It is a runtime orc
 
 ### What Problem It Solves
 
-Multi-agent coding systems fail in predictable ways documented in recent research (see [Section 16](#16-research-grounding)). Wave targets each failure mode with a specific architectural mechanism:
+Multi-agent coding systems fail in predictable ways documented in recent research (see [Section 18](#18-research-grounding)). Wave targets each failure mode with a specific architectural mechanism:
 
 | Failure Mode | Wave Mechanism |
 |---|---|
@@ -1134,6 +1136,13 @@ The `executors.mjs` module builds launch specs for each runtime:
 - Attached files and instruction overlays
 - Skill content projected through config
 
+**LEAP-claw** (proprietary agent framework):
+- Wave's orchestration substrate serves as the runtime for LEAP-claw agents
+- LEAP-claw agents participate in the same blackboard coordination, proof, and closure model as any other executor
+- Proprietary planning and reasoning strategies are layered on top of Wave's canonical authority set
+- Skill projection, context compilation, and result envelope contracts apply identically
+- LEAP-claw agents can be mixed with Codex, Claude, and OpenCode agents within the same wave via the runtime mix policy
+
 **Local** (smoke executor):
 - Prompt/closure verification without a real hosted runtime
 - Used for testing and dry-run validation
@@ -1424,7 +1433,7 @@ Wave's architecture is directly informed by published research on multi-agent sy
 | [VeRO: An Evaluation Harness for Agents to Optimize Agents](https://arxiv.org/abs/2602.22480) | Proof-oriented evaluation model, benchmark validity buckets, review entity types |
 | [MetaClaw: Just Talk](https://arxiv.org/abs/2603.17187) | Failure-driven skill synthesis, zero-downtime evolution of agent capabilities (referenced via OpenClaw platform) |
 
-**Note on OpenClaw/EvoClaw/MetaClaw:** These are external open-source and research projects cited as sources, not proprietary agents. OpenClaw is an open-source multi-agent platform. EvoClaw and MetaClaw are research papers. Wave adapts their evaluation methodologies into its benchmark catalog (`docs/evals/external-benchmarks.json`) but does not embed or depend on their codebases.
+**Note on naming:** LEAP-claw is the proprietary agent framework built on Wave's orchestration substrate. OpenClaw, EvoClaw, and MetaClaw are unrelated external projects: OpenClaw is an open-source multi-agent platform, EvoClaw and MetaClaw are research papers. Wave adapts their evaluation methodologies into its benchmark catalog (`docs/evals/external-benchmarks.json`) but does not embed or depend on their codebases. The `leap-claw` identifier also appears in test fixtures as a lane name for integration testing.
 
 ### Known Gaps
 
