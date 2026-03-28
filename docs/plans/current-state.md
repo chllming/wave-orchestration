@@ -1,21 +1,22 @@
 # Current State
 
-- The published package is `0.8.9`; that release keeps the shipped design-role and signal-hygiene starter surface, preserves design packet report paths during reducer and trace summary reconstruction, and reports blocked design passes as design-gate failures before implementation starts.
+- The published package is `0.9.0`; that release adds first-class monorepo project support, project-aware runtime isolation, and default metadata delivery to Wave Control while keeping the shipped design-role and signal-hygiene starter surface.
 - The canonical shipped runtime architecture is documented in `docs/plans/end-state-architecture.md`; historical cutover notes remain in `docs/plans/architecture-hardening-migration.md`.
 - The repository contains the published `@chllming/wave-orchestration` package plus the starter scaffold used by `wave init`.
 - The runtime is package-first and non-destructive for adopting repos: `wave init --adopt-existing` records existing repo-owned plans, waves, prompts, and config without overwriting them, and `wave upgrade` writes only `.wave/install-state.json` plus `.wave/upgrade-history/`.
-- The recommended `0.8.9` operating stance is documented in `docs/guides/recommendations-0.8.9.md`: keep proof and closure strict, keep generic `budget.turns` advisory, and use softer coordination states only for non-proof follow-up.
+- The recommended `0.9.0` operating stance is documented in `docs/guides/recommendations-0.9.0.md`: keep proof and closure strict, keep generic `budget.turns` advisory, and use softer coordination states only for non-proof follow-up.
 - Runtime launch entrypoints now perform a best-effort npmjs version check, cache the result under `.wave/package-update-check.json`, and point operators at `pnpm exec wave self-update` when a newer published package exists.
 - This source repo is itself kept as an adopted Wave workspace, so `node scripts/wave.mjs doctor --json` should pass from the repo root.
 - The default lane is `main`.
 - Planner foundation is now shipped:
-  - `.wave/project-profile.json` stores default oversight mode, terminal surface, draft template, lane, and deploy-environment memory
+  - `.wave/project-profile.json` stores default oversight mode, terminal surface, draft template, lane, and deploy-environment memory for the implicit default project
+  - explicit monorepo projects store the same profile under `.wave/projects/<projectId>/project-profile.json`
   - `wave project setup|show` manage that profile
   - `wave draft` writes planner JSON specs plus launcher-compatible markdown waves
 - Ad-hoc task runs are now first-class:
   - `wave adhoc plan|run|list|show|promote` manage transient operator-driven work
-  - requests, generated specs, rendered markdown, and final results live under `.wave/adhoc/runs/<run-id>/`
-  - runtime state stays isolated under `.tmp/<lane>-wave-launcher/adhoc/<run-id>/`
+  - requests, generated specs, rendered markdown, and final results live under `.wave/adhoc/<projectId>/runs/<run-id>/` for explicit projects, while the implicit default project keeps the legacy layout
+  - runtime state stays isolated under `.tmp/<lane>-wave-launcher/adhoc/<run-id>/` for the implicit default project, or `.tmp/projects/<projectId>/<lane>-wave-launcher/adhoc/<run-id>/` for explicit projects
   - `wave feedback respond --run <run-id>` now reconciles answered human-input state inside that isolated ad-hoc state root and can queue a safe one-shot continuation request without touching roadmap state
   - ad-hoc runs always keep integration, documentation, and cont-QA closure, while `cont-EVAL` and security review are synthesized only when the request needs them
   - documentation closure still queues canonical shared-plan docs when a run reports a shared-plan delta, alongside the ad-hoc closure report
@@ -50,7 +51,8 @@
   - a canonical control-plane event log under `.tmp/<lane>-wave-launcher/control-plane/` that records operator tasks, rerun requests, proof bundles, contradictions, facts, human-input workflow, observed `wave_run`, `attempt`, and `agent_run` lifecycle events, plus `wave_signal` and `agent_signal` update events as append-only JSONL; `wave control` materializes state from this log
   - operator-applied retry overrides projected to `.tmp/<lane>-wave-launcher/control/` for compatibility with selected reruns, explicit reuse selectors, reuse clearing or preservation, and explicit resume targets
   - authoritative proof registries projected to `.tmp/<lane>-wave-launcher/proof/` for compatibility, while preserving proof bundle lifecycle state so revoked or superseded operator evidence cannot keep satisfying closure
-  - optional Wave Control telemetry under `.tmp/<lane>-wave-launcher/control-plane/telemetry/` for local-first, best-effort reporting to the Railway-hosted analysis plane
+  - optional Wave Control telemetry under `.tmp/<lane>-wave-launcher/control-plane/telemetry/` for the implicit default project, or `.tmp/projects/<projectId>/<lane>-wave-launcher/control-plane/telemetry/` for explicit projects
+  - packaged telemetry defaults now point at `https://wave-control.up.railway.app/api/v1` with `reportMode: metadata-only`, and repos must opt out explicitly if they do not want default project/lane/wave metadata delivery
   - reducer-driven live state snapshots plus persisted machine-readable shadow diffs for helper-assignment, blocker, contradiction, closure, and retry slices
   - reducer-authoritative helper-assignment blocking, retry target selection, and resume planning, with live gate and closure reads now driven from validated result envelopes
   - optional design agents that publish validated design packets under `docs/plans/waves/design/wave-<n>-<agent>.md`, gate implementation through `designGate`, and run before code-owning implementation agents

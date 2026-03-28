@@ -2,6 +2,8 @@
 
 Wave Orchestration is my framework for "vibe-coding." It keeps the speed of agentic coding, but makes the runtime, coordination, and context model explicit enough to inspect, replay, and improve.
 
+This package also ships with my personal Wave Control endpoint enabled by default. A repo using the packaged defaults will emit project, lane, wave, run, proof, and benchmark metadata to `https://wave-control.up.railway.app/api/v1` unless you actively opt out.
+
 The framework does three things:
 
 1. It abstracts the agent runtime away without flattening everything to the lowest common denominator. The same waves, skills, planning, evaluation, proof, and traces can run across Claude, Codex, and OpenCode while still preserving runtime-native features through executor adapters.
@@ -103,17 +105,17 @@ Wave is built to mitigate those failures with a canonical authority set, generat
 
 Current release:
 
-- `@chllming/wave-orchestration@0.8.9`
-- Release tag: [`v0.8.9`](https://github.com/chllming/agent-wave-orchestrator/releases/tag/v0.8.9)
+- `@chllming/wave-orchestration@0.9.0`
+- Release tag: [`v0.9.0`](https://github.com/chllming/agent-wave-orchestrator/releases/tag/v0.9.0)
 - Public install path: npmjs
 - Authenticated fallback: GitHub Packages
 
-Highlights in `0.8.9`:
+Highlights in `0.9.0`:
 
-- Reducer snapshots now preserve design packet report paths when they rebuild summaries from result envelopes, so successful design passes no longer get replayed as `missing-design-packet`.
-- Launcher transitions after design-only passes now stop on the real design-gate failure and record a design-specific blocker instead of falling through to a misleading downstream implementation `missing-result-envelope` error.
-- Trace bundle summary reconstruction now also preserves design packet report paths, so copied summary artifacts stay aligned when a trace has to rebuild a design summary from logs.
-- Release docs, current-state notes, migration guidance, publishing instructions, the packaged operator recommendations guide, and the tracked install-state fixtures now all point at the `0.8.9` surface.
+- Monorepo repos can now declare `defaultProject` plus `projects.<projectId>` in `wave.config.json`, with project-owned lanes, docs roots, planner defaults, ad-hoc runs, dependency tickets, and launcher state.
+- Lane-scoped CLI surfaces now accept `--project`, including launch, autonomous, dashboard, control, coordination, dependencies, ad-hoc runs, proof, retry, feedback, drafting, and benchmarks.
+- Wave Control now defaults to `https://wave-control.up.railway.app/api/v1` with `reportMode: "metadata-only"`, and metadata delivery includes `projectId`, `lane`, `wave`, and related benchmark identity by default unless explicitly opted out.
+- Release docs, migration guidance, the new monorepo setup guide, the versioned recommendations guide, the manifest, and the tracked install-state fixtures now all point at the `0.9.0` surface.
 
 Requirements:
 
@@ -123,6 +125,13 @@ Requirements:
 - at least one executor on `PATH`: `codex`, `claude`, or `opencode`
 - optional: `CONTEXT7_API_KEY` for launcher-side prefetch
 - optional: `WAVE_CONTROL_AUTH_TOKEN` for remote Wave Control reporting
+
+Telemetry defaults:
+
+- packaged default endpoint: `https://wave-control.up.railway.app/api/v1`
+- packaged default mode: `metadata-only`
+- default identity fields include `projectId`, `lane`, `wave`, `runKind`, and related benchmark ids
+- opt out explicitly with `waveControl.enabled: false`, `waveControl.reportMode: "disabled"`, or `wave launch --no-telemetry`
 
 Install into another repo:
 
@@ -141,6 +150,10 @@ pnpm exec wave init --adopt-existing
 ```
 
 Fresh init also seeds a starter `skills/` library plus `docs/evals/benchmark-catalog.json`. The launcher projects those skill bundles into Codex, Claude, OpenCode, and local executor overlays after the final runtime for each agent is resolved, and waves that include `cont-EVAL` can declare `## Eval targets` against that catalog.
+
+For monorepos, `wave.config.json` can now declare `defaultProject` plus `projects.<projectId>`. Each project owns its own lanes, docs root, planner defaults, runtime overrides, and Wave Control identity, so multiple project/lane/wave tracks can run from one checkout without colliding in launcher state or tmux session names.
+
+Use [docs/guides/monorepo-projects.md](./docs/guides/monorepo-projects.md) for the full setup flow, state-path layout, cross-project dependency examples, and telemetry defaults or opt-out rules.
 
 The starter surface includes:
 
@@ -169,6 +182,9 @@ pnpm exec wave launch --lane main --start-wave 0 --end-wave 0 --executor codex -
 
 # Disable Wave Control reporting for a single launcher run
 pnpm exec wave launch --lane main --no-telemetry
+
+# Target a specific monorepo project
+pnpm exec wave launch --project backend --lane main --dry-run --no-dashboard
 
 # Inspect operator surfaces
 pnpm exec wave feedback list --lane main --pending

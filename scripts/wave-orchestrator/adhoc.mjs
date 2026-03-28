@@ -25,6 +25,7 @@ import {
   buildLanePaths,
   compactSingleLine,
   ensureDirectory,
+  findAdhocRunRecord,
   parseNonNegativeInt,
   readJsonOrNull,
   REPO_ROOT,
@@ -205,8 +206,8 @@ async function withSuppressedNestedUpdateNotice(fn) {
   }
 }
 
-function readEffectiveProjectProfile(config) {
-  return readProjectProfile({ config }) || buildDefaultProjectProfile(config);
+function readEffectiveProjectProfile(config, project) {
+  return readProjectProfile({ config, project }) || buildDefaultProjectProfile(config);
 }
 
 function detectKeyword(text, keywords) {
@@ -451,6 +452,10 @@ function buildCommonRequiredContext() {
   );
 }
 
+function adhocReportPath(lanePaths, filename) {
+  return repoRelativePath(path.join(lanePaths.adhocRunDir, "reports", filename));
+}
+
 function buildDocumentationOwnedPaths({ lanePaths, waveNumber, mode }) {
   const canonicalPaths = requiredDocumentationStewardPathsForWave(waveNumber, {
     laneProfile: lanePaths.laneProfile,
@@ -459,7 +464,7 @@ function buildDocumentationOwnedPaths({ lanePaths, waveNumber, mode }) {
     return canonicalPaths;
   }
   return uniqueStrings([
-    `.wave/adhoc/runs/${lanePaths.runId}/reports/wave-${waveNumber}-doc-closure.md`,
+    adhocReportPath(lanePaths, `wave-${waveNumber}-doc-closure.md`),
     ...canonicalPaths,
   ]);
 }
@@ -476,11 +481,11 @@ function buildSpecialAgents({
   const contQaReportPath =
     mode === "roadmap"
       ? `docs/plans/waves/reviews/wave-${waveNumber}-cont-qa.md`
-      : `.wave/adhoc/runs/${lanePaths.runId}/reports/wave-${waveNumber}-cont-qa.md`;
+      : adhocReportPath(lanePaths, `wave-${waveNumber}-cont-qa.md`);
   const contEvalReportPath =
     mode === "roadmap"
       ? `docs/plans/waves/reviews/wave-${waveNumber}-cont-eval.md`
-      : `.wave/adhoc/runs/${lanePaths.runId}/reports/wave-${waveNumber}-cont-eval.md`;
+      : adhocReportPath(lanePaths, `wave-${waveNumber}-cont-eval.md`);
   const documentationOwnedPaths = buildDocumentationOwnedPaths({
     lanePaths,
     waveNumber,
@@ -489,7 +494,7 @@ function buildSpecialAgents({
   const securityReportPath =
     mode === "roadmap"
       ? relativeStatePath(path.join(lanePaths.securityDir, `wave-${waveNumber}-review.md`))
-      : `.wave/adhoc/runs/${lanePaths.runId}/reports/wave-${waveNumber}-security-review.md`;
+      : adhocReportPath(lanePaths, `wave-${waveNumber}-security-review.md`);
   const integrationOwnedPaths = [
     relativeStatePath(path.join(lanePaths.integrationDir, `wave-${waveNumber}.md`)),
     relativeStatePath(path.join(lanePaths.integrationDir, `wave-${waveNumber}.json`)),
@@ -727,6 +732,7 @@ function buildAdhocRequest({ runId, lanePaths, profile, tasks, launcherArgs = []
     schemaVersion: ADHOC_SCHEMA_VERSION,
     runKind: "adhoc",
     runId,
+    project: lanePaths.project,
     lane: lanePaths.lane,
     createdAt: toIsoTimestamp(),
     oversightMode: profile.defaultOversightMode,
@@ -846,6 +852,7 @@ function buildResultRecord(lanePaths, request, spec, status, extra = {}) {
     schemaVersion: ADHOC_SCHEMA_VERSION,
     runKind: "adhoc",
     runId: request.runId,
+    project: request.project || lanePaths.project,
     lane: request.lane,
     title: spec.title,
     status,
@@ -1009,6 +1016,7 @@ function parseArgs(argv) {
   const args = Array.isArray(argv) ? argv.slice() : [];
   const subcommand = cleanText(args.shift()).toLowerCase();
   const options = {
+    project: "",
     lane: "",
     runId: "",
     wave: null,
@@ -1022,6 +1030,8 @@ function parseArgs(argv) {
     const arg = args.shift();
     if (arg === "--task") {
       options.tasks.push(cleanText(args.shift()));
+    } else if (arg === "--project") {
+      options.project = cleanText(args.shift());
     } else if (arg === "--lane") {
       options.lane = cleanText(args.shift());
     } else if (arg === "--run") {
@@ -1074,24 +1084,25 @@ function parseArgs(argv) {
 
 function printUsage() {
   console.log(`Usage:
-  wave adhoc plan --task <text> [--task <text>] [--lane <lane>] [--json]
-  wave adhoc run --task <text> [--task <text>] [--lane <lane>] [--yes] [--json] [launcher options]
-  wave adhoc list [--lane <lane>] [--json]
+  wave adhoc plan --task <text> [--task <text>] [--project <id>] [--lane <lane>] [--json]
+  wave adhoc run --task <text> [--task <text>] [--project <id>] [--lane <lane>] [--yes] [--json] [launcher options]
+  wave adhoc list [--project <id>] [--lane <lane>] [--json]
   wave adhoc show --run <id> [--json]
-  wave adhoc promote --run <id> --wave <n> [--force] [--json]
+  wave adhoc promote --run <id> [--project <id>] --wave <n> [--force] [--json]
 `);
 }
 
 function resolveLaneForOptions(config, options) {
-  const profile = readEffectiveProjectProfile(config);
+  const profile = readEffectiveProjectProfile(config, options.project || config.defaultProject);
   return cleanText(options.lane) || profile.plannerDefaults?.lane || config.defaultLane;
 }
 
 function createStoredRun({ config, options }) {
-  const profile = readEffectiveProjectProfile(config);
+  const projectId = options.project || config.defaultProject;
+  const profile = readEffectiveProjectProfile(config, projectId);
   const lane = resolveLaneForOptions(config, options);
   const runId = buildAdhocRunId();
-  const lanePaths = buildLanePaths(lane, { config, adhocRunId: runId });
+  const lanePaths = buildLanePaths(lane, { config, project: projectId, adhocRunId: runId });
   const request = buildAdhocRequest({
     runId,
     lanePaths,
@@ -1114,7 +1125,17 @@ function createStoredRun({ config, options }) {
 }
 
 function readStoredRun(runId) {
-  const lanePaths = buildLanePaths(DEFAULT_LANE_PLACEHOLDER, { adhocRunId: runId });
+  const record = findAdhocRunRecord(runId);
+  if (!record) {
+    throw new Error(`Ad-hoc run not found: ${runId}`);
+  }
+  const lanePaths = buildLanePaths(
+    record.result?.lane || DEFAULT_LANE_PLACEHOLDER,
+    {
+      project: record.project,
+      adhocRunId: runId,
+    },
+  );
   const request = readJsonOrNull(lanePaths.adhocRequestPath);
   const spec = readJsonOrNull(lanePaths.adhocSpecPath);
   const result = readJsonOrNull(lanePaths.adhocResultPath);
@@ -1166,6 +1187,7 @@ export async function runAdhocCli(argv) {
     }
     const launchLanePaths = buildLanePaths(stored.lanePaths.lane, {
       config,
+      project: stored.request.project || stored.lanePaths.project,
       adhocRunId: stored.lanePaths.runId,
       runVariant: options.launcherArgs.includes("--dry-run") ? "dry-run" : undefined,
     });
@@ -1178,6 +1200,8 @@ export async function runAdhocCli(argv) {
     try {
       await withSuppressedNestedUpdateNotice(() =>
         runLauncherCli([
+          "--project",
+          stored.request.project || stored.lanePaths.project,
           "--lane",
           stored.lanePaths.lane,
           "--adhoc-run",
@@ -1219,9 +1243,10 @@ export async function runAdhocCli(argv) {
 
   if (subcommand === "list") {
     const lane = cleanText(options.lane);
-    const lanePaths = buildLanePaths(lane || config.defaultLane, { config });
+    const projectId = options.project || config.defaultProject;
+    const lanePaths = buildLanePaths(lane || config.defaultLane, { config, project: projectId });
     const runs = collectStoredRuns(lanePaths.adhocIndexPath).filter((run) =>
-      lane ? run.lane === lane : true,
+      (lane ? run.lane === lane : true) && (options.project ? run.project === projectId : true),
     );
     if (options.json) {
       console.log(JSON.stringify(runs, null, 2));
@@ -1242,6 +1267,7 @@ export async function runAdhocCli(argv) {
     const { lanePaths, request, spec, result } = readStoredRun(options.runId);
     const payload = {
       runId: options.runId,
+      project: result.project || request.project || lanePaths.project,
       lane: result.lane,
       status: result.status,
       title: result.title,
@@ -1263,6 +1289,7 @@ export async function runAdhocCli(argv) {
       return;
     }
     console.log(`[wave:adhoc] run=${payload.runId}`);
+    console.log(`[wave:adhoc] project=${payload.project}`);
     console.log(`[wave:adhoc] lane=${payload.lane}`);
     console.log(`[wave:adhoc] status=${payload.status}`);
     console.log(`[wave:adhoc] title=${payload.title}`);
@@ -1290,8 +1317,13 @@ export async function runAdhocCli(argv) {
       throw new Error("--wave <n> is required for `wave adhoc promote`.");
     }
     const stored = readStoredRun(options.runId);
+    const projectId =
+      cleanText(options.project) ||
+      cleanText(stored.result.project) ||
+      cleanText(stored.request.project) ||
+      config.defaultProject;
     const lane = cleanText(options.lane) || stored.result.lane || config.defaultLane;
-    const lanePaths = buildLanePaths(lane, { config });
+    const lanePaths = buildLanePaths(lane, { config, project: projectId });
     const wavePath = path.join(lanePaths.wavesDir, `wave-${options.wave}.md`);
     const specPath = path.join(lanePaths.wavesDir, "specs", `wave-${options.wave}.json`);
     if (!options.force && (fs.existsSync(wavePath) || fs.existsSync(specPath))) {

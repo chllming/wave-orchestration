@@ -7,6 +7,8 @@ summary: "Complete syntax reference for all wave CLI commands, flags, and operat
 
 Complete syntax for every `wave` command. All commands use `pnpm exec wave` as the entry point.
 
+When a command targets lane-scoped runtime state, it also accepts `--project <id>`. Omit it to use `defaultProject` from `wave.config.json`.
+
 ## Command Families
 
 - Runtime:
@@ -34,6 +36,7 @@ Closure-role bindings do not have a CLI override surface. When a wave file decla
 
 | Flag | Default | Description |
 |------|---------|-------------|
+| `--project <id>` | config default | Project id |
 | `--lane <name>` | `main` | Lane name |
 | `--start-wave <n>` | `0` | First wave to launch |
 | `--end-wave <n>` | last available | Last wave to launch |
@@ -74,6 +77,7 @@ wave autonomous [options]
 
 | Flag | Default | Description |
 |------|---------|-------------|
+| `--project <id>` | config default | Project id |
 | `--lane <name>` | `main` | Lane name |
 | `--executor <id>` | lane config | `codex`, `claude`, or `opencode` (not `local`) |
 | `--codex-sandbox <mode>` | `danger-full-access` | Codex sandbox mode |
@@ -101,7 +105,7 @@ Read-only view: blocking edges, logical agent state, tasks, dependencies, rerun 
 When a launcher attempt is already running, `wave control status` treats that active attempt as the authoritative current fan-out. Older relaunch plans or unrelated closure blockers remain visible in the payload, but they do not override the live attempt view.
 
 ```
-wave control status --lane <lane> --wave <n> [--agent <id>] [--run <id>] [--json]
+wave control status --project <id> --lane <lane> --wave <n> [--agent <id>] [--run <id>] [--json]
 ```
 
 The JSON payload now includes:
@@ -118,8 +122,8 @@ Starter repos also include `scripts/wave-status.sh` and `scripts/wave-watch.sh` 
 Inspect and deliver the local Wave Control event queue.
 
 ```
-wave control telemetry status --lane <lane> [--run <id>] [--json]
-wave control telemetry flush  --lane <lane> [--run <id>] [--json]
+wave control telemetry status --project <id> --lane <lane> [--run <id>] [--json]
+wave control telemetry flush  --project <id> --lane <lane> [--run <id>] [--json]
 ```
 
 ### wave control task
@@ -130,7 +134,7 @@ Operator task surface for coordination records.
 
 ```
 wave control task create \
-  --lane <lane> --wave <n> --agent <id> \
+  --project <id> --lane <lane> --wave <n> --agent <id> \
   --kind <kind> --summary "<text>" \
   [--detail "<text>"] [--target <agent-or-capability>] \
   [--priority normal|high] [--blocking true|false] \
@@ -146,20 +150,20 @@ Valid `--kind` values: `request`, `blocker`, `clarification`, `handoff`, `eviden
 **List tasks:**
 
 ```
-wave control task list --lane <lane> --wave <n> [--agent <id>] [--json]
+wave control task list --project <id> --lane <lane> --wave <n> [--agent <id>] [--json]
 ```
 
 **Get a single task:**
 
 ```
-wave control task get --lane <lane> --wave <n> --id <task-id> [--json]
+wave control task get --project <id> --lane <lane> --wave <n> --id <task-id> [--json]
 ```
 
 **Act on a task:**
 
 ```
 wave control task act <action> \
-  --lane <lane> --wave <n> --id <task-id> \
+  --project <id> --lane <lane> --wave <n> --id <task-id> \
   [--detail "<text>"] [--operator <name>] [--json]
 ```
 
@@ -183,7 +187,7 @@ Actions:
 
 ```bash
 pnpm exec wave control task act answer \
-  --lane main --wave 4 --id escalation-clarify-a7-rollout \
+  --project app --lane main --wave 4 --id escalation-clarify-a7-rollout \
   --response "The rollout strategy is canary-then-full. Use the Railway MCP health endpoint." \
   --operator ops-lead
 ```
@@ -196,7 +200,7 @@ Targeted rerun intent with agent selection, reuse control, and component invalid
 
 ```
 wave control rerun request \
-  --lane <lane> --wave <n> \
+  --project <id> --lane <lane> --wave <n> \
   [--agent <id> ...] \
   [--clear-reuse <id> ...] [--preserve-reuse <id> ...] \
   [--invalidate-component <id> ...] \
@@ -213,13 +217,13 @@ The launcher may also write a rerun request automatically after recoverable fail
 **Get active rerun request:**
 
 ```
-wave control rerun get --lane <lane> --wave <n> [--json]
+wave control rerun get --project <id> --lane <lane> --wave <n> [--json]
 ```
 
 **Clear rerun request:**
 
 ```
-wave control rerun clear --lane <lane> --wave <n>
+wave control rerun clear --project <id> --lane <lane> --wave <n>
 ```
 
 ### wave control proof
@@ -230,7 +234,7 @@ Authoritative proof bundle lifecycle (active → superseded → revoked).
 
 ```
 wave control proof register \
-  --lane <lane> --wave <n> --agent <id> \
+  --project <id> --lane <lane> --wave <n> --agent <id> \
   --artifact <path> [--artifact <path> ...] \
   [--component <id[:level]> ...] \
   [--authoritative] [--satisfy-owned-components] \
@@ -241,14 +245,14 @@ wave control proof register \
 **Get proof bundles:**
 
 ```
-wave control proof get --lane <lane> --wave <n> [--agent <id>] [--id <bundle-id>] [--json]
+wave control proof get --project <id> --lane <lane> --wave <n> [--agent <id>] [--id <bundle-id>] [--json]
 ```
 
 **Supersede a bundle** (register new evidence and mark the old bundle superseded):
 
 ```
 wave control proof supersede \
-  --lane <lane> --wave <n> --id <old-bundle-id> \
+  --project <id> --lane <lane> --wave <n> --id <old-bundle-id> \
   --agent <id> --artifact <path> [--artifact <path> ...] \
   [same options as register] [--json]
 ```
@@ -257,7 +261,7 @@ wave control proof supersede \
 
 ```
 wave control proof revoke \
-  --lane <lane> --wave <n> --id <bundle-id> \
+  --project <id> --lane <lane> --wave <n> --id <bundle-id> \
   [--operator <name>] [--detail "<text>"] [--json]
 ```
 
@@ -269,7 +273,7 @@ Coordination log access. Legacy surface; prefer `wave control task` for new work
 
 ```
 wave coord post \
-  --lane <lane> --wave <n> --agent <id> \
+  --project <id> --lane <lane> --wave <n> --agent <id> \
   --kind <kind> --summary "<text>" \
   [--detail "<text>"] [--target <agent>] \
   [--priority normal|high] [--depends-on <id>] \
@@ -279,31 +283,31 @@ wave coord post \
 **Show materialized coordination state:**
 
 ```
-wave coord show --lane <lane> --wave <n> [--dry-run] [--json]
+wave coord show --project <id> --lane <lane> --wave <n> [--dry-run] [--json]
 ```
 
 **Render markdown board from JSONL log:**
 
 ```
-wave coord render --lane <lane> --wave <n> [--dry-run]
+wave coord render --project <id> --lane <lane> --wave <n> [--dry-run]
 ```
 
 **Compile shared summary and agent inbox:**
 
 ```
-wave coord inbox --lane <lane> --wave <n> --agent <id> [--dry-run]
+wave coord inbox --project <id> --lane <lane> --wave <n> --agent <id> [--dry-run]
 ```
 
 **Explain why blocked or retrying:**
 
 ```
-wave coord explain --lane <lane> --wave <n> [--agent <id>] [--json]
+wave coord explain --project <id> --lane <lane> --wave <n> [--agent <id>] [--json]
 ```
 
 **Act on a coordination record:**
 
 ```
-wave coord act <operation> --lane <lane> --wave <n> --id <id> [options]
+wave coord act <operation> --project <id> --lane <lane> --wave <n> --id <id> [options]
 ```
 
 | Operation | Extra flags | Effect |
@@ -325,7 +329,7 @@ Human feedback request queue. Final escalation layer after orchestrator-first tr
 
 ```
 wave feedback ask \
-  --lane <lane> --wave <n> --agent <id> \
+  --project <id> --lane <lane> --wave <n> --agent <id> \
   --question "<text>" [--context "<text>"] \
   [--orchestrator-id <id>] [--wait] [--timeout-seconds <n>]
 ```
@@ -345,13 +349,13 @@ When the answered request belongs to a live wave or ad-hoc run, `wave feedback r
 **List feedback requests:**
 
 ```
-wave feedback list [--lane <lane>] [--wave <n>] [--agent <id>] [--pending] [--json]
+wave feedback list [--project <id>] [--lane <lane>] [--wave <n>] [--agent <id>] [--pending] [--json]
 ```
 
 **Watch for new requests:**
 
 ```
-wave feedback watch [--lane <lane>] [--wave <n>] [--agent <id>] [--pending] [--refresh-ms <n>]
+wave feedback watch [--project <id>] [--lane <lane>] [--wave <n>] [--agent <id>] [--pending] [--refresh-ms <n>]
 ```
 
 **Show a single request:**
@@ -370,7 +374,7 @@ Cross-lane dependency management.
 
 ```
 wave dep post \
-  --owner-lane <lane> --requester-lane <lane> \
+  --owner-project <id> --owner-lane <lane> --requester-project <id> --requester-lane <lane> \
   --owner-wave <n> --requester-wave <n> \
   --agent <id> --summary "<text>" \
   [--detail "<text>"] [--target <agent>] \
@@ -383,19 +387,19 @@ wave dep post \
 **Show dependencies:**
 
 ```
-wave dep show --lane <lane> [--wave <n>] [--json]
+wave dep show --project <id> --lane <lane> [--wave <n>] [--json]
 ```
 
 **Resolve a dependency:**
 
 ```
-wave dep resolve --lane <lane> --id <id> --agent <id> [--detail "<text>"] [--status resolved|closed]
+wave dep resolve --project <id> --lane <lane> --id <id> --agent <id> [--detail "<text>"] [--status resolved|closed]
 ```
 
 **Render dependency snapshot:**
 
 ```
-wave dep render --lane <lane> [--wave <n>] [--json]
+wave dep render --project <id> --lane <lane> [--wave <n>] [--json]
 ```
 
 ## wave benchmark
@@ -417,7 +421,7 @@ wave benchmark show --case <id> [--json]
 **Run local benchmark cases:**
 
 ```
-wave benchmark run [--case <id>] [--family <id>] [--benchmark <id>] [--arm <id>] [--output-dir <path>] [--json]
+wave benchmark run [--project <id>] [--lane <lane>] [--case <id>] [--family <id>] [--benchmark <id>] [--arm <id>] [--output-dir <path>] [--json]
 ```
 
 **List external adapters:**
@@ -431,8 +435,8 @@ wave benchmark adapters [--json]
 ```
 wave benchmark external-list [--adapter <id>] [--json]
 wave benchmark external-show --adapter <id> --manifest <path> [--json]
-wave benchmark external-run --adapter <id> --manifest <path> [--arm <id>] [--model <id>] [options]
-wave benchmark external-pilots --adapter <id> [--json]
+wave benchmark external-run --adapter <id> [--project <id>] [--lane <lane>] --manifest <path> [--arm <id>] [--model <id>] [options]
+wave benchmark external-pilots [--project <id>] [--lane <lane>] [--json]
 ```
 
 ## wave retry
@@ -442,13 +446,13 @@ Legacy retry control. Prefer `wave control rerun`.
 **Show active retry override:**
 
 ```
-wave retry show --lane <lane> --wave <n> [--json]
+wave retry show --project <id> --lane <lane> --wave <n> [--json]
 ```
 
 **Apply a retry override:**
 
 ```
-wave retry apply --lane <lane> --wave <n> \
+wave retry apply --project <id> --lane <lane> --wave <n> \
   [--agent <id> ...] \
   [--clear-reuse <id> ...] [--preserve-reuse <id> ...] \
   [--resume-phase <phase>] \
@@ -460,7 +464,7 @@ Requires either `--agent` or `--resume-phase`.
 **Clear retry override:**
 
 ```
-wave retry clear --lane <lane> --wave <n>
+wave retry clear --project <id> --lane <lane> --wave <n>
 ```
 
 ## wave proof
@@ -470,13 +474,13 @@ Legacy proof registration. Prefer `wave control proof`.
 **Show proof registry:**
 
 ```
-wave proof show --lane <lane> --wave <n> [--agent <id>] [--json]
+wave proof show --project <id> --lane <lane> --wave <n> [--agent <id>] [--json]
 ```
 
 **Register proof:**
 
 ```
-wave proof register --lane <lane> --wave <n> --agent <id> \
+wave proof register --project <id> --lane <lane> --wave <n> --agent <id> \
   --artifact <path> [--artifact <path> ...] \
   [--component <id[:level]> ...] \
   [--authoritative] [--satisfy-owned-components] \
@@ -497,8 +501,8 @@ wave local --prompt <path> [--log <path>] [--status <path>]
 Live dashboard viewer.
 
 ```
-wave dashboard --dashboard-file <path> [--lane <lane>] [--message-board <path>] [--watch] [--refresh-ms <n>]
-wave dashboard --lane <lane> --attach current|global
+wave dashboard --dashboard-file <path> [--project <id>] [--lane <lane>] [--message-board <path>] [--watch] [--refresh-ms <n>]
+wave dashboard --project <id> --lane <lane> --attach current|global
 ```
 
 ## Workspace Commands
@@ -538,17 +542,17 @@ wave doctor [--json]
 **Setup project profile:**
 
 ```
-wave project setup
-wave project show [--json]
+wave project setup [--project <id>] [--json]
+wave project show [--project <id>] [--json]
 ```
 
 **Draft waves:**
 
 ```
-wave draft --wave <n> [--template implementation|qa|infra|release]
-wave draft --agentic --task "<description>" --from-wave <n>
+wave draft --wave <n> [--project <id>] [--lane <lane>] [--template implementation|qa|infra|release]
+wave draft --agentic --task "<description>" --from-wave <n> [--project <id>] [--lane <lane>]
 wave draft --show-run <run-id>
-wave draft --apply-run <run-id>
+wave draft --apply-run <run-id> [--project <id>]
 ```
 
 Interactive draft currently offers worker role kinds:
@@ -561,25 +565,25 @@ Interactive draft currently offers worker role kinds:
 - `research`
 - `security`
 
-Agentic planner payloads also accept `workerAgents[].roleKind = "design"`. The shipped `0.8.9` surface uses `design-pass` as the default executor profile for that role and typically assigns a packet path like `docs/plans/waves/design/wave-<n>-<agentId>.md`. Interactive draft scaffolds the docs-first default; hybrid design stewards are authored by explicitly adding implementation-owned paths and the normal implementation contract sections.
+Agentic planner payloads also accept `workerAgents[].roleKind = "design"`. The shipped `0.9.0` surface uses `design-pass` as the default executor profile for that role and typically assigns a packet path like `docs/plans/waves/design/wave-<n>-<agentId>.md`. Interactive draft scaffolds the docs-first default; hybrid design stewards are authored by explicitly adding implementation-owned paths and the normal implementation contract sections.
 
 ## Ad-Hoc Task Commands
 
 **Plan and run ad-hoc tasks:**
 
 ```
-wave adhoc plan --task "<description>"
-wave adhoc run --task "<description>" [--yes] [--executor <id>]
-wave adhoc list [--json]
+wave adhoc plan --task "<description>" [--project <id>] [--lane <lane>]
+wave adhoc run --task "<description>" [--project <id>] [--lane <lane>] [--yes] [--executor <id>]
+wave adhoc list [--project <id>] [--lane <lane>] [--json]
 wave adhoc show --run <id> [--json]
-wave adhoc promote --run <id> --wave <n>
+wave adhoc promote --run <id> [--project <id>] --wave <n>
 ```
 
 ## Common Patterns
 
 ### Lane and wave targeting
 
-Most coordination commands accept `--lane` (default: `main`) and `--wave` (required). For ad-hoc runs, use `--run <id>` which sets the lane and defaults wave to 0.
+Most coordination commands accept `--project` plus `--lane` (default lane: `main`) and `--wave` (required). For ad-hoc runs, use `--run <id>` which resolves the matching project and lane and defaults wave to 0.
 
 ### JSON output
 
@@ -595,6 +599,6 @@ Flags like `--agent`, `--artifact`, `--component`, `--target`, and `--depends-on
 
 ```bash
 # These are equivalent:
-wave control rerun request --lane main --wave 0 --agent A2 --agent A7
-wave control rerun request --lane main --wave 0 --agent A2,A7
+wave control rerun request --project app --lane main --wave 0 --agent A2 --agent A7
+wave control rerun request --project app --lane main --wave 0 --agent A2,A7
 ```

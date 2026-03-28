@@ -3,9 +3,8 @@ import { appendCoordinationRecord } from "./coordination-store.mjs";
 import { parseWaveFiles } from "./wave-files.mjs";
 import {
   buildLanePaths,
+  findAdhocRunRecord,
   parseNonNegativeInt,
-  readJsonOrNull,
-  REPO_ROOT,
   sanitizeAdhocRunId,
   sanitizeLaneName,
 } from "./shared.mjs";
@@ -16,9 +15,9 @@ import {
 
 function printUsage() {
   console.log(`Usage:
-  pnpm exec wave proof show --lane <lane> --wave <n> [--agent <id>] [--json]
-  pnpm exec wave proof register --lane <lane> --wave <n> --agent <id> --artifact <path> [--artifact <path> ...] [--component <id[:level]> ...] [--authoritative] [--satisfy-owned-components] [--completion <level>] [--durability <level>] [--proof-level <level>] [--doc-delta <state>] [--operator <name>] [--detail <text>] [--json]
-  pnpm exec wave proof <subcommand> --run <id> [--wave 0] ...
+  pnpm exec wave proof show --project <id> --lane <lane> --wave <n> [--agent <id>] [--json]
+  pnpm exec wave proof register --project <id> --lane <lane> --wave <n> --agent <id> --artifact <path> [--artifact <path> ...] [--component <id[:level]> ...] [--authoritative] [--satisfy-owned-components] [--completion <level>] [--durability <level>] [--proof-level <level>] [--doc-delta <state>] [--operator <name>] [--detail <text>] [--json]
+  pnpm exec wave proof <subcommand> --run <id> [--project <id>] [--wave 0] ...
 `);
 }
 
@@ -26,6 +25,7 @@ function parseArgs(argv) {
   const args = argv[0] === "--" ? argv.slice(1) : argv;
   const subcommand = String(args[0] || "").trim().toLowerCase();
   const options = {
+    project: "",
     lane: "main",
     wave: null,
     runId: "",
@@ -44,7 +44,9 @@ function parseArgs(argv) {
   };
   for (let i = 1; i < args.length; i += 1) {
     const arg = args[i];
-    if (arg === "--lane") {
+    if (arg === "--project") {
+      options.project = String(args[++i] || "").trim();
+    } else if (arg === "--lane") {
       options.lane = sanitizeLaneName(args[++i]);
     } else if (arg === "--run") {
       options.runId = sanitizeAdhocRunId(args[++i]);
@@ -92,11 +94,12 @@ function loadWave(lanePaths, waveNumber) {
   return wave;
 }
 
-function resolveLaneForRun(runId, fallbackLane) {
-  return (
-    readJsonOrNull(path.join(REPO_ROOT, ".wave", "adhoc", "runs", runId, "result.json"))?.lane ||
-    fallbackLane
-  );
+function resolveRunContext(runId, fallbackProject, fallbackLane) {
+  const record = findAdhocRunRecord(runId);
+  return {
+    project: record?.project || fallbackProject,
+    lane: record?.result?.lane || fallbackLane,
+  };
 }
 
 function coordinationLogPath(lanePaths, waveNumber) {
@@ -113,9 +116,12 @@ export async function runProofCli(argv) {
     throw new Error("Expected subcommand: show | register");
   }
   if (options.runId) {
-    options.lane = resolveLaneForRun(options.runId, options.lane);
+    const context = resolveRunContext(options.runId, options.project, options.lane);
+    options.project = context.project;
+    options.lane = context.lane;
   }
   const lanePaths = buildLanePaths(options.lane, {
+    project: options.project || undefined,
     adhocRunId: options.runId || null,
   });
   if (options.wave === null && options.runId) {

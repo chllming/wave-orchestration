@@ -6,10 +6,10 @@ import {
   DEFAULT_WAIT_TIMEOUT_SECONDS,
   DEFAULT_WATCH_REFRESH_MS,
   DEFAULT_WAVE_LANE,
-  REPO_ROOT,
   buildLanePaths,
   compactSingleLine,
   ensureDirectory,
+  findAdhocRunRecord,
   formatAgeFromTimestamp,
   parseNonNegativeInt,
   parsePositiveInt,
@@ -41,9 +41,12 @@ function requestFilePath(feedbackRequestsDir, requestId) {
   return path.join(feedbackRequestsDir, `${requestId}.json`);
 }
 
-function resolveLaneForRun(runId, fallbackLane) {
-  const resultPath = path.join(REPO_ROOT, ".wave", "adhoc", "runs", runId, "result.json");
-  return readJsonOrNull(resultPath)?.lane || fallbackLane;
+function resolveRunContext(runId, fallbackProject, fallbackLane) {
+  const record = findAdhocRunRecord(runId);
+  return {
+    project: record?.project || fallbackProject,
+    lane: record?.result?.lane || fallbackLane,
+  };
 }
 
 function buildRequestId({ lane, wave, agentId }) {
@@ -55,6 +58,7 @@ function buildRequestId({ lane, wave, agentId }) {
 export function createFeedbackRequest({
   feedbackStateDir,
   feedbackRequestsDir,
+  project = null,
   lane,
   wave,
   agentId,
@@ -69,6 +73,7 @@ export function createFeedbackRequest({
   const now = toIsoTimestamp();
   const payload = {
     id: requestId,
+    project: project || null,
     createdAt: now,
     updatedAt: now,
     lane,
@@ -88,7 +93,9 @@ export function createFeedbackRequest({
   });
   if (recordTelemetry) {
     try {
-      const lanePaths = buildLanePaths(lane);
+      const lanePaths = buildLanePaths(lane, {
+        project: project || undefined,
+      });
       safeQueueWaveControlEvent(lanePaths, {
         category: "feedback",
         entityType: "human_input",
@@ -148,7 +155,9 @@ export function answerFeedbackRequest({
   });
   if (recordTelemetry) {
     try {
-      const lanePaths = buildLanePaths(answeredPayload?.lane || DEFAULT_WAVE_LANE);
+      const lanePaths = buildLanePaths(answeredPayload?.lane || DEFAULT_WAVE_LANE, {
+        project: answeredPayload?.project || undefined,
+      });
       safeQueueWaveControlEvent(lanePaths, {
         category: "feedback",
         entityType: "human_input",
@@ -245,6 +254,7 @@ function parseFeedbackArgs(argv) {
     id: "",
     response: "",
     operator: "human-operator",
+    project: "",
     force: false,
     pending: false,
     json: false,
@@ -255,7 +265,9 @@ function parseFeedbackArgs(argv) {
     if (arg === "--") {
       continue;
     }
-    if (arg === "--lane") {
+    if (arg === "--project") {
+      out.project = String(args[++i] || "").trim();
+    } else if (arg === "--lane") {
       out.lane = sanitizeLaneName(args[++i]);
     } else if (arg === "--run") {
       out.runId = sanitizeAdhocRunId(args[++i]);
@@ -310,10 +322,10 @@ async function waitForAnswer(filePath, timeoutSeconds) {
 
 function printHelp() {
   console.log(`Usage:
-  pnpm exec wave-feedback ask --lane <lane> --wave <n> --agent <id> --question "<text>" [options]
+  pnpm exec wave-feedback ask --project <id> --lane <lane> --wave <n> --agent <id> --question "<text>" [options]
   pnpm exec wave-feedback respond --id <request-id> --response "<text>" [options]
-  pnpm exec wave-feedback list [--pending] [--lane <lane>] [--wave <n>] [--agent <id>] [--json]
-  pnpm exec wave-feedback watch [--pending] [--lane <lane>] [--wave <n>] [--agent <id>] [--refresh-ms <n>]
+  pnpm exec wave-feedback list [--pending] [--project <id>] [--lane <lane>] [--wave <n>] [--agent <id>] [--json]
+  pnpm exec wave-feedback watch [--pending] [--project <id>] [--lane <lane>] [--wave <n>] [--agent <id>] [--refresh-ms <n>]
   pnpm exec wave-feedback show --id <request-id>
 `);
 }
@@ -325,9 +337,12 @@ export async function runFeedbackCli(argv) {
     return;
   }
   if (options.runId) {
-    options.lane = resolveLaneForRun(options.runId, options.lane);
+    const context = resolveRunContext(options.runId, options.project, options.lane);
+    options.project = context.project;
+    options.lane = context.lane;
   }
   const lanePaths = buildLanePaths(options.lane, {
+    project: options.project || undefined,
     adhocRunId: options.runId || null,
   });
   const requestsDir = lanePaths.feedbackRequestsDir;
@@ -340,6 +355,7 @@ export async function runFeedbackCli(argv) {
     const result = createFeedbackRequest({
       feedbackStateDir: stateDir,
       feedbackRequestsDir: requestsDir,
+      project: lanePaths.project,
       lane: options.lane,
       wave: options.wave,
       agentId: options.agent,
@@ -375,6 +391,7 @@ export async function runFeedbackCli(argv) {
     });
     if (answered?.lane && Number.isFinite(Number(answered.wave))) {
       answerHumanInputByRequest({
+        project: answered.project || options.project || null,
         lane: answered.lane,
         waveNumber: Number(answered.wave),
         requestId: options.id,

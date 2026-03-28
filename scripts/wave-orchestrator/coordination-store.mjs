@@ -242,8 +242,11 @@ export function normalizeCoordinationRecord(rawRecord, defaults = {}) {
         : Number.parseInt(String(rawRecord.attempt), 10),
     source: normalizeString(rawRecord.source ?? defaults.source, "launcher"),
     executorId: normalizeString(rawRecord.executorId ?? defaults.executorId, ""),
+    project: normalizeString(rawRecord.project ?? defaults.project, ""),
     requesterLane: normalizeString(rawRecord.requesterLane ?? defaults.requesterLane, ""),
     ownerLane: normalizeString(rawRecord.ownerLane ?? defaults.ownerLane, ""),
+    requesterProject: normalizeString(rawRecord.requesterProject ?? defaults.requesterProject, ""),
+    ownerProject: normalizeString(rawRecord.ownerProject ?? defaults.ownerProject, ""),
     requesterWave:
       rawRecord.requesterWave === null || rawRecord.requesterWave === undefined || rawRecord.requesterWave === ""
         ? defaults.requesterWave ?? null
@@ -264,8 +267,10 @@ export function appendCoordinationRecord(filePath, rawRecord, defaults = {}) {
   ensureDirectory(path.dirname(filePath));
   fs.appendFileSync(filePath, `${JSON.stringify(record)}\n`, "utf8");
   const runIdHint = normalizeString(rawRecord?.runId ?? defaults.runId, "");
+  const projectHint = normalizeString(rawRecord?.project ?? defaults.project, "");
   try {
     const lanePaths = buildLanePaths(record.lane, {
+      ...(projectHint ? { project: projectHint } : {}),
       ...(runIdHint ? { adhocRunId: runIdHint } : {}),
     });
     if (lanePaths?.waveControl?.captureCoordinationRecords !== false) {
@@ -301,8 +306,11 @@ export function appendCoordinationRecord(filePath, rawRecord, defaults = {}) {
           closureCondition: record.closureCondition,
           required: record.required,
           executorId: record.executorId || null,
+          project: record.project || null,
           requesterLane: record.requesterLane || null,
           ownerLane: record.ownerLane || null,
+          requesterProject: record.requesterProject || null,
+          ownerProject: record.ownerProject || null,
         },
       });
     }

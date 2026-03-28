@@ -35,22 +35,21 @@ import { writeAssignmentSnapshot, writeDependencySnapshot } from "./artifact-sch
 import {
   buildLanePaths,
   ensureDirectory,
+  findAdhocRunRecord,
   parseNonNegativeInt,
-  readJsonOrNull,
-  REPO_ROOT,
   sanitizeAdhocRunId,
 } from "./shared.mjs";
 import { parseWaveFiles } from "./wave-files.mjs";
 
 function printUsage() {
   console.log(`Usage:
-  wave coord post --lane <lane> --wave <n> --agent <id> --kind <kind> --summary <text> [--dry-run] [options]
-  wave coord show --lane <lane> --wave <n> [--dry-run] [--json]
-  wave coord render --lane <lane> --wave <n> [--dry-run]
-  wave coord inbox --lane <lane> --wave <n> --agent <id> [--dry-run]
-  wave coord explain --lane <lane> --wave <n> [--agent <id>] [--json]
-  wave coord act <resolve|dismiss|reroute|reassign|escalate|answer-human> --lane <lane> --wave <n> [options]
-  wave coord <subcommand> --run <id> [--wave 0] ...
+  wave coord post --project <id> --lane <lane> --wave <n> --agent <id> --kind <kind> --summary <text> [--dry-run] [options]
+  wave coord show --project <id> --lane <lane> --wave <n> [--dry-run] [--json]
+  wave coord render --project <id> --lane <lane> --wave <n> [--dry-run]
+  wave coord inbox --project <id> --lane <lane> --wave <n> --agent <id> [--dry-run]
+  wave coord explain --project <id> --lane <lane> --wave <n> [--agent <id>] [--json]
+  wave coord act <resolve|dismiss|reroute|reassign|escalate|answer-human> --project <id> --lane <lane> --wave <n> [options]
+  wave coord <subcommand> --run <id> [--project <id>] [--wave 0] ...
 `);
 }
 
@@ -58,6 +57,7 @@ function parseArgs(argv) {
   const args = argv[0] === "--" ? argv.slice(1) : argv;
   const subcommand = String(args[0] || "").trim().toLowerCase();
   const options = {
+    project: "",
     lane: "main",
     wave: null,
     runId: "",
@@ -85,7 +85,9 @@ function parseArgs(argv) {
   }
   for (let i = startIndex; i < args.length; i += 1) {
     const arg = args[i];
-    if (arg === "--lane") {
+    if (arg === "--project") {
+      options.project = String(args[++i] || "").trim();
+    } else if (arg === "--lane") {
       options.lane = String(args[++i] || "").trim();
     } else if (arg === "--run") {
       options.runId = sanitizeAdhocRunId(args[++i]);
@@ -131,9 +133,12 @@ function parseArgs(argv) {
   return { subcommand, options };
 }
 
-function resolveLaneForRun(runId, fallbackLane) {
-  const resultPath = path.join(REPO_ROOT, ".wave", "adhoc", "runs", runId, "result.json");
-  return readJsonOrNull(resultPath)?.lane || fallbackLane;
+function resolveRunContext(runId, fallbackProject, fallbackLane) {
+  const record = findAdhocRunRecord(runId);
+  return {
+    project: record?.project || fallbackProject,
+    lane: record?.result?.lane || fallbackLane,
+  };
 }
 
 function loadWave(lanePaths, waveNumber) {
@@ -329,9 +334,12 @@ export async function runCoordinationCli(argv) {
   }
   const { subcommand, options } = parseArgs(argv);
   if (options.runId) {
-    options.lane = resolveLaneForRun(options.runId, options.lane);
+    const context = resolveRunContext(options.runId, options.project, options.lane);
+    options.project = context.project;
+    options.lane = context.lane;
   }
   const lanePaths = buildLanePaths(options.lane, {
+    project: options.project || undefined,
     runVariant: options.dryRun ? "dry-run" : undefined,
     adhocRunId: options.runId || null,
   });

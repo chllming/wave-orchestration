@@ -2,9 +2,11 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import {
+  DEFAULT_PROJECT_ID,
   DEFAULT_WAVE_LANE as CONFIG_DEFAULT_WAVE_LANE,
   loadWaveConfig,
   resolveLaneProfile,
+  sanitizeProjectId,
 } from "./config.mjs";
 import { PACKAGE_ROOT, WORKSPACE_ROOT } from "./roots.mjs";
 
@@ -123,13 +125,25 @@ function buildTelemetryProjectId(config) {
   );
 }
 
+function projectStatePrefix(projectId, laneProfile) {
+  if (laneProfile?.explicitProject) {
+    return path.join("projects", projectId);
+  }
+  return "";
+}
+
 function readRuntimeVersion() {
   return String(readJsonOrNull(path.join(PACKAGE_ROOT, "package.json"))?.version || "").trim() || null;
 }
 
 export function buildLanePaths(laneInput = DEFAULT_WAVE_LANE, options = {}) {
   const config = options.config || loadWaveConfig();
-  const baseLaneProfile = resolveLaneProfile(config, laneInput || config.defaultLane);
+  const project = sanitizeProjectId(options.project || config.defaultProject || DEFAULT_PROJECT_ID);
+  const baseLaneProfile = resolveLaneProfile(
+    config,
+    laneInput || config.defaultLane,
+    project,
+  );
   const adhocRunId = options.adhocRunId ? sanitizeAdhocRunId(options.adhocRunId) : null;
   const laneProfile = adhocRunId
     ? {
@@ -142,6 +156,8 @@ export function buildLanePaths(laneInput = DEFAULT_WAVE_LANE, options = {}) {
       }
     : baseLaneProfile;
   const lane = laneProfile.lane;
+  const projectId = laneProfile.projectId || project;
+  const projectToken = projectId.replace(/-/g, "_");
   const laneTmux = lane.replace(/-/g, "_");
   const runKind = adhocRunId ? "adhoc" : "roadmap";
   const runVariant = String(options.runVariant || "")
@@ -155,19 +171,33 @@ export function buildLanePaths(laneInput = DEFAULT_WAVE_LANE, options = {}) {
   const plansDir = path.join(REPO_ROOT, laneProfile.plansDir);
   const preferredWavesDir = path.join(REPO_ROOT, laneProfile.wavesDir);
   const legacyWavesDir = path.join(docsDir, "waves");
-  const adhocRootDir = path.join(REPO_ROOT, ".wave", "adhoc");
+  const adhocRootDir = path.join(REPO_ROOT, ".wave", "adhoc", projectId);
   const adhocRunDir = adhocRunId ? path.join(adhocRootDir, "runs", adhocRunId) : null;
+  const statePrefix = projectStatePrefix(projectId, laneProfile);
   const baseStateDir = adhocRunId
-    ? path.join(REPO_ROOT, laneProfile.paths.stateRoot, `${lane}-wave-launcher`, "adhoc", adhocRunId)
-    : path.join(REPO_ROOT, laneProfile.paths.stateRoot, `${lane}-wave-launcher`);
+    ? path.join(
+        REPO_ROOT,
+        laneProfile.paths.stateRoot,
+        statePrefix,
+        `${lane}-wave-launcher`,
+        "adhoc",
+        adhocRunId,
+      )
+    : path.join(
+        REPO_ROOT,
+        laneProfile.paths.stateRoot,
+        statePrefix,
+        `${lane}-wave-launcher`,
+      );
   const stateDir = runVariant === "dry-run" ? path.join(baseStateDir, "dry-run") : baseStateDir;
   const orchestratorStateDir =
     runVariant === "dry-run"
       ? path.join(stateDir, "orchestrator")
-      : path.join(REPO_ROOT, laneProfile.paths.orchestratorStateDir);
+      : path.join(REPO_ROOT, laneProfile.paths.orchestratorStateDir, statePrefix);
   const feedbackStateDir = path.join(orchestratorStateDir, "feedback");
   return {
     config,
+    project: projectId,
     laneProfile,
     lane,
     runKind,
@@ -249,7 +279,8 @@ export function buildLanePaths(laneInput = DEFAULT_WAVE_LANE, options = {}) {
     executors: laneProfile.executors,
     skills: laneProfile.skills,
     capabilityRouting: laneProfile.capabilityRouting,
-    projectId: buildTelemetryProjectId(config),
+    projectId: buildTelemetryProjectId(laneProfile.waveControl || { projectId }),
+    projectRootDir: path.join(REPO_ROOT, laneProfile.projectRootDir || "."),
     runtimeVersion: readRuntimeVersion(),
     orchestratorId: null,
     waveControl: laneProfile.waveControl,
@@ -257,13 +288,13 @@ export function buildLanePaths(laneInput = DEFAULT_WAVE_LANE, options = {}) {
     defaultRunStatePath: path.join(stateDir, "run-state.json"),
     globalDashboardPath: path.join(stateDir, "dashboards", "global.json"),
     launcherLockPath: path.join(stateDir, "launcher.lock"),
-    terminalNamePrefix: `${lane}-wave`,
-    dashboardTerminalNamePrefix: `${lane}-wave-dashboard`,
-    globalDashboardTerminalName: `${lane}-wave-dashboard-global`,
-    tmuxSessionPrefix: `oc_${laneTmux}_${workspaceTmuxToken}_wave`,
-    tmuxDashboardSessionPrefix: `oc_${laneTmux}_${workspaceTmuxToken}_wave_dashboard`,
-    tmuxGlobalDashboardSessionPrefix: `oc_${laneTmux}_${workspaceTmuxToken}_wave_dashboard_global`,
-    tmuxSocketName: `oc_${laneTmux}_${workspaceTmuxToken}_waves`,
+    terminalNamePrefix: `${projectId}-${lane}-wave`,
+    dashboardTerminalNamePrefix: `${projectId}-${lane}-wave-dashboard`,
+    globalDashboardTerminalName: `${projectId}-${lane}-wave-dashboard-global`,
+    tmuxSessionPrefix: `oc_${projectToken}_${laneTmux}_${workspaceTmuxToken}_wave`,
+    tmuxDashboardSessionPrefix: `oc_${projectToken}_${laneTmux}_${workspaceTmuxToken}_wave_dashboard`,
+    tmuxGlobalDashboardSessionPrefix: `oc_${projectToken}_${laneTmux}_${workspaceTmuxToken}_wave_dashboard_global`,
+    tmuxSocketName: `oc_${projectToken}_${laneTmux}_${workspaceTmuxToken}_waves`,
     orchestratorStateDir,
     defaultOrchestratorBoardPath: path.join(
       orchestratorStateDir,
@@ -273,7 +304,7 @@ export function buildLanePaths(laneInput = DEFAULT_WAVE_LANE, options = {}) {
     feedbackStateDir,
     feedbackRequestsDir: path.join(feedbackStateDir, "requests"),
     feedbackTriageDir: path.join(stateDir, "feedback", "triage"),
-    crossLaneDependenciesDir: path.join(REPO_ROOT, laneProfile.paths.orchestratorStateDir, "dependencies"),
+    crossLaneDependenciesDir: path.join(orchestratorStateDir, "dependencies"),
     runtimePolicy: laneProfile.runtimePolicy,
   };
 }
@@ -338,6 +369,38 @@ export function readJsonOrNull(filePath) {
   } catch {
     return null;
   }
+}
+
+export function findAdhocRunRecord(runId) {
+  const normalizedRunId = sanitizeAdhocRunId(runId);
+  const adhocRoot = path.join(REPO_ROOT, ".wave", "adhoc");
+  const legacyResultPath = path.join(adhocRoot, "runs", normalizedRunId, "result.json");
+  const legacyResult = readJsonOrNull(legacyResultPath);
+  if (legacyResult) {
+    return {
+      project: legacyResult.project || DEFAULT_PROJECT_ID,
+      resultPath: legacyResultPath,
+      result: legacyResult,
+    };
+  }
+  if (!fs.existsSync(adhocRoot)) {
+    return null;
+  }
+  for (const entry of fs.readdirSync(adhocRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory() || entry.name === "runs") {
+      continue;
+    }
+    const candidatePath = path.join(adhocRoot, entry.name, "runs", normalizedRunId, "result.json");
+    const candidate = readJsonOrNull(candidatePath);
+    if (candidate) {
+      return {
+        project: candidate.project || entry.name,
+        resultPath: candidatePath,
+        result: candidate,
+      };
+    }
+  }
+  return null;
 }
 
 export function toIsoTimestamp() {

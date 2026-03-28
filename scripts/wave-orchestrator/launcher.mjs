@@ -5,6 +5,7 @@ import path from "node:path";
 import {
   CODEX_SANDBOX_MODES,
   DEFAULT_CODEX_SANDBOX_MODE,
+  loadWaveConfig,
   normalizeCodexSandboxMode,
   normalizeExecutorMode,
   SUPPORTED_EXECUTOR_MODES,
@@ -234,6 +235,7 @@ function printUsage(lanePaths, terminalSurface) {
   console.log(`Usage: pnpm exec wave launch [options]
 
 Options:
+  --project <id>        Project id (default: ${lanePaths.project})
   --lane <name>          Wave lane name (default: ${DEFAULT_WAVE_LANE})
   --start-wave <n>       Start from wave number (default: 0)
   --end-wave <n>         End at wave number (default: last available)
@@ -278,9 +280,10 @@ Options:
 }
 
 function parseArgs(argv) {
-  let lanePaths = buildLanePaths(DEFAULT_WAVE_LANE);
-  const projectProfile = readProjectProfile();
+  const config = loadWaveConfig();
+  let lanePaths = buildLanePaths(DEFAULT_WAVE_LANE, { config, project: config.defaultProject });
   const options = {
+    project: config.defaultProject,
     lane: DEFAULT_WAVE_LANE,
     startWave: 0,
     endWave: null,
@@ -298,7 +301,9 @@ function parseArgs(argv) {
     codexSandboxMode: DEFAULT_CODEX_SANDBOX_MODE,
     manifestOut: lanePaths.defaultManifestPath,
     dryRun: false,
-    terminalSurface: resolveDefaultTerminalSurface(projectProfile),
+    terminalSurface: resolveDefaultTerminalSurface(
+      readProjectProfile({ config, project: config.defaultProject }),
+    ),
     dashboard: true,
     cleanupSessions: true,
     keepTerminals: false,
@@ -348,14 +353,28 @@ function parseArgs(argv) {
     } else if (arg === "--no-orchestrator-board") {
       options.orchestratorBoardPath = null;
       orchestratorBoardProvided = true;
+    } else if (arg === "--project") {
+      options.project = String(argv[++i] || "").trim();
+      lanePaths = buildLanePaths(options.lane, {
+        config,
+        project: options.project,
+        adhocRunId: options.adhocRunId,
+      });
+      options.terminalSurface = resolveDefaultTerminalSurface(
+        readProjectProfile({ config, project: options.project }),
+      );
     } else if (arg === "--lane") {
       options.lane = String(argv[++i] || "").trim();
       lanePaths = buildLanePaths(options.lane, {
+        config,
+        project: options.project,
         adhocRunId: options.adhocRunId,
       });
     } else if (arg === "--adhoc-run") {
       options.adhocRunId = sanitizeAdhocRunId(argv[++i]);
       lanePaths = buildLanePaths(options.lane, {
+        config,
+        project: options.project,
         adhocRunId: options.adhocRunId,
       });
     } else if (arg === "--orchestrator-id") {
@@ -406,6 +425,8 @@ function parseArgs(argv) {
   }
 
   lanePaths = buildLanePaths(options.lane, {
+    config,
+    project: options.project,
     runVariant: options.dryRun ? "dry-run" : undefined,
     adhocRunId: options.adhocRunId,
   });

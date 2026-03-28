@@ -1,13 +1,15 @@
 ---
 title: "Sample Waves"
-summary: "Showcase-first sample waves that demonstrate the shipped 0.8.9 authored surface, including the optional design-role path."
+summary: "Showcase-first sample waves that demonstrate the shipped 0.9.0 authored surface, including the optional design-role path."
 ---
 
 # Sample Waves
 
-This guide points to showcase-first sample waves that demonstrate the shipped `0.8.9` authored Wave surface.
+This guide points to showcase-first sample waves that demonstrate the shipped `0.9.0` authored Wave surface.
 
 The examples are intentionally denser than typical production waves. Their job is to teach the current authoring and runtime surface quickly, not to be the smallest possible launch-ready files.
+
+All example `.tmp/main-wave-launcher/...` paths assume the implicit default project. For explicit monorepo projects, rewrite those to `.tmp/projects/<projectId>/main-wave-launcher/...` and run the matching commands with `--project <projectId>`.
 
 ## Canonical Examples
 
@@ -15,7 +17,7 @@ The examples are intentionally denser than typical production waves. Their job i
   Shows what a good `repo-landed` outcome looks like when one promoted component only closes honestly if desired-state records, reconcile-loop substrate, and cluster-view surfaces land together. It emphasizes maturity discipline, explicit deliverables, and shared-plan closure without drifting into `pilot-live` claims.
 
 - [Full modern sample wave](../plans/examples/wave-example-live-proof.md)
-  Shows the combined `0.8.9` authored surface in one file: closure roles, `E0`, optional security review, delegated and pinned benchmark targets, richer executor config, `### Skills`, `### Capabilities`, `### Deliverables`, `### Exit contract`, `### Proof artifacts`, sticky retry, deploy environments, and proof-first live-wave structure.
+  Shows the combined `0.9.0` authored surface in one file: closure roles, `E0`, optional security review, delegated and pinned benchmark targets, richer executor config, `### Skills`, `### Capabilities`, `### Deliverables`, `### Exit contract`, `### Proof artifacts`, sticky retry, deploy environments, and proof-first live-wave structure.
 
 - [Optional design-steward handoff wave](../plans/examples/wave-example-design-handoff.md)
   Shows the shipped design-role surface: one pre-implementation design steward publishes a design packet, downstream implementation owners read that packet before coding, and normal closure roles still decide final completion. For terminal or operator-surface work, pair that shape with explicit `tui-design` in the design steward's `### Skills`. For the hybrid variant, explicitly give that same design agent implementation-owned paths and the normal implementation contract sections.
@@ -39,10 +41,12 @@ The examples are intentionally denser than typical production waves. Their job i
 - deploy environments and provider-skill examples
 - infra and deploy-verifier specialist slices
 - optional pre-implementation design packets and design-to-implementation handoff
+- security review before integration closure
+- project-aware adaptation for launcher-owned `.tmp/...` paths
 
 ## Feature Coverage Map
 
-Together these samples cover the main surfaces added or hardened through `0.8.9`:
+Together these samples cover the main surfaces added or hardened through `0.9.0`:
 
 - repo-landed maturity discipline and anti-overclaim framing
 - explicit shared-plan closure for future-wave safety
@@ -59,8 +63,99 @@ Together these samples cover the main surfaces added or hardened through `0.8.9`
 - sticky retry for proof-bearing owners
 - proof-first live-wave prompts
 - deploy environments and deploy-kind-aware skills
+- optional security review before integration closure
+- custom closure-role ids when a repo does not want the starter `A0`/`E0`/`A8`/`A9`/`A7` names
+- signal-driven long-running watcher agents through `signal-hygiene`
+- explicit-project launcher-state path rewrites for monorepos
 - integration, documentation, and cont-QA closure-role structure
 - optional `design` worker role and `design-pass` executor profile
+
+## Targeted Snippets For Narrower Surfaces
+
+Some current features are real parts of the authored surface, but they do not belong in every full-length teaching wave. Use these snippets when you need those narrower shapes.
+
+### Custom Closure Role Ids
+
+Wave resolves closure roles from the wave definition first, then from starter defaults. You can keep the same closure semantics while changing the ids:
+
+```md
+## Agent Q4: cont-QA
+
+### Role prompts
+
+- docs/agents/wave-cont-qa-role.md
+
+## Agent V2: cont-EVAL
+
+### Role prompts
+
+- docs/agents/wave-cont-eval-role.md
+
+## Agent I6: Integration Steward
+
+### Role prompts
+
+- docs/agents/wave-integration-role.md
+
+## Agent D8: Documentation Steward
+
+### Role prompts
+
+- docs/agents/wave-documentation-role.md
+
+## Agent S3: Security Review
+
+### Role prompts
+
+- docs/agents/wave-security-role.md
+```
+
+Keep the role prompt and closure meaning aligned even when the ids change. Launch, retry, derived state, and closure sequencing will honor the wave-level bindings.
+
+### Long-Running Watchers With `signal-hygiene`
+
+Use `signal-hygiene` only for intentionally long-running non-resident agents that should wait on orchestrator-written signal changes instead of inventing their own polling protocol.
+
+````md
+## Agent R5: Runtime Watcher
+
+### Executor
+
+- id: codex
+- retry-policy: sticky
+
+### Skills
+
+- role-research
+- runtime-codex
+- signal-hygiene
+
+### Prompt
+
+```text
+Primary goal:
+- Stay alive between orchestrator signal changes and only resume work after acknowledging the next visible signal version.
+
+Specific expectations:
+- use the prompt-visible signal state path and ack path exactly as provided
+- do not create a second polling file or custom wakeup loop
+- emit normal structured coordination records when new evidence or blockers appear
+```
+````
+
+Pair that snippet with [signal-wrappers.md](../guides/signal-wrappers.md) when shell automation or external wait loops also need to observe the same signal surface.
+
+### Project-Aware Launcher-Owned Paths
+
+When copying a proof-first example into an explicit monorepo project, update launcher-owned file paths as well as the runtime command:
+
+```md
+File ownership (only touch these paths):
+- .tmp/projects/service/main-wave-launcher/integration/wave-14.md
+- .tmp/projects/service/main-wave-launcher/integration/wave-14.json
+```
+
+The same rewrite applies to proof bundles, logs, dashboards, coordination state, and telemetry spools under `.tmp/<lane>-wave-launcher/...`.
 
 ## When To Copy Literally Vs Adapt
 
@@ -89,7 +184,7 @@ Adapt more aggressively when:
 ## Suggested Reading Order
 
 1. Start with [High-fidelity repo-landed rollout wave](../plans/examples/wave-example-rollout-fidelity.md) if you want the clearest example of good closure-ready wave fidelity for a repo-only outcome.
-2. Read [Full modern sample wave](../plans/examples/wave-example-live-proof.md) if you want the denser proof-first and eval-heavy `0.8.9` surface.
+2. Read [Full modern sample wave](../plans/examples/wave-example-live-proof.md) if you want the denser proof-first and eval-heavy `0.9.0` surface.
 3. Read [Optional design-steward handoff wave](../plans/examples/wave-example-design-handoff.md) if the task needs a design packet before implementation fan-out.
 4. Read [docs/evals/README.md](../evals/README.md) if you want more background on benchmark target selection.
 5. Read [docs/reference/live-proof-waves.md](./live-proof-waves.md) if you want more detail on proof-first `pilot-live` authoring.

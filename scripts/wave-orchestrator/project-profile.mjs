@@ -1,5 +1,5 @@
 import path from "node:path";
-import { loadWaveConfig } from "./config.mjs";
+import { DEFAULT_PROJECT_ID, loadWaveConfig, sanitizeProjectId } from "./config.mjs";
 import { REPO_ROOT, ensureDirectory, readJsonOrNull, writeJsonAtomic } from "./shared.mjs";
 import { normalizeTerminalSurface } from "./terminals.mjs";
 
@@ -88,10 +88,18 @@ export function buildDefaultProjectProfile(config = loadWaveConfig()) {
       lane: cleanText(config.defaultLane) || "main",
     },
     source: {
+      projectId: cleanText(config.defaultProject) || DEFAULT_PROJECT_ID,
       projectName: cleanText(config.projectName) || "Wave Orchestrator",
       configPath: normalizePathForProfile(config.configPath || "wave.config.json"),
     },
   };
+}
+
+export function projectProfilePath(projectId = DEFAULT_PROJECT_ID) {
+  const normalizedProjectId = sanitizeProjectId(projectId || DEFAULT_PROJECT_ID);
+  return normalizedProjectId === sanitizeProjectId(DEFAULT_PROJECT_ID)
+    ? PROJECT_PROFILE_PATH
+    : path.join(REPO_ROOT, ".wave", "projects", normalizedProjectId, "project-profile.json");
 }
 
 export function normalizeProjectProfile(rawProfile, options = {}) {
@@ -137,6 +145,10 @@ export function normalizeProjectProfile(rawProfile, options = {}) {
       lane: cleanText(plannerDefaults.lane) || base.plannerDefaults.lane,
     },
     source: {
+      projectId:
+        cleanText(rawProfile.source?.projectId) ||
+        cleanText(options.project || config.defaultProject) ||
+        DEFAULT_PROJECT_ID,
       projectName: cleanText(rawProfile.source?.projectName) || base.source.projectName,
       configPath: normalizePathForProfile(rawProfile.source?.configPath) || base.source.configPath,
     },
@@ -144,15 +156,23 @@ export function normalizeProjectProfile(rawProfile, options = {}) {
 }
 
 export function readProjectProfile(options = {}) {
-  const payload = readJsonOrNull(PROJECT_PROFILE_PATH);
+  const profilePath = options.profilePath || projectProfilePath(options.project || options.config?.defaultProject);
+  const payload = readJsonOrNull(profilePath);
   if (!payload) {
     return null;
   }
-  return normalizeProjectProfile(payload, options);
+  return normalizeProjectProfile(payload, {
+    ...options,
+    profilePath,
+  });
 }
 
 export function writeProjectProfile(profile, options = {}) {
   const config = options.config || loadWaveConfig();
+  const projectId = sanitizeProjectId(
+    options.project || profile?.source?.projectId || config.defaultProject || DEFAULT_PROJECT_ID,
+  );
+  const profilePath = options.profilePath || projectProfilePath(projectId);
   const now = new Date().toISOString();
   const normalized = normalizeProjectProfile(
     {
@@ -160,20 +180,23 @@ export function writeProjectProfile(profile, options = {}) {
       initializedAt: profile?.initializedAt || now,
       updatedAt: now,
       source: {
+        projectId,
         projectName: profile?.source?.projectName || config.projectName,
         configPath: normalizePathForProfile(config.configPath || "wave.config.json"),
       },
     },
-    { config },
+    { config, project: projectId, profilePath },
   );
-  ensureDirectory(path.dirname(PROJECT_PROFILE_PATH));
-  writeJsonAtomic(PROJECT_PROFILE_PATH, normalized);
+  ensureDirectory(path.dirname(profilePath));
+  writeJsonAtomic(profilePath, normalized);
   return normalized;
 }
 
 export function updateProjectProfile(mutator, options = {}) {
   const config = options.config || loadWaveConfig();
-  const current = readProjectProfile({ config }) || buildDefaultProjectProfile(config);
+  const projectId = sanitizeProjectId(options.project || config.defaultProject || DEFAULT_PROJECT_ID);
+  const current =
+    readProjectProfile({ config, project: projectId }) || buildDefaultProjectProfile(config);
   const next = typeof mutator === "function" ? mutator(current) : { ...current, ...(mutator || {}) };
   return writeProjectProfile(
     {
@@ -181,7 +204,7 @@ export function updateProjectProfile(mutator, options = {}) {
       ...(next || {}),
       initializedAt: current.initializedAt,
     },
-    { config },
+    { config, project: projectId },
   );
 }
 

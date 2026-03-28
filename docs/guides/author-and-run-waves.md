@@ -13,6 +13,13 @@ pnpm exec wave project setup
 pnpm exec wave project show --json
 ```
 
+In a monorepo, run the same setup per project:
+
+```bash
+pnpm exec wave project setup --project backend
+pnpm exec wave project show --project backend --json
+```
+
 The saved project profile remembers:
 
 - default oversight mode
@@ -29,6 +36,12 @@ Generate a structured draft:
 
 ```bash
 pnpm exec wave draft --wave 1 --template implementation
+```
+
+For an explicit monorepo project:
+
+```bash
+pnpm exec wave draft --project backend --lane main --wave 1 --template implementation
 ```
 
 The planner writes two artifacts:
@@ -61,7 +74,7 @@ Good fits:
 - multi-owner waves where downstream implementers need the same decisions and assumptions
 - ambiguous tasks where open questions should become explicit before code owners fan out
 
-The starter contract in `0.8.9` is:
+The starter contract in `0.9.0` is:
 
 - import `docs/agents/wave-design-role.md`
 - own one packet such as `docs/plans/waves/design/wave-<n>-<agentId>.md`

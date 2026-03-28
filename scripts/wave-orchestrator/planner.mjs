@@ -36,8 +36,8 @@ import {
   buildDefaultProjectProfile,
   normalizeDraftTemplate,
   normalizeOversightMode,
+  projectProfilePath,
   PROJECT_OVERSIGHT_MODES,
-  PROJECT_PROFILE_PATH,
   PROJECT_PROFILE_TERMINAL_SURFACES,
   readProjectProfile,
   updateProjectProfile,
@@ -1336,8 +1336,9 @@ function collectPlannerSources({ config, lanePaths, task, fromWave }) {
   )) {
     sources.add(sourcePath, "core-context", "planner core context");
   }
-  if (fileExists(PROJECT_PROFILE_PATH)) {
-    sources.add(repoRelativePath(PROJECT_PROFILE_PATH), "project-profile", "saved project profile");
+  const plannerProfilePath = projectProfilePath(lanePaths.project || config.defaultProject);
+  if (fileExists(plannerProfilePath)) {
+    sources.add(repoRelativePath(plannerProfilePath), "project-profile", "saved project profile");
   }
   for (const sourcePath of ensureRepoRelativePathList(
     plannerConfig.lessonsPaths || DEFAULT_PLANNER_AGENTIC_LESSONS_PATHS,
@@ -2587,9 +2588,10 @@ function parsePlannerWaveSelection(rawValue, waveOrder) {
 
 async function runAgenticDraftFlow(options = {}) {
   const config = options.config || loadWaveConfig();
-  const profile = await ensureProjectProfile({ config });
+  const projectId = options.project || config.defaultProject;
+  const profile = await ensureProjectProfile({ config, project: projectId });
   const lane = options.lane || profile.plannerDefaults.lane || config.defaultLane;
-  const lanePaths = buildLanePaths(lane, { config });
+  const lanePaths = buildLanePaths(lane, { config, project: projectId });
   const matrix = loadComponentCutoverMatrix({ laneProfile: lanePaths.laneProfile });
   const bundleIndex = loadContext7BundleIndex(lanePaths.context7BundleIndexPath);
   const plannerExecutorProfile =
@@ -2794,7 +2796,7 @@ async function runAgenticDraftFlow(options = {}) {
         lane: lanePaths.lane,
       },
     }),
-    { config },
+    { config, project: projectId },
   );
   return resultPayload;
 }
@@ -2810,7 +2812,12 @@ async function runApplyPlannerRun(options = {}) {
     );
   }
   const config = options.config || loadWaveConfig();
-  const lanePaths = buildLanePaths(bundle.request.lane, { config });
+  const projectId =
+    cleanText(options.project) ||
+    cleanText(bundle.request.project) ||
+    cleanText(bundle.result?.project) ||
+    config.defaultProject;
+  const lanePaths = buildLanePaths(bundle.request.lane, { config, project: projectId });
   const selectedWaves = parsePlannerWaveSelection(options.waves, bundle.plan?.waveOrder || []);
   if (selectedWaves.length === 0) {
     throw new Error("No waves selected for apply");
@@ -2894,12 +2901,13 @@ function showPlannerRun(options = {}) {
 
 async function ensureProjectProfile(options = {}) {
   const config = options.config || loadWaveConfig();
-  const existing = readProjectProfile({ config });
+  const existing = readProjectProfile({ config, project: options.project });
   if (existing) {
     return existing;
   }
   return runProjectSetupFlow({
     config,
+    project: options.project,
     json: false,
     fromDraft: true,
   });
@@ -2907,12 +2915,14 @@ async function ensureProjectProfile(options = {}) {
 
 async function runProjectSetupFlow(options = {}) {
   const config = options.config || loadWaveConfig();
-  const existing = readProjectProfile({ config });
+  const projectId = cleanText(options.project || config.defaultProject);
+  const existing = readProjectProfile({ config, project: projectId });
   const base = existing || buildDefaultProjectProfile(config);
   const prompt = new PromptSession();
   try {
+    const projectLanes = Object.keys(config.projects?.[projectId]?.lanes || {});
     const laneChoices = Array.from(
-      new Set([config.defaultLane, ...Object.keys(config.lanes || {})].filter(Boolean)),
+      new Set([config.defaultLane, ...projectLanes, ...Object.keys(config.lanes || {})].filter(Boolean)),
     );
     const newProject = await prompt.askBoolean("Treat this repository as a new project?", base.newProject);
     const defaultOversightMode = normalizeOversightMode(
@@ -2994,7 +3004,7 @@ async function runProjectSetupFlow(options = {}) {
           lane,
         },
       },
-      { config },
+      { config, project: projectId },
     );
     return profile;
   } finally {
@@ -3284,10 +3294,11 @@ async function collectEvalTargets({ prompt }) {
 
 async function runDraftFlow(options = {}) {
   const config = options.config || loadWaveConfig();
-  const profile = await ensureProjectProfile({ config });
+  const projectId = options.project || config.defaultProject;
+  const profile = await ensureProjectProfile({ config, project: projectId });
   const waveNumber = options.wave;
   const lane = options.lane || profile.plannerDefaults.lane || config.defaultLane;
-  const lanePaths = buildLanePaths(lane, { config });
+  const lanePaths = buildLanePaths(lane, { config, project: projectId });
   const matrix = loadComponentCutoverMatrix({ laneProfile: lanePaths.laneProfile });
   const bundleIndex = loadContext7BundleIndex(lanePaths.context7BundleIndexPath);
   const context7BundleChoices = Object.keys(bundleIndex.bundles || {}).sort((left, right) =>
@@ -3409,9 +3420,10 @@ async function runDraftFlow(options = {}) {
           lane: lanePaths.lane,
         },
       }),
-      { config },
+      { config, project: projectId },
     );
     return {
+      project: projectId,
       wave: waveNumber,
       lane: lanePaths.lane,
       template,
@@ -3419,7 +3431,7 @@ async function runDraftFlow(options = {}) {
       specPath: path.relative(REPO_ROOT, specPath),
       matrixJsonPath: path.relative(REPO_ROOT, path.resolve(REPO_ROOT, lanePaths.componentCutoverMatrixJsonPath)),
       matrixDocPath: path.relative(REPO_ROOT, path.resolve(REPO_ROOT, lanePaths.componentCutoverMatrixDocPath)),
-      profilePath: path.relative(REPO_ROOT, PROJECT_PROFILE_PATH),
+      profilePath: path.relative(REPO_ROOT, projectProfilePath(projectId)),
     };
   } finally {
     await prompt.close();
@@ -3428,12 +3440,12 @@ async function runDraftFlow(options = {}) {
 
 function printPlannerHelp() {
   console.log(`Usage:
-  wave project setup [--json]
-  wave project show [--json]
-  wave draft --wave <n> [--lane <lane>] [--template implementation|qa|infra|release] [--force] [--json]
-  wave draft --agentic --task "<text>" --from-wave <n> [--lane <lane>] [--max-waves <n>] [--planner-executor <profile>] [--json]
+  wave project setup [--project <id>] [--json]
+  wave project show [--project <id>] [--json]
+  wave draft --wave <n> [--project <id>] [--lane <lane>] [--template implementation|qa|infra|release] [--force] [--json]
+  wave draft --agentic --task "<text>" --from-wave <n> [--project <id>] [--lane <lane>] [--max-waves <n>] [--planner-executor <profile>] [--json]
   wave draft --show-run <run-id> [--json]
-  wave draft --apply-run <run-id> [--waves <list>|all] [--force] [--json]
+  wave draft --apply-run <run-id> [--project <id>] [--waves <list>|all] [--force] [--json]
 `);
 }
 
@@ -3444,6 +3456,7 @@ export async function runPlannerCli(argv) {
     json: false,
     force: false,
     wave: null,
+    project: null,
     lane: null,
     template: null,
     agentic: false,
@@ -3464,6 +3477,8 @@ export async function runPlannerCli(argv) {
     for (const arg of args) {
       if (arg === "--json") {
         options.json = true;
+      } else if (arg === "--project") {
+        options.project = cleanText(args.shift());
       } else if (arg === "--help" || arg === "-h") {
         printPlannerHelp();
         return;
@@ -3472,15 +3487,17 @@ export async function runPlannerCli(argv) {
       }
     }
     if (action === "setup") {
-      const profile = await runProjectSetupFlow({ json: options.json });
+      const projectId = options.project || loadWaveConfig().defaultProject;
+      const profile = await runProjectSetupFlow({ json: options.json, project: projectId });
       if (options.json) {
         printJson({
-          profilePath: path.relative(REPO_ROOT, PROJECT_PROFILE_PATH),
+          profilePath: path.relative(REPO_ROOT, projectProfilePath(projectId)),
           profile,
         });
         return;
       }
-      console.log(`[wave:project] profile: ${path.relative(REPO_ROOT, PROJECT_PROFILE_PATH)}`);
+      console.log(`[wave:project] profile: ${path.relative(REPO_ROOT, projectProfilePath(projectId))}`);
+      console.log(`[wave:project] project_id=${projectId}`);
       console.log(`[wave:project] lane=${profile.plannerDefaults.lane}`);
       console.log(`[wave:project] template=${profile.plannerDefaults.template}`);
       console.log(`[wave:project] oversight=${profile.defaultOversightMode}`);
@@ -3488,19 +3505,21 @@ export async function runPlannerCli(argv) {
       return;
     }
     if (action === "show") {
-      const profile = readProjectProfile();
+      const projectId = options.project || loadWaveConfig().defaultProject;
+      const profile = readProjectProfile({ project: projectId });
       if (options.json) {
         printJson({
-          profilePath: path.relative(REPO_ROOT, PROJECT_PROFILE_PATH),
+          profilePath: path.relative(REPO_ROOT, projectProfilePath(projectId)),
           profile,
         });
         return;
       }
       if (!profile) {
-        console.log(`[wave:project] no saved profile at ${path.relative(REPO_ROOT, PROJECT_PROFILE_PATH)}`);
+        console.log(`[wave:project] no saved profile at ${path.relative(REPO_ROOT, projectProfilePath(projectId))}`);
         return;
       }
-      console.log(`[wave:project] profile: ${path.relative(REPO_ROOT, PROJECT_PROFILE_PATH)}`);
+      console.log(`[wave:project] profile: ${path.relative(REPO_ROOT, projectProfilePath(projectId))}`);
+      console.log(`[wave:project] project_id=${projectId}`);
       console.log(`[wave:project] project=${profile.source.projectName}`);
       console.log(`[wave:project] lane=${profile.plannerDefaults.lane}`);
       console.log(`[wave:project] template=${profile.plannerDefaults.template}`);
@@ -3537,6 +3556,8 @@ export async function runPlannerCli(argv) {
       options.waves = cleanText(args[++index]);
     } else if (arg === "--wave") {
       options.wave = Number.parseInt(String(args[++index] || ""), 10);
+    } else if (arg === "--project") {
+      options.project = cleanText(args[++index]);
     } else if (arg === "--lane") {
       options.lane = cleanText(args[++index]);
     } else if (arg === "--template") {

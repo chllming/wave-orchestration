@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { PACKAGE_ROOT } from "../../scripts/wave-orchestrator/shared.mjs";
 
 const tempDirs = [];
+const DEFAULT_PROJECT_ID = "default";
 
 function makeTempDir() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wave-adhoc-test-"));
@@ -63,7 +64,7 @@ describe("adhoc task generation", () => {
     expect(planResult.status).toBe(0);
 
     const summary = JSON.parse(planResult.stdout);
-    const runDir = path.join(repoDir, ".wave", "adhoc", "runs", summary.runId);
+    const runDir = path.join(repoDir, ".wave", "adhoc", DEFAULT_PROJECT_ID, "runs", summary.runId);
     expect(fs.existsSync(path.join(runDir, "request.json"))).toBe(true);
     expect(fs.existsSync(path.join(runDir, "spec.json"))).toBe(true);
     expect(fs.existsSync(path.join(runDir, "wave-0.md"))).toBe(true);
@@ -79,7 +80,7 @@ describe("adhoc task generation", () => {
     const documentationAgent = spec.agents.find((agent) => agent.agentId === "A9");
     expect(documentationAgent.ownedPaths).toEqual(
       expect.arrayContaining([
-        `.wave/adhoc/runs/${summary.runId}/reports/wave-0-doc-closure.md`,
+        `.wave/adhoc/${DEFAULT_PROJECT_ID}/runs/${summary.runId}/reports/wave-0-doc-closure.md`,
         "docs/plans/current-state.md",
         "docs/plans/master-plan.md",
         "docs/plans/migration.md",
@@ -112,7 +113,9 @@ describe("adhoc task generation", () => {
     expect(planResult.status).toBe(0);
 
     const summary = JSON.parse(planResult.stdout);
-    const spec = readJson(path.join(repoDir, ".wave", "adhoc", "runs", summary.runId, "spec.json"));
+    const spec = readJson(
+      path.join(repoDir, ".wave", "adhoc", DEFAULT_PROJECT_ID, "runs", summary.runId, "spec.json"),
+    );
     const worker = spec.agents.find((agent) => agent.agentId === "A1");
 
     expect(worker.ownedPaths).toEqual(
@@ -148,7 +151,10 @@ describe("adhoc task generation", () => {
     const runId = runs[0].runId;
 
     const result = JSON.parse(
-      fs.readFileSync(path.join(repoDir, ".wave", "adhoc", "runs", runId, "result.json"), "utf8"),
+      fs.readFileSync(
+        path.join(repoDir, ".wave", "adhoc", DEFAULT_PROJECT_ID, "runs", runId, "result.json"),
+        "utf8",
+      ),
     );
     expect(result.status).toBe("completed");
     expect(result.launcherStateDir).toBe(`.tmp/main-wave-launcher/adhoc/${runId}/dry-run`);
@@ -193,7 +199,7 @@ describe("adhoc task generation", () => {
     );
     expect(planResult.status).toBe(0);
     const summary = JSON.parse(planResult.stdout);
-    const runDir = path.join(repoDir, ".wave", "adhoc", "runs", summary.runId);
+    const runDir = path.join(repoDir, ".wave", "adhoc", DEFAULT_PROJECT_ID, "runs", summary.runId);
     const originalSpec = readJson(path.join(runDir, "spec.json"));
     writeJson(path.join(repoDir, ".wave", "project-profile.json"), {
       schemaVersion: 1,
@@ -249,7 +255,10 @@ describe("adhoc task generation", () => {
     expect(evalAgent.ownedPaths).toEqual(["docs/plans/waves/reviews/wave-3-cont-eval.md"]);
 
     const storedResult = JSON.parse(
-      fs.readFileSync(path.join(repoDir, ".wave", "adhoc", "runs", summary.runId, "result.json"), "utf8"),
+      fs.readFileSync(
+        path.join(repoDir, ".wave", "adhoc", DEFAULT_PROJECT_ID, "runs", summary.runId, "result.json"),
+        "utf8",
+      ),
     );
     expect(storedResult.promotedWave).toBe(3);
   });

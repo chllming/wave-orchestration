@@ -5,6 +5,7 @@ This directory is the canonical reference for executor configuration in the pack
 Use it when you need the full supported surface for:
 
 - `wave.config.json`
+- `defaultProject` and `projects.<projectId>`
 - `lanes.<lane>.executors`
 - `waveControl`
 - `executors.profiles.<profile>`
@@ -55,6 +56,121 @@ Then Wave filters configured skills through each bundle's activation metadata. E
 
 When retry-time fallback changes the runtime, Wave recomputes the effective skill set and rewrites the executor overlay before relaunch.
 
+## Projects
+
+Wave can run multiple project tracks from one monorepo.
+
+- `defaultProject` selects the implicit project when a command does not pass `--project`
+- `projects.<projectId>.rootDir` relocates that project's default docs root under the repo
+- `projects.<projectId>.paths.*` can relocate that project's docs, launcher-state, terminal-registry, Context7 bundle index, benchmark catalog, and component-matrix surfaces
+- `projects.<projectId>.lanes.<lane>` owns lane-local runtime, planner, skill, and Wave Control overrides
+- legacy top-level `lanes` still work as the implicit default project for backwards compatibility
+- an explicit unknown `--project` is an error; Wave no longer falls back to `defaultProject` for typoed project ids
+
+Example:
+
+```json
+{
+  "defaultProject": "app",
+  "projects": {
+    "app": {
+      "rootDir": ".",
+      "lanes": {
+        "main": {}
+      }
+    },
+    "service": {
+      "rootDir": "services/api",
+      "lanes": {
+        "main": {}
+      }
+    }
+  }
+}
+```
+
+Supported `projects.<projectId>.paths.*` fields:
+
+| Key | Purpose |
+| --- | --- |
+| `docsDir` | Project-local docs root used as the default base for docs, plans, waves, and matrix defaults |
+| `stateRoot` | Base directory for launcher state, logs, overlays, telemetry, and projections |
+| `orchestratorStateDir` | Base directory for project-scoped orchestrator message boards, feedback, and dependency state |
+| `terminalsPath` | VS Code terminal registry written when `--terminal-surface vscode` is active |
+| `context7BundleIndexPath` | Project-specific Context7 bundle index |
+| `benchmarkCatalogPath` | Project-specific benchmark catalog for `cont-EVAL` and benchmark commands |
+| `componentCutoverMatrixDocPath` | Project-specific component cutover matrix markdown |
+| `componentCutoverMatrixJsonPath` | Project-specific component cutover matrix JSON |
+
+Path resolution order:
+
+1. lane-specific override such as `projects.<projectId>.lanes.<lane>.terminalsPath`
+2. `projects.<projectId>.paths.*`
+3. repo-global `paths.*`
+4. built-in derived defaults for `docsDir`, `plansDir`, `wavesDir`, and matrix paths
+
+Advanced monorepo example:
+
+```json
+{
+  "defaultProject": "app",
+  "paths": {
+    "stateRoot": ".tmp",
+    "terminalsPath": ".vscode/terminals.json"
+  },
+  "projects": {
+    "app": {
+      "rootDir": ".",
+      "lanes": {
+        "main": {}
+      }
+    },
+    "service": {
+      "rootDir": "services/api",
+      "paths": {
+        "docsDir": "services/api/docs",
+        "stateRoot": ".tmp/service-wave",
+        "orchestratorStateDir": ".tmp/service-orchestrator",
+        "terminalsPath": ".vscode/service-terminals.json",
+        "context7BundleIndexPath": "services/api/docs/context7/bundles.json",
+        "benchmarkCatalogPath": "services/api/docs/evals/benchmark-catalog.json",
+        "componentCutoverMatrixDocPath": "services/api/docs/plans/component-cutover-matrix.md",
+        "componentCutoverMatrixJsonPath": "services/api/docs/plans/component-cutover-matrix.json"
+      },
+      "waveControl": {
+        "projectId": "service-api",
+        "reportMode": "metadata-plus-selected"
+      },
+      "lanes": {
+        "main": {
+          "runtimePolicy": {
+            "defaultExecutorByRole": {
+              "design": "claude",
+              "implementation": "codex",
+              "integration": "claude",
+              "documentation": "claude",
+              "cont-qa": "claude",
+              "cont-eval": "codex"
+            },
+            "runtimeMixTargets": {
+              "codex": 4,
+              "claude": 3,
+              "opencode": 1
+            },
+            "fallbackExecutorOrder": ["claude", "opencode", "codex"]
+          }
+        },
+        "release": {
+          "docsDir": "services/api/docs/release",
+          "plansDir": "services/api/docs/release/plans",
+          "wavesDir": "services/api/docs/release/plans/waves"
+        }
+      }
+    }
+  }
+}
+```
+
 ## Common Fields
 
 These fields are shared across runtimes:
@@ -74,7 +190,7 @@ Practical guidance:
 - prefer `budget.minutes` for normal synthesis, integration, and closure work
 - use generic `budget.turns` as a planning hint, not a hard failure trigger
 - only set `claude.maxTurns` or `opencode.steps` when you deliberately want a hard ceiling for that runtime
-- see [../../guides/recommendations-0.8.9.md](../../guides/recommendations-0.8.9.md) for the recommended `0.8.9` operating stance that combines advisory turn budgets with softer non-proof coordination states
+- see [../../guides/recommendations-0.9.0.md](../../guides/recommendations-0.9.0.md) for the recommended `0.9.0` operating stance that combines advisory turn budgets with softer non-proof coordination states
 
 ## Runtime Pages
 
@@ -86,16 +202,25 @@ Practical guidance:
 
 `wave.config.json` may also declare a `waveControl` block for local-first telemetry delivery.
 
+Packaged defaults in `@chllming/wave-orchestration@0.9.0`:
+
+- `endpoint`: `https://wave-control.up.railway.app/api/v1`
+- `reportMode`: `metadata-only`
+- `enabled`: `true`
+- project-scoped telemetry identity defaults to the resolved `projectId`, then lane and wave metadata from the active run
+
+This package is distributed with the author's personal Wave Control endpoint enabled by default. Anyone who does not want telemetry delivered back to that endpoint must explicitly opt out in config or per run.
+
 Supported top-level fields:
 
 | Key | Type | Default | Purpose |
 | --- | --- | --- | --- |
 | `enabled` | boolean | `true` | Master switch for local queueing and remote delivery |
-| `endpoint` | string | unset | Base URL for the Railway-hosted `services/wave-control` API |
+| `endpoint` | string | `https://wave-control.up.railway.app/api/v1` | Base URL for the Railway-hosted `services/wave-control` API |
 | `workspaceId` | string | derived from repo path | Stable workspace identity used across runs |
-| `projectId` | string | derived from `projectName` | Stable project/repo identity used for cross-workspace reporting and filtering |
+| `projectId` | string | resolved project id | Stable project identity used for cross-workspace reporting and filtering |
 | `authTokenEnvVar` | string | `WAVE_CONTROL_AUTH_TOKEN` | Environment variable name holding the bearer token |
-| `reportMode` | string | `metadata-plus-selected` | `disabled`, `metadata-only`, `metadata-plus-selected`, or `full-artifact-upload` |
+| `reportMode` | string | `metadata-only` | `disabled`, `metadata-only`, `metadata-plus-selected`, or `full-artifact-upload` |
 | `uploadArtifactKinds` | string[] | selected proof/trace/benchmark kinds | Artifact classes eligible for body upload when an artifact's upload policy requests a body |
 | `requestTimeoutMs` | integer | `5000` | Per-batch network timeout |
 | `flushBatchSize` | integer | `25` | Max queued telemetry events flushed per batch |
@@ -105,11 +230,13 @@ Supported top-level fields:
 | `captureTraceBundles` | boolean | `true` | Emit finalized trace-bundle artifacts and gate snapshots |
 | `captureBenchmarkRuns` | boolean | `true` | Emit `benchmark_run`, `benchmark_item`, `verification`, and `review` events |
 
-Lane overrides may refine the same keys under `lanes.<lane>.waveControl`.
+Lane overrides may refine the same keys under `lanes.<lane>.waveControl` or `projects.<projectId>.lanes.<lane>.waveControl`.
 
 One-run override:
 
 - `wave launch --no-telemetry` disables Wave Control queueing and remote delivery for that launcher invocation without changing the repo config.
+- `waveControl.enabled: false` disables queueing and remote delivery for the repo or project.
+- `waveControl.reportMode: "disabled"` disables remote reporting while leaving the config surface explicit.
 
 Example:
 
@@ -118,8 +245,8 @@ Example:
   "waveControl": {
     "endpoint": "https://wave-control.up.railway.app/api/v1",
     "workspaceId": "wave-main",
-    "projectId": "wave-orchestration",
-    "reportMode": "metadata-plus-selected",
+    "projectId": "app",
+    "reportMode": "metadata-only",
     "uploadArtifactKinds": [
       "trace-run-metadata",
       "trace-quality",
@@ -143,8 +270,8 @@ See [../wave-control.md](../wave-control.md) for the event contract and upload-p
 
 Wave writes runtime artifacts here:
 
-- live runs: `.tmp/<lane>-wave-launcher/executors/wave-<n>/<agent-slug>/`
-- dry-run previews: `.tmp/<lane>-wave-launcher/dry-run/executors/wave-<n>/<agent-slug>/`
+- live runs: `.tmp/<lane>-wave-launcher/executors/wave-<n>/<agent-slug>/` for the implicit default project, or `.tmp/projects/<projectId>/<lane>-wave-launcher/executors/wave-<n>/<agent-slug>/` for explicit projects
+- dry-run previews: `.tmp/<lane>-wave-launcher/dry-run/executors/wave-<n>/<agent-slug>/` for the implicit default project, or `.tmp/projects/<projectId>/<lane>-wave-launcher/dry-run/executors/wave-<n>/<agent-slug>/` for explicit projects
 
 Common files:
 
@@ -157,9 +284,10 @@ Common files:
 - `claude-settings.json`: generated Claude settings overlay when inline settings data is present
 - `opencode-agent-prompt.txt`: generated OpenCode harness prompt overlay
 - `opencode.json`: generated OpenCode runtime config overlay
-- `.tmp/<lane>-wave-launcher/control-plane/telemetry/events.jsonl`: local-first Wave Control event stream
-- `.tmp/<lane>-wave-launcher/control-plane/telemetry/pending/`: queued event batches awaiting remote delivery
-- `.tmp/<lane>-wave-launcher/control-plane/telemetry/delivery-state.json`: remote-delivery counters and last-error state
+- `.tmp/<lane>-wave-launcher/control-plane/telemetry/events.jsonl`: local-first Wave Control event stream for the implicit default project
+- `.tmp/projects/<projectId>/<lane>-wave-launcher/control-plane/telemetry/events.jsonl`: same stream for explicit projects
+- `.tmp/.../control-plane/telemetry/pending/`: queued event batches awaiting remote delivery
+- `.tmp/.../control-plane/telemetry/delivery-state.json`: remote-delivery counters and last-error state
 
 Runtime-specific delivery:
 

@@ -768,7 +768,7 @@ describe("wave control CLI", () => {
     });
   });
 
-  it("reports queued telemetry and supports a no-endpoint flush", () => {
+  it("reports queued telemetry and attempts a default endpoint flush", () => {
     const repoDir = makeTempDir();
     writeJson(path.join(repoDir, "package.json"), { name: "fixture-repo", private: true });
 
@@ -807,8 +807,7 @@ describe("wave control CLI", () => {
     );
     expect(flushResult.status).toBe(0);
     const flushPayload = JSON.parse(flushResult.stdout);
-    expect(flushPayload.attempted).toBe(0);
-    expect(flushPayload.sent).toBe(0);
-    expect(flushPayload.pending).toBeGreaterThan(0);
+    expect(flushPayload.attempted).toBeGreaterThan(0);
+    expect(flushPayload.pending).toBeGreaterThanOrEqual(0);
   });
 });

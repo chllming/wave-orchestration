@@ -113,7 +113,11 @@ function resolveLaneProfileForOptions(options = {}) {
     return options.laneProfile;
   }
   const config = options.config || loadWaveConfig();
-  return resolveLaneProfile(config, options.lane || config.defaultLane || DEFAULT_WAVE_LANE);
+  return resolveLaneProfile(
+    config,
+    options.lane || config.defaultLane || DEFAULT_WAVE_LANE,
+    options.project || config.defaultProject,
+  );
 }
 
 function resolveSecurityRolePromptPath(laneProfile) {

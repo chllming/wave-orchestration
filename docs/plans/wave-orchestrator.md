@@ -38,7 +38,7 @@ The live runtime is organized around explicit modules:
 ## What It Does
 
 - parses wave plans from `docs/plans/waves/`
-- supports transient ad-hoc runs from `.wave/adhoc/runs/` on the same runtime substrate
+- supports transient ad-hoc runs from project-scoped `.wave/adhoc/<projectId>/runs/` storage on the same runtime substrate, with the implicit default project keeping the legacy layout
 - fans a wave out into one session per `## Agent ...` section
 - supports standing role imports from `docs/agents/*.md`
 - supports optional pre-implementation design stewards that publish design packets before code-owning implementation starts
@@ -103,9 +103,9 @@ The live runtime is organized around explicit modules:
 - `docs/reference/wave-control.md` documents the Wave Control telemetry and analysis plane, including entity types, artifact upload policies, and the local-first reporting contract.
 - `docs/plans/component-cutover-matrix.json` is the canonical machine-readable source for component maturity and per-wave promotion targets.
 - `.wave/install-state.json` records how the workspace was initialized and which package version is installed.
-- `.wave/project-profile.json` (created by `wave project setup`) records planner defaults such as oversight mode, terminal surface, and deploy-environment memory.
-- `.wave/adhoc/runs/<run-id>/` stores transient ad-hoc request, spec, rendered markdown, and result artifacts.
-- ad-hoc documentation closure always writes `.wave/adhoc/runs/<run-id>/reports/`, but shared-plan deltas still queue the canonical lane shared-plan docs.
+- `.wave/project-profile.json` (created by `wave project setup`) records planner defaults for the implicit default project; explicit projects use `.wave/projects/<projectId>/project-profile.json`.
+- `.wave/adhoc/<projectId>/runs/<run-id>/` stores transient ad-hoc request, spec, rendered markdown, and result artifacts for explicit projects, while the implicit default project keeps the legacy layout.
+- ad-hoc documentation closure writes project-scoped report paths under the run directory, but shared-plan deltas still queue the canonical lane shared-plan docs.
 - ad-hoc task ownership inference only accepts repo-local paths; URLs and other external references are ignored.
 - `wave adhoc promote` promotes the stored ad-hoc spec into `docs/plans/waves/` instead of re-reading the current project profile.
 

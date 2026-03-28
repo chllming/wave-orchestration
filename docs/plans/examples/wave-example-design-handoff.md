@@ -1,6 +1,6 @@
 # Wave 12 - Optional Design Steward Handoff
 
-This is a showcase-first sample wave for the shipped `design` worker role in `0.8.9`.
+This is a showcase-first sample wave for the shipped `design` worker role in `0.9.0`.
 
 This example demonstrates the docs-first design-steward path where a design packet is published before code-owning implementation begins.
 
@@ -11,6 +11,8 @@ Use this shape when:
 - you want explicit design lineage instead of re-deriving the same plan in each coding prompt
 
 If you want the hybrid design-steward variant instead, keep the same packet path but also assign that same design agent implementation-owned files plus the normal implementation contract sections. The runtime will then run the design pass first and include that same agent in the later implementation fan-out.
+
+All launcher-owned `.tmp/main-wave-launcher/...` paths in this example assume the implicit default project. For explicit monorepo projects, rewrite them to `.tmp/projects/<projectId>/main-wave-launcher/...` and launch the wave with `--project <projectId>`.
 
 **Commit message**: `Feat: add design packet before implementation fan-out`
 
