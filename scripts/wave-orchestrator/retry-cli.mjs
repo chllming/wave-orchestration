@@ -2,9 +2,8 @@ import path from "node:path";
 import { parseWaveFiles } from "./wave-files.mjs";
 import {
   buildLanePaths,
+  findAdhocRunRecord,
   parseNonNegativeInt,
-  readJsonOrNull,
-  REPO_ROOT,
   sanitizeAdhocRunId,
   sanitizeLaneName,
 } from "./shared.mjs";
@@ -18,10 +17,10 @@ import {
 
 function printUsage() {
   console.log(`Usage:
-  pnpm exec wave retry show --lane <lane> --wave <n> [--json]
-  pnpm exec wave retry apply --lane <lane> --wave <n> [--agent <id> ...] [--clear-reuse <id> ...] [--preserve-reuse <id> ...] [--resume-phase <phase>] [--requested-by <name>] [--reason <text>] [--json]
-  pnpm exec wave retry clear --lane <lane> --wave <n>
-  pnpm exec wave retry <subcommand> --run <id> [--wave 0] ...
+  pnpm exec wave retry show --project <id> --lane <lane> --wave <n> [--json]
+  pnpm exec wave retry apply --project <id> --lane <lane> --wave <n> [--agent <id> ...] [--clear-reuse <id> ...] [--preserve-reuse <id> ...] [--resume-phase <phase>] [--requested-by <name>] [--reason <text>] [--json]
+  pnpm exec wave retry clear --project <id> --lane <lane> --wave <n>
+  pnpm exec wave retry <subcommand> --run <id> [--project <id>] [--wave 0] ...
 `);
 }
 
@@ -40,6 +39,7 @@ function parseArgs(argv) {
   const args = argv[0] === "--" ? argv.slice(1) : argv;
   const subcommand = String(args[0] || "").trim().toLowerCase();
   const options = {
+    project: "",
     lane: "main",
     wave: null,
     runId: "",
@@ -53,7 +53,9 @@ function parseArgs(argv) {
   };
   for (let i = 1; i < args.length; i += 1) {
     const arg = args[i];
-    if (arg === "--lane") {
+    if (arg === "--project") {
+      options.project = String(args[++i] || "").trim();
+    } else if (arg === "--lane") {
       options.lane = sanitizeLaneName(args[++i]);
     } else if (arg === "--run") {
       options.runId = sanitizeAdhocRunId(args[++i]);
@@ -82,11 +84,12 @@ function parseArgs(argv) {
   return { help: false, subcommand, options };
 }
 
-function resolveLaneForRun(runId, fallbackLane) {
-  return (
-    readJsonOrNull(path.join(REPO_ROOT, ".wave", "adhoc", "runs", runId, "result.json"))?.lane ||
-    fallbackLane
-  );
+function resolveRunContext(runId, fallbackProject, fallbackLane) {
+  const record = findAdhocRunRecord(runId);
+  return {
+    project: record?.project || fallbackProject,
+    lane: record?.result?.lane || fallbackLane,
+  };
 }
 
 function loadWave(lanePaths, waveNumber) {
@@ -108,9 +111,12 @@ export async function runRetryCli(argv) {
     throw new Error("Expected subcommand: show | apply | clear");
   }
   if (options.runId) {
-    options.lane = resolveLaneForRun(options.runId, options.lane);
+    const context = resolveRunContext(options.runId, options.project, options.lane);
+    options.project = context.project;
+    options.lane = context.lane;
   }
   const lanePaths = buildLanePaths(options.lane, {
+    project: options.project || undefined,
     adhocRunId: options.runId || null,
   });
   if (options.wave === null && options.runId) {

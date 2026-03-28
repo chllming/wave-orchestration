@@ -19,10 +19,9 @@ import {
   DEFAULT_COORDINATION_ACK_TIMEOUT_MS,
   DEFAULT_COORDINATION_RESOLUTION_STALE_MS,
   ensureDirectory,
+  findAdhocRunRecord,
   parseNonNegativeInt,
-  readJsonOrNull,
   readStatusRecordIfPresent,
-  REPO_ROOT,
   sanitizeAdhocRunId,
   sanitizeLaneName,
   toIsoTimestamp,
@@ -51,23 +50,23 @@ import {
 
 function printUsage() {
   console.log(`Usage:
-  wave control status --lane <lane> --wave <n> [--agent <id>] [--json]
-  wave control telemetry status --lane <lane> [--run <id>] [--json]
-  wave control telemetry flush --lane <lane> [--run <id>] [--json]
+  wave control status --project <id> --lane <lane> --wave <n> [--agent <id>] [--json]
+  wave control telemetry status --project <id> --lane <lane> [--run <id>] [--json]
+  wave control telemetry flush --project <id> --lane <lane> [--run <id>] [--json]
 
-  wave control task create --lane <lane> --wave <n> --agent <id> --kind <request|blocker|clarification|handoff|evidence|claim|decision|human-input> --summary <text> [options]
-  wave control task list --lane <lane> --wave <n> [--agent <id>] [--json]
-  wave control task get --lane <lane> --wave <n> --id <task-id> [--json]
-  wave control task act <start|resolve|dismiss|cancel|reassign|answer|escalate|defer|mark-advisory|mark-stale|resolve-policy> --lane <lane> --wave <n> --id <task-id> [options]
+  wave control task create --project <id> --lane <lane> --wave <n> --agent <id> --kind <request|blocker|clarification|handoff|evidence|claim|decision|human-input> --summary <text> [options]
+  wave control task list --project <id> --lane <lane> --wave <n> [--agent <id>] [--json]
+  wave control task get --project <id> --lane <lane> --wave <n> --id <task-id> [--json]
+  wave control task act <start|resolve|dismiss|cancel|reassign|answer|escalate|defer|mark-advisory|mark-stale|resolve-policy> --project <id> --lane <lane> --wave <n> --id <task-id> [options]
 
-  wave control rerun request --lane <lane> --wave <n> [--agent <id> ...] [--resume-cursor <cursor>] [--reuse-attempt <id> ...] [--reuse-proof <id> ...] [--reuse-derived-summaries <true|false>] [--invalidate-component <id> ...] [--clear-reuse <id> ...] [--preserve-reuse <id> ...] [--requested-by <name>] [--reason <text>] [--json]
-  wave control rerun get --lane <lane> --wave <n> [--json]
-  wave control rerun clear --lane <lane> --wave <n>
+  wave control rerun request --project <id> --lane <lane> --wave <n> [--agent <id> ...] [--resume-cursor <cursor>] [--reuse-attempt <id> ...] [--reuse-proof <id> ...] [--reuse-derived-summaries <true|false>] [--invalidate-component <id> ...] [--clear-reuse <id> ...] [--preserve-reuse <id> ...] [--requested-by <name>] [--reason <text>] [--json]
+  wave control rerun get --project <id> --lane <lane> --wave <n> [--json]
+  wave control rerun clear --project <id> --lane <lane> --wave <n>
 
-  wave control proof register --lane <lane> --wave <n> --agent <id> --artifact <path> [--artifact <path> ...] [--component <id[:level]> ...] [--authoritative] [--satisfy-owned-components] [--completion <level>] [--durability <level>] [--proof-level <level>] [--doc-delta <state>] [--operator <name>] [--detail <text>] [--json]
-  wave control proof get --lane <lane> --wave <n> [--agent <id>] [--id <bundle-id>] [--json]
-  wave control proof supersede --lane <lane> --wave <n> --id <bundle-id> --agent <id> --artifact <path> [--artifact <path> ...] [options]
-  wave control proof revoke --lane <lane> --wave <n> --id <bundle-id> [--operator <name>] [--detail <text>] [--json]
+  wave control proof register --project <id> --lane <lane> --wave <n> --agent <id> --artifact <path> [--artifact <path> ...] [--component <id[:level]> ...] [--authoritative] [--satisfy-owned-components] [--completion <level>] [--durability <level>] [--proof-level <level>] [--doc-delta <state>] [--operator <name>] [--detail <text>] [--json]
+  wave control proof get --project <id> --lane <lane> --wave <n> [--agent <id>] [--id <bundle-id>] [--json]
+  wave control proof supersede --project <id> --lane <lane> --wave <n> --id <bundle-id> --agent <id> --artifact <path> [--artifact <path> ...] [options]
+  wave control proof revoke --project <id> --lane <lane> --wave <n> --id <bundle-id> [--operator <name>] [--detail <text>] [--json]
 `);
 }
 
@@ -91,6 +90,7 @@ function parseArgs(argv) {
   const operation = String(args[1] || "").trim().toLowerCase();
   const action = String(args[2] || "").trim().toLowerCase();
   const options = {
+    project: "",
     lane: "main",
     wave: null,
     runId: "",
@@ -144,7 +144,9 @@ function parseArgs(argv) {
     if (i < startIndex) {
       continue;
     }
-    if (arg === "--lane") {
+    if (arg === "--project") {
+      options.project = String(args[++i] || "").trim();
+    } else if (arg === "--lane") {
       options.lane = sanitizeLaneName(args[++i]);
     } else if (arg === "--run") {
       options.runId = sanitizeAdhocRunId(args[++i]);
@@ -228,11 +230,12 @@ function parseArgs(argv) {
   return { help: false, surface, operation, action, options };
 }
 
-function resolveLaneForRun(runId, fallbackLane) {
-  return (
-    readJsonOrNull(path.join(REPO_ROOT, ".wave", "adhoc", "runs", runId, "result.json"))?.lane ||
-    fallbackLane
-  );
+function resolveRunContext(runId, fallbackProject, fallbackLane) {
+  const record = findAdhocRunRecord(runId);
+  return {
+    project: record?.project || fallbackProject,
+    lane: record?.result?.lane || fallbackLane,
+  };
 }
 
 function loadWave(lanePaths, waveNumber) {
@@ -955,9 +958,12 @@ export async function runControlCli(argv) {
     throw new Error("Expected control surface: status | telemetry | task | rerun | proof");
   }
   if (options.runId) {
-    options.lane = resolveLaneForRun(options.runId, options.lane);
+    const context = resolveRunContext(options.runId, options.project, options.lane);
+    options.project = context.project;
+    options.lane = context.lane;
   }
   const lanePaths = buildLanePaths(options.lane, {
+    project: options.project || undefined,
     runVariant: options.dryRun ? "dry-run" : undefined,
     adhocRunId: options.runId || null,
   });

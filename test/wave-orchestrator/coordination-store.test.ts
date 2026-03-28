@@ -119,6 +119,23 @@ describe("normalizeCoordinationRecord", () => {
     expect(coordinationBlockerSeverity(advisory)).toBe("advisory");
     expect(coordinationRecordBlocksWave(advisory)).toBe(false);
   });
+
+  it("preserves project and dependency project metadata", () => {
+    const record = normalizeCoordinationRecord({
+      kind: "request",
+      lane: "main",
+      wave: 3,
+      agentId: "A1",
+      project: "service",
+      ownerProject: "service",
+      requesterProject: "app",
+      summary: "Need shared contract update",
+    });
+
+    expect(record.project).toBe("service");
+    expect(record.ownerProject).toBe("service");
+    expect(record.requesterProject).toBe("app");
+  });
 });
 
 describe("serializeCoordinationState", () => {

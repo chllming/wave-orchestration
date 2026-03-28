@@ -35,6 +35,8 @@ The useful path is journey-first:
   Read [concepts/context7-vs-skills.md](./concepts/context7-vs-skills.md) for the compiled-context model: shared summary, inboxes, project defaults, skills, Context7, and runtime overlays.
 - Drafting or revising waves:
   Read [guides/author-and-run-waves.md](./guides/author-and-run-waves.md), then use [plans/wave-orchestrator.md](./plans/wave-orchestrator.md) as the operator runbook.
+- Setting up multiple projects in one monorepo:
+  Read [guides/monorepo-projects.md](./guides/monorepo-projects.md) for `defaultProject`, `projects.<projectId>`, project-scoped state paths, and telemetry defaults.
 - Adding an optional pre-implementation design steward:
   Read [guides/author-and-run-waves.md](./guides/author-and-run-waves.md), then the standing prompt in [agents/wave-design-role.md](./agents/wave-design-role.md). The shipped `0.8.9` surface includes `role-design` plus `tui-design`, with docs-first design stewards by default and explicit hybrid design stewards when a wave also gives that same agent code ownership.
 - Want signal-driven automation or long-running watcher loops:

@@ -11,7 +11,7 @@ Today that posture is captured in project profile memory and planner output. The
 - `dark-factory`
   The goal is end-to-end execution without routine human intervention.
 
-These values are stored in `.wave/project-profile.json` and emitted into planner-generated specs and wave markdown.
+These values are stored in `.wave/project-profile.json` for the implicit default project, or `.wave/projects/<projectId>/project-profile.json` for explicit projects, and emitted into planner-generated specs and wave markdown.
 
 ## What Ships Today
 

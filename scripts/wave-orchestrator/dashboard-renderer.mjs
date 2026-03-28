@@ -36,6 +36,7 @@ function normalizeDashboardAttachTarget(value) {
 
 export function parseDashboardArgs(argv) {
   const options = {
+    project: null,
     lane: DEFAULT_WAVE_LANE,
     dashboardFile: null,
     messageBoard: null,
@@ -50,6 +51,8 @@ export function parseDashboardArgs(argv) {
     }
     if (arg === "--watch") {
       options.watch = true;
+    } else if (arg === "--project") {
+      options.project = String(argv[++i] || "").trim() || null;
     } else if (arg === "--lane") {
       options.lane =
         String(argv[++i] || "")
@@ -98,9 +101,12 @@ function tmuxSessionExists(socketName, sessionName) {
   throw new Error((result.stderr || result.stdout || "tmux has-session failed").trim());
 }
 
-function attachDashboardSession(lane, target) {
+function attachDashboardSession(project, lane, target) {
   const config = loadWaveConfig();
-  const lanePaths = buildLanePaths(lane, { config });
+  const lanePaths = buildLanePaths(lane, {
+    config,
+    project: project || config.defaultProject,
+  });
   const entry =
     target === "global"
       ? createGlobalDashboardTerminalEntry(lanePaths, "current")
@@ -449,6 +455,7 @@ export async function runDashboardCli(argv) {
     console.log(`Usage: pnpm exec wave dashboard --dashboard-file <path> [options]
 
 Options:
+  --project <id>          Project id (default: config default)
   --lane <name>            Wave lane name (default: ${DEFAULT_WAVE_LANE})
   --dashboard-file <path>  Path to wave/global dashboard JSON
   --message-board <path>   Optional message board path override
@@ -461,7 +468,7 @@ Options:
   }
 
   if (options.attach) {
-    attachDashboardSession(options.lane, options.attach);
+    attachDashboardSession(options.project, options.lane, options.attach);
     return;
   }
 

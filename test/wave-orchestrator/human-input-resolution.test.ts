@@ -52,9 +52,10 @@ function seedAnsweredHumanInputFixture(repoDir, options = {}) {
   const requestId = "202603240000-main-w0-A9-abc123";
 
   if (runId) {
-    const adhocRunDir = path.join(repoDir, ".wave", "adhoc", "runs", runId);
+    const adhocRunDir = path.join(repoDir, ".wave", "adhoc", "default", "runs", runId);
     writeJson(path.join(adhocRunDir, "result.json"), {
       runId,
+      project: "default",
       lane: "main",
     });
     copyFile(
@@ -185,6 +186,7 @@ function seedAnsweredHumanInputFixture(repoDir, options = {}) {
   ]);
   writeJson(path.join(feedbackRequestsDir, `${requestId}.json`), {
     id: requestId,
+    project: runId ? "default" : null,
     createdAt: "2026-03-24T00:12:00.000Z",
     updatedAt: "2026-03-24T00:12:00.000Z",
     lane: "main",

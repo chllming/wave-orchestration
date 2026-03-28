@@ -49,7 +49,7 @@ Generated waves and transient ad-hoc runs should default to these sections when 
 
 Status: shipped in `0.5.4`.
 
-- Add saved project bootstrap memory in `.wave/project-profile.json`.
+- Add saved project bootstrap memory in `.wave/project-profile.json` for the implicit default project, with project-scoped profiles under `.wave/projects/<projectId>/project-profile.json` for explicit monorepo projects.
 - Ask once whether the repo is a new project and keep that answer for future drafts.
 - Add `wave project setup` and `wave project show`.
 - Add interactive `wave draft` that writes:
@@ -91,7 +91,7 @@ Behavior:
 Storage model:
 
 - do not write ad-hoc runs into the canonical numbered wave sequence under `docs/plans/waves/`
-- store the original request, generated spec, rendered markdown, and final result under `.wave/adhoc/runs/<run-id>/`
+- store the original request, generated spec, rendered markdown, and final result under `.wave/adhoc/<projectId>/runs/<run-id>/` for explicit projects, while the implicit default project keeps the legacy layout
 - keep runtime state isolated under `.tmp/<lane>-wave-launcher/adhoc/<run-id>/`
 - extend trace metadata with `runKind: adhoc` and `runId`
 

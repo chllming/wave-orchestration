@@ -90,9 +90,10 @@ describe("dashboard renderer", () => {
   });
 
   it("accepts stable attach mode without requiring a dashboard file", () => {
-    expect(parseDashboardArgs(["--lane", "release", "--attach", "global"])).toEqual({
+    expect(parseDashboardArgs(["--project", "service", "--lane", "release", "--attach", "global"])).toEqual({
       help: false,
       options: expect.objectContaining({
+        project: "service",
         lane: "release",
         attach: "global",
         dashboardFile: null,

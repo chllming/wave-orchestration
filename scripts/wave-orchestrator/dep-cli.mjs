@@ -15,10 +15,10 @@ import { parseWaveFiles } from "./wave-files.mjs";
 
 function printUsage() {
   console.log(`Usage:
-  wave dep post --owner-lane <lane> --requester-lane <lane> --owner-wave <n> --requester-wave <n> --agent <id> --summary <text> [options]
-  wave dep show --lane <lane> [--wave <n>] [--json]
-  wave dep resolve --lane <lane> --id <id> --agent <id> [--detail <text>] [--status resolved|closed]
-  wave dep render --lane <lane> [--wave <n>] [--json]
+  wave dep post --owner-project <id> --owner-lane <lane> --requester-project <id> --requester-lane <lane> --owner-wave <n> --requester-wave <n> --agent <id> --summary <text> [options]
+  wave dep show --project <id> --lane <lane> [--wave <n>] [--json]
+  wave dep resolve --project <id> --lane <lane> --id <id> --agent <id> [--detail <text>] [--status resolved|closed]
+  wave dep render --project <id> --lane <lane> [--wave <n>] [--json]
 `);
 }
 
@@ -26,6 +26,9 @@ function parseArgs(argv) {
   const args = argv[0] === "--" ? argv.slice(1) : argv;
   const subcommand = String(args[0] || "").trim().toLowerCase();
   const options = {
+    project: "",
+    ownerProject: "",
+    requesterProject: "",
     lane: "",
     ownerLane: "",
     requesterLane: "",
@@ -46,7 +49,13 @@ function parseArgs(argv) {
   };
   for (let index = 1; index < args.length; index += 1) {
     const arg = args[index];
-    if (arg === "--lane") {
+    if (arg === "--project") {
+      options.project = String(args[++index] || "").trim();
+    } else if (arg === "--owner-project") {
+      options.ownerProject = String(args[++index] || "").trim();
+    } else if (arg === "--requester-project") {
+      options.requesterProject = String(args[++index] || "").trim();
+    } else if (arg === "--lane") {
       options.lane = String(args[++index] || "").trim();
     } else if (arg === "--owner-lane") {
       options.ownerLane = String(args[++index] || "").trim();
@@ -112,11 +121,15 @@ export async function runDependencyCli(argv) {
     return;
   }
   const { subcommand, options } = parseArgs(argv);
+  const baseProject =
+    options.project || options.ownerProject || options.requesterProject || undefined;
   const baseLane = options.lane || options.ownerLane || options.requesterLane || "main";
-  const lanePaths = buildLanePaths(baseLane);
+  const lanePaths = buildLanePaths(baseLane, { project: baseProject });
   ensureDirectory(lanePaths.crossLaneDependenciesDir);
 
   if (subcommand === "post") {
+    const ownerProject = options.ownerProject || options.project || lanePaths.project;
+    const requesterProject = options.requesterProject || options.project || lanePaths.project;
     const ownerLane = options.ownerLane || options.lane;
     const requesterLane = options.requesterLane || lanePaths.lane;
     if (!ownerLane || !requesterLane || options.ownerWave === null || options.requesterWave === null) {
@@ -125,13 +138,17 @@ export async function runDependencyCli(argv) {
     if (!options.agent || !options.summary) {
       throw new Error("--agent and --summary are required");
     }
-    const record = appendDependencyTicket(lanePaths.crossLaneDependenciesDir, ownerLane, {
+    const ownerLanePaths = buildLanePaths(ownerLane, { project: ownerProject });
+    ensureDirectory(ownerLanePaths.crossLaneDependenciesDir);
+    const record = appendDependencyTicket(ownerLanePaths.crossLaneDependenciesDir, ownerLane, {
       id: options.id || `dep-${Date.now().toString(36)}`,
       kind: "request",
       lane: ownerLane,
       wave: options.ownerWave,
+      ownerProject,
       ownerLane,
       ownerWave: options.ownerWave,
+      requesterProject,
       requesterLane,
       requesterWave: options.requesterWave,
       agentId: options.agent,
@@ -155,14 +172,15 @@ export async function runDependencyCli(argv) {
     if (!lane || !options.id || !options.agent) {
       throw new Error("--lane, --id, and --agent are required for resolve");
     }
-    const filePath = dependencyFilePath(lanePaths, lane);
-    const latest = materializeCoordinationState(readDependencyTickets(lanePaths.crossLaneDependenciesDir, lane)).byId.get(
+    const targetProject = options.project || options.ownerProject || lanePaths.project;
+    const targetLanePaths = buildLanePaths(lane, { project: targetProject });
+    const latest = materializeCoordinationState(readDependencyTickets(targetLanePaths.crossLaneDependenciesDir, lane)).byId.get(
       options.id,
     );
     if (!latest) {
       throw new Error(`Dependency ${options.id} not found for lane ${lane}`);
     }
-    const record = appendDependencyTicket(lanePaths.crossLaneDependenciesDir, lane, {
+    const record = appendDependencyTicket(targetLanePaths.crossLaneDependenciesDir, lane, {
       ...latest,
       agentId: options.agent,
       status: options.status || "resolved",
@@ -175,17 +193,23 @@ export async function runDependencyCli(argv) {
 
   if (subcommand === "show") {
     const lane = options.lane || options.ownerLane || lanePaths.lane;
+    const targetProject = options.project || options.ownerProject || lanePaths.project;
+    const targetLanePaths = buildLanePaths(lane, { project: targetProject });
     const records =
       options.wave === null
-        ? readAllDependencyTickets(lanePaths.crossLaneDependenciesDir).filter(
-            (record) => record.ownerLane === lane || record.requesterLane === lane || record.lane === lane,
+        ? readAllDependencyTickets(targetLanePaths.crossLaneDependenciesDir).filter(
+            (record) =>
+              (record.ownerLane === lane || record.requesterLane === lane || record.lane === lane) &&
+              (!options.project ||
+                record.ownerProject === targetProject ||
+                record.requesterProject === targetProject),
           )
         : buildDependencySnapshot({
-            dirPath: lanePaths.crossLaneDependenciesDir,
+            dirPath: targetLanePaths.crossLaneDependenciesDir,
             lane,
             waveNumber: options.wave,
-            agents: loadWaveAgents(lanePaths, options.wave),
-            capabilityRouting: lanePaths.capabilityRouting,
+            agents: loadWaveAgents(targetLanePaths, options.wave),
+            capabilityRouting: targetLanePaths.capabilityRouting,
           });
     if (options.json || options.wave !== null) {
       console.log(JSON.stringify(records, null, 2));
@@ -201,20 +225,22 @@ export async function runDependencyCli(argv) {
 
   if (subcommand === "render") {
     const lane = options.lane || options.ownerLane || lanePaths.lane;
+    const targetProject = options.project || options.ownerProject || lanePaths.project;
+    const targetLanePaths = buildLanePaths(lane, { project: targetProject });
     const snapshot = buildDependencySnapshot({
-      dirPath: lanePaths.crossLaneDependenciesDir,
+      dirPath: targetLanePaths.crossLaneDependenciesDir,
       lane,
       waveNumber: options.wave ?? 0,
-      agents: loadWaveAgents(lanePaths, options.wave ?? 0),
-      capabilityRouting: lanePaths.capabilityRouting,
+      agents: loadWaveAgents(targetLanePaths, options.wave ?? 0),
+      capabilityRouting: targetLanePaths.capabilityRouting,
     });
-    const markdownPath = dependencyMarkdownPath(lanePaths, lane);
-    writeDependencySnapshot(path.join(lanePaths.crossLaneDependenciesDir, `${lane}.json`), snapshot, {
+    const markdownPath = dependencyMarkdownPath(targetLanePaths, lane);
+    writeDependencySnapshot(path.join(targetLanePaths.crossLaneDependenciesDir, `${lane}.json`), snapshot, {
       lane,
       wave: options.wave ?? 0,
     });
     writeTextAtomic(markdownPath, `${renderDependencySnapshotMarkdown(snapshot)}\n`);
-    console.log(JSON.stringify({ markdownPath, jsonPath: path.join(lanePaths.crossLaneDependenciesDir, `${lane}.json`) }, null, 2));
+    console.log(JSON.stringify({ markdownPath, jsonPath: path.join(targetLanePaths.crossLaneDependenciesDir, `${lane}.json`) }, null, 2));
     return;
   }
 

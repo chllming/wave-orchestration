@@ -7,7 +7,6 @@ import {
 import { buildRequestAssignments } from "./routing-state.mjs";
 import { loadBenchmarkCases, loadExternalBenchmarkAdapters } from "./benchmark-cases.mjs";
 import {
-  DEFAULT_WAVE_LANE,
   REPO_ROOT,
   buildLanePaths,
   ensureDirectory,
@@ -44,9 +43,11 @@ function normalizeId(value, label) {
   return normalized;
 }
 
-function benchmarkTelemetryLanePaths() {
+function benchmarkTelemetryLanePaths(options = {}) {
   try {
-    return buildLanePaths(DEFAULT_WAVE_LANE);
+    return buildLanePaths(options.lane || undefined, {
+      project: options.project || undefined,
+    });
   } catch {
     return null;
   }
@@ -56,8 +57,8 @@ function localBenchmarkRunId(output) {
   return `bench-local-${String(output.generatedAt || toIsoTimestamp()).replace(/[-:.TZ]/g, "").slice(0, 14)}`;
 }
 
-function publishLocalBenchmarkTelemetry({ output, outputDir }) {
-  const lanePaths = benchmarkTelemetryLanePaths();
+function publishLocalBenchmarkTelemetry({ output, outputDir, project, lane }) {
+  const lanePaths = benchmarkTelemetryLanePaths({ project, lane });
   if (!lanePaths || lanePaths.waveControl?.captureBenchmarkRuns === false) {
     return null;
   }
@@ -718,7 +719,12 @@ export function runBenchmarkSuite(options = {}) {
     ensureDirectory(outputDir);
     writeJsonAtomic(path.join(outputDir, "results.json"), output);
     writeTextAtomic(path.join(outputDir, "results.md"), `${renderMarkdownReport(output)}\n`);
-    publishLocalBenchmarkTelemetry({ output, outputDir });
+    publishLocalBenchmarkTelemetry({
+      output,
+      outputDir,
+      project: options.project,
+      lane: options.lane,
+    });
     output.outputDir = path.relative(REPO_ROOT, outputDir).replaceAll(path.sep, "/");
   }
   return output;
@@ -728,12 +734,12 @@ function printUsage() {
   console.log(`Usage:
   wave benchmark list [--json]
   wave benchmark show --case <id> [--json]
-  wave benchmark run [--case <id>] [--family <id>] [--benchmark <id>] [--arm <id>] [--output-dir <path>] [--json]
+  wave benchmark run [--project <id>] [--lane <lane>] [--case <id>] [--family <id>] [--benchmark <id>] [--arm <id>] [--output-dir <path>] [--json]
   wave benchmark adapters [--json]
   wave benchmark external-list [--json]
   wave benchmark external-show --adapter <id> [--json]
-  wave benchmark external-pilots [--json]
-  wave benchmark external-run --adapter <id> [--manifest <path>] [--task <id>] [--arm <id>] [--dry-run] [--command-config <path>] [run options] [--json]
+  wave benchmark external-pilots [--project <id>] [--lane <lane>] [--json]
+  wave benchmark external-run --adapter <id> [--project <id>] [--lane <lane>] [--manifest <path>] [--task <id>] [--arm <id>] [--dry-run] [--command-config <path>] [run options] [--json]
 `);
 }
 
@@ -741,6 +747,8 @@ function parseArgs(argv) {
   const args = Array.isArray(argv) ? argv.slice() : [];
   const subcommand = cleanText(args.shift()).toLowerCase();
   const options = {
+    project: "",
+    lane: "",
     json: false,
     caseIds: [],
     familyIds: [],
@@ -768,6 +776,10 @@ function parseArgs(argv) {
     const arg = args[index];
     if (arg === "--json") {
       options.json = true;
+    } else if (arg === "--project") {
+      options.project = cleanText(args[++index]);
+    } else if (arg === "--lane") {
+      options.lane = cleanText(args[++index]);
     } else if (arg === "--case") {
       options.caseIds.push(args[++index]);
     } else if (arg === "--family") {
@@ -929,6 +941,8 @@ export async function runBenchmarkCli(argv) {
       throw new Error("wave benchmark external-run requires --adapter <id>");
     }
     const output = runExternalBenchmarkPilot({
+      project: options.project || undefined,
+      lane: options.lane || undefined,
       adapterId: options.adapterId,
       manifestPath: options.manifestPath || undefined,
       taskIds: options.taskIds,

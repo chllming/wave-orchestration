@@ -17,6 +17,7 @@ const REPO_ROOT = WORKSPACE_ROOT;
 
 export const DEFAULT_WAVE_CONFIG_PATH = path.join(REPO_ROOT, "wave.config.json");
 export const DEFAULT_WAVE_LANE = "main";
+export const DEFAULT_PROJECT_ID = "default";
 export const DEFAULT_CONT_QA_AGENT_ID = "A0";
 export const DEFAULT_CONT_EVAL_AGENT_ID = "E0";
 export const DEFAULT_INTEGRATION_AGENT_ID = "A8";
@@ -73,7 +74,8 @@ export const CODEX_SANDBOX_MODES = ["read-only", "workspace-write", "danger-full
 export const DEFAULT_CLAUDE_COMMAND = "claude";
 export const DEFAULT_OPENCODE_COMMAND = "opencode";
 export const DEFAULT_WAVE_CONTROL_AUTH_TOKEN_ENV_VAR = "WAVE_CONTROL_AUTH_TOKEN";
-export const DEFAULT_WAVE_CONTROL_REPORT_MODE = "metadata-plus-selected";
+export const DEFAULT_WAVE_CONTROL_ENDPOINT = "https://wave-control.up.railway.app/api/v1";
+export const DEFAULT_WAVE_CONTROL_REPORT_MODE = "metadata-only";
 export const DEFAULT_WAVE_CONTROL_REQUEST_TIMEOUT_MS = 5000;
 export const DEFAULT_WAVE_CONTROL_FLUSH_BATCH_SIZE = 25;
 export const DEFAULT_WAVE_CONTROL_MAX_PENDING_EVENTS = 1000;
@@ -137,6 +139,22 @@ function sanitizeLaneName(value) {
   return lane;
 }
 
+export function sanitizeProjectId(value) {
+  const projectId = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  if (!projectId) {
+    throw new Error("Project id is required");
+  }
+  if (!/^[a-z0-9][a-z0-9_-]*$/.test(projectId)) {
+    throw new Error(`Invalid project id: ${value}`);
+  }
+  return projectId;
+}
+
 function readJsonOrNull(filePath) {
   try {
     return JSON.parse(fs.readFileSync(filePath, "utf8"));
@@ -183,6 +201,26 @@ function normalizeOptionalString(value, fallback = null) {
   const normalized = String(value ?? "")
     .trim();
   return normalized || fallback;
+}
+
+function joinRepoPath(basePath, childPath) {
+  const base = String(basePath || "")
+    .replaceAll("\\", "/")
+    .replace(/^\.\/+/, "")
+    .replace(/\/+/g, "/")
+    .replace(/\/$/, "");
+  const child = String(childPath || "")
+    .replaceAll("\\", "/")
+    .replace(/^\.\/+/, "")
+    .replace(/\/+/g, "/")
+    .replace(/\/$/, "");
+  if (!base || base === ".") {
+    return child;
+  }
+  if (!child) {
+    return base;
+  }
+  return `${base}/${child}`.replace(/\/+/g, "/");
 }
 
 function normalizeOptionalPositiveInt(value, label, fallback = null) {
@@ -282,11 +320,12 @@ function normalizeThreshold(value, fallback) {
   return parsed;
 }
 
-function defaultDocsDirForLane(lane, defaultLane, repoMode) {
+function defaultDocsDirForLane(lane, defaultLane, repoMode, projectRootDir = "") {
+  const projectDocsDir = joinRepoPath(projectRootDir, DEFAULT_DOCS_DIR);
   if (repoMode === "single-repo" && lane === defaultLane) {
-    return DEFAULT_DOCS_DIR;
+    return projectDocsDir;
   }
-  return `${DEFAULT_DOCS_DIR}/${lane}`;
+  return joinRepoPath(projectDocsDir, lane);
 }
 
 function defaultPlansDir(docsDir) {
@@ -549,7 +588,7 @@ function normalizeWaveControl(rawWaveControl = {}, label = "waveControl") {
     reportMode !== "disabled" && normalizeOptionalBoolean(waveControl.enabled, true);
   return {
     enabled,
-    endpoint: normalizeOptionalString(waveControl.endpoint, null),
+    endpoint: normalizeOptionalString(waveControl.endpoint, DEFAULT_WAVE_CONTROL_ENDPOINT),
     workspaceId: normalizeOptionalString(waveControl.workspaceId, null),
     projectId: normalizeOptionalString(waveControl.projectId, null),
     authTokenEnvVar:
@@ -931,6 +970,7 @@ export function loadWaveConfig(configPath = DEFAULT_WAVE_CONFIG_PATH) {
     throw new Error(`Unsupported repoMode in ${path.relative(REPO_ROOT, configPath)}: ${repoMode}`);
   }
   const defaultLane = sanitizeLaneName(rawConfig.defaultLane || DEFAULT_WAVE_LANE);
+  const defaultProject = sanitizeProjectId(rawConfig.defaultProject || DEFAULT_PROJECT_ID);
   const paths = {
     docsDir: normalizeRepoRelativePath(rawConfig.paths?.docsDir || DEFAULT_DOCS_DIR, "paths.docsDir"),
     stateRoot: normalizeRepoRelativePath(
@@ -966,17 +1006,121 @@ export function loadWaveConfig(configPath = DEFAULT_WAVE_CONFIG_PATH) {
   };
   const sharedPlanDocs =
     normalizeOptionalPathArray(rawConfig.sharedPlanDocs, "sharedPlanDocs") || null;
-  const lanes = Object.fromEntries(
+  const legacyLanes = Object.fromEntries(
     Object.entries(rawConfig.lanes || {}).map(([laneName, laneConfig]) => [
       sanitizeLaneName(laneName),
       laneConfig || {},
     ]),
+  );
+  const rawProjects =
+    rawConfig.projects && typeof rawConfig.projects === "object" && !Array.isArray(rawConfig.projects)
+      ? rawConfig.projects
+      : null;
+  const projects = Object.fromEntries(
+    Object.entries(
+      rawProjects || {
+        [defaultProject]: {
+          projectName: rawConfig.projectName,
+          rootDir: ".",
+          sharedPlanDocs: rawConfig.sharedPlanDocs,
+          lanes: legacyLanes,
+        },
+      },
+    ).map(([projectId, projectConfig]) => {
+      const normalizedProjectId = sanitizeProjectId(projectId);
+      const rawProject =
+        projectConfig && typeof projectConfig === "object" && !Array.isArray(projectConfig)
+          ? projectConfig
+          : {};
+      const rootDir = normalizeRepoRelativePath(
+        rawProject.rootDir || ".",
+        `projects.${projectId}.rootDir`,
+      );
+      const projectSharedPlanDocs =
+        normalizeOptionalPathArray(
+          rawProject.sharedPlanDocs,
+          `projects.${projectId}.sharedPlanDocs`,
+        ) || null;
+      const projectPaths = {
+        docsDir: normalizeRepoRelativePath(
+          rawProject.paths?.docsDir || joinRepoPath(rootDir, rawConfig.paths?.docsDir || DEFAULT_DOCS_DIR),
+          `projects.${projectId}.paths.docsDir`,
+        ),
+        stateRoot: normalizeRepoRelativePath(
+          rawProject.paths?.stateRoot || rawConfig.paths?.stateRoot || DEFAULT_STATE_ROOT,
+          `projects.${projectId}.paths.stateRoot`,
+        ),
+        orchestratorStateDir: normalizeRepoRelativePath(
+          rawProject.paths?.orchestratorStateDir ||
+            rawConfig.paths?.orchestratorStateDir ||
+            DEFAULT_ORCHESTRATOR_STATE_DIR,
+          `projects.${projectId}.paths.orchestratorStateDir`,
+        ),
+        terminalsPath: normalizeRepoRelativePath(
+          rawProject.paths?.terminalsPath || rawConfig.paths?.terminalsPath || DEFAULT_TERMINALS_PATH,
+          `projects.${projectId}.paths.terminalsPath`,
+        ),
+        context7BundleIndexPath: normalizeRepoRelativePath(
+          rawProject.paths?.context7BundleIndexPath ||
+            rawConfig.paths?.context7BundleIndexPath ||
+            DEFAULT_CONTEXT7_BUNDLE_INDEX_PATH,
+          `projects.${projectId}.paths.context7BundleIndexPath`,
+        ),
+        benchmarkCatalogPath: normalizeRepoRelativePath(
+          rawProject.paths?.benchmarkCatalogPath ||
+            rawConfig.paths?.benchmarkCatalogPath ||
+            DEFAULT_BENCHMARK_CATALOG_PATH,
+          `projects.${projectId}.paths.benchmarkCatalogPath`,
+        ),
+        componentCutoverMatrixDocPath: normalizeRepoRelativePath(
+          rawProject.paths?.componentCutoverMatrixDocPath ||
+            rawConfig.paths?.componentCutoverMatrixDocPath ||
+            defaultComponentCutoverMatrixDocPath(defaultPlansDir(joinRepoPath(rootDir, DEFAULT_DOCS_DIR))),
+          `projects.${projectId}.paths.componentCutoverMatrixDocPath`,
+        ),
+        componentCutoverMatrixJsonPath: normalizeRepoRelativePath(
+          rawProject.paths?.componentCutoverMatrixJsonPath ||
+            rawConfig.paths?.componentCutoverMatrixJsonPath ||
+            defaultComponentCutoverMatrixJsonPath(defaultPlansDir(joinRepoPath(rootDir, DEFAULT_DOCS_DIR))),
+          `projects.${projectId}.paths.componentCutoverMatrixJsonPath`,
+        ),
+      };
+      const projectLanes = Object.fromEntries(
+        Object.entries(rawProject.lanes || {}).map(([laneName, laneConfig]) => [
+          sanitizeLaneName(laneName),
+          laneConfig || {},
+        ]),
+      );
+      return [
+        normalizedProjectId,
+        {
+          projectId: normalizedProjectId,
+          projectName: String(
+            rawProject.projectName || rawConfig.projectName || normalizedProjectId,
+          ).trim(),
+          rootDir,
+          sharedPlanDocs: projectSharedPlanDocs,
+          paths: projectPaths,
+          roles: rawProject.roles || {},
+          validation: rawProject.validation || {},
+          executors: rawProject.executors || {},
+          planner: rawProject.planner || {},
+          skills: rawProject.skills || {},
+          capabilityRouting: rawProject.capabilityRouting || {},
+          runtimePolicy: rawProject.runtimePolicy || {},
+          waveControl: rawProject.waveControl || {},
+          lanes: projectLanes,
+          explicit: Boolean(rawProjects),
+        },
+      ];
+    }),
   );
   return {
     version: Number.parseInt(String(rawConfig.version ?? "1"), 10) || 1,
     projectName: String(rawConfig.projectName || "Wave Orchestrator").trim(),
     repoMode,
     defaultLane,
+    defaultProject,
     paths,
     roles: normalizeRoles(rawConfig.roles),
     validation: normalizeValidation(rawConfig.validation),
@@ -987,16 +1131,85 @@ export function loadWaveConfig(configPath = DEFAULT_WAVE_CONFIG_PATH) {
     runtimePolicy: normalizeRuntimePolicy(rawConfig.runtimePolicy),
     waveControl: normalizeWaveControl(rawConfig.waveControl, "waveControl"),
     sharedPlanDocs,
-    lanes,
+    lanes: legacyLanes,
+    projects,
     configPath,
   };
 }
 
-export function resolveLaneProfile(config, laneInput = config.defaultLane) {
+export function resolveProjectProfile(config, projectInput = config.defaultProject) {
+  const projectId = sanitizeProjectId(projectInput || config.defaultProject || DEFAULT_PROJECT_ID);
+  const projectConfig =
+    config.projects?.[projectId] ||
+    config.projects?.[config.defaultProject] ||
+    config.projects?.[DEFAULT_PROJECT_ID];
+  if (!projectConfig) {
+    throw new Error(`Unknown project: ${projectInput}`);
+  }
+  const paths = {
+    ...config.paths,
+    ...(projectConfig.paths || {}),
+  };
+  return {
+    projectId,
+    projectName: projectConfig.projectName || config.projectName,
+    rootDir: projectConfig.rootDir || ".",
+    paths,
+    sharedPlanDocs: projectConfig.sharedPlanDocs || null,
+    roles: normalizeRoles({
+      ...config.roles,
+      ...(projectConfig.roles || {}),
+    }),
+    validation: normalizeValidation({
+      ...config.validation,
+      ...(projectConfig.validation || {}),
+    }),
+    executors: normalizeExecutors(
+      mergeExecutors(config.executors, projectConfig.executors || {}),
+    ),
+    planner: normalizePlanner({
+      ...config.planner,
+      ...(projectConfig.planner || {}),
+    }),
+    skills: mergeSkillsConfig(
+      config.skills || emptySkillsConfig(),
+      normalizeLaneSkills(projectConfig.skills || {}, `${projectId}.skills`, {
+        preserveOmittedDir: true,
+      }),
+    ),
+    capabilityRouting: normalizeCapabilityRouting({
+      ...config.capabilityRouting,
+      ...(projectConfig.capabilityRouting || {}),
+    }),
+    runtimePolicy: normalizeRuntimePolicy({
+      ...config.runtimePolicy,
+      ...(projectConfig.runtimePolicy || {}),
+    }),
+    waveControl: normalizeWaveControl(
+      {
+        ...config.waveControl,
+        projectId,
+        ...(projectConfig.waveControl || {}),
+      },
+      `projects.${projectId}.waveControl`,
+    ),
+    lanes: projectConfig.lanes || {},
+    explicit: projectConfig.explicit === true,
+  };
+}
+
+export function resolveLaneProfile(config, laneInput = config.defaultLane, projectInput = config.defaultProject) {
+  const projectProfile = resolveProjectProfile(config, projectInput);
   const lane = sanitizeLaneName(laneInput || config.defaultLane);
-  const laneConfig = config.lanes[lane] || {};
+  const laneConfig = projectProfile.lanes[lane] || config.lanes[lane] || {};
   const docsDir = normalizeRepoRelativePath(
-    laneConfig.docsDir || defaultDocsDirForLane(lane, config.defaultLane, config.repoMode),
+    laneConfig.docsDir ||
+      defaultDocsDirForLane(
+        lane,
+        config.defaultLane,
+        config.repoMode,
+        projectProfile.rootDir,
+      ),
     `${lane}.docsDir`,
   );
   const plansDir = normalizeRepoRelativePath(
@@ -1008,28 +1221,28 @@ export function resolveLaneProfile(config, laneInput = config.defaultLane) {
     `${lane}.wavesDir`,
   );
   const roles = normalizeRoles({
-    ...config.roles,
+    ...projectProfile.roles,
     ...(laneConfig.roles || {}),
   });
   const validation = normalizeValidation({
-    ...config.validation,
+    ...projectProfile.validation,
     ...(laneConfig.validation || {}),
   });
   const executors = normalizeExecutors(
-    mergeExecutors(config.executors, laneConfig.executors),
+    mergeExecutors(projectProfile.executors, laneConfig.executors),
   );
   const skills = mergeSkillsConfig(
-    config.skills || emptySkillsConfig(),
+    projectProfile.skills || emptySkillsConfig(),
     normalizeLaneSkills(laneConfig.skills, `${lane}.skills`, {
       preserveOmittedDir: true,
     }),
   );
   const capabilityRouting = normalizeCapabilityRouting({
-    ...config.capabilityRouting,
+    ...projectProfile.capabilityRouting,
     ...(laneConfig.capabilityRouting || {}),
   });
   const runtimePolicy = normalizeRuntimePolicy({
-    ...config.runtimePolicy,
+    ...projectProfile.runtimePolicy,
     ...(laneConfig.runtimePolicy || {}),
     ...(laneConfig.runtimeMixTargets ? { runtimeMixTargets: laneConfig.runtimeMixTargets } : {}),
     ...(laneConfig.defaultExecutorByRole
@@ -1041,18 +1254,23 @@ export function resolveLaneProfile(config, laneInput = config.defaultLane) {
   });
   const waveControl = normalizeWaveControl(
     {
-      ...config.waveControl,
+      ...projectProfile.waveControl,
       ...(laneConfig.waveControl || {}),
     },
     `${lane}.waveControl`,
   );
   return {
+    projectId: projectProfile.projectId,
+    projectName: projectProfile.projectName,
+    projectRootDir: projectProfile.rootDir,
+    explicitProject: projectProfile.explicit === true,
     lane,
     docsDir,
     plansDir,
     wavesDir,
     sharedPlanDocs:
       normalizeOptionalPathArray(laneConfig.sharedPlanDocs, `${lane}.sharedPlanDocs`) ||
+      projectProfile.sharedPlanDocs ||
       config.sharedPlanDocs ||
       defaultSharedPlanDocs(plansDir),
     roles,

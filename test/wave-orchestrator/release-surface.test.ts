@@ -86,11 +86,14 @@ describe("release surface alignment", () => {
     });
 
     expect(help.status).toBe(0);
+    expect(help.stdout).toContain("--project <id>");
     expect(help.stdout).toContain("--attach <current|global>");
     expect(dashboardSection).toContain(
-      "wave dashboard --dashboard-file <path> [--lane <lane>] [--message-board <path>] [--watch] [--refresh-ms <n>]",
+      "wave dashboard --dashboard-file <path> [--project <id>] [--lane <lane>] [--message-board <path>] [--watch] [--refresh-ms <n>]",
     );
-    expect(dashboardSection).toContain("wave dashboard --lane <lane> --attach current|global");
+    expect(dashboardSection).toContain(
+      "wave dashboard --project <id> --lane <lane> --attach current|global",
+    );
     expect(dashboardSection).not.toContain("[--wave <n>]");
     expect(terminalGuide).toContain("pnpm exec wave dashboard --lane main --attach current");
     expect(terminalGuide).toContain("pnpm exec wave dashboard --lane main --attach global");
@@ -132,6 +135,27 @@ describe("release surface alignment", () => {
     expect(guide).toContain("resolve-policy");
     expect(guide).toContain("targeted recovery");
     expect(docsReadme).toContain(`guides/recommendations-${packageJson.version}.md`);
+  });
+
+  it("links the monorepo projects guide from the main doc surfaces", () => {
+    const docsReadme = fs.readFileSync(path.join(repoRoot, "docs", "README.md"), "utf8");
+    const rootReadme = fs.readFileSync(path.join(repoRoot, "README.md"), "utf8");
+    const monorepoGuide = fs.readFileSync(
+      path.join(repoRoot, "docs", "guides", "monorepo-projects.md"),
+      "utf8",
+    );
+    const cliReference = fs.readFileSync(
+      path.join(repoRoot, "docs", "reference", "cli-reference.md"),
+      "utf8",
+    );
+
+    expect(rootReadme).toContain("guides/monorepo-projects.md");
+    expect(docsReadme).toContain("guides/monorepo-projects.md");
+    expect(monorepoGuide).toContain("defaultProject");
+    expect(monorepoGuide).toContain("projects.<projectId>");
+    expect(monorepoGuide).toContain(".wave/projects/<projectId>/project-profile.json");
+    expect(monorepoGuide).toContain(".wave/adhoc/<projectId>/runs/<run-id>/");
+    expect(cliReference).toContain("wave control status --project <id> --lane <lane> --wave <n>");
   });
 
   it("documents fresh-launch relaunch-plan reset behavior", () => {

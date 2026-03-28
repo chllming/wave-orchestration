@@ -1,5 +1,8 @@
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { loadWaveConfig } from "../../scripts/wave-orchestrator/config.mjs";
 import {
   REPO_ROOT,
   buildLanePaths,
@@ -37,5 +40,48 @@ describe("buildLanePaths", () => {
     expect(tokenA).not.toBe(tokenB);
     expect(tokenA).toMatch(/^[a-z0-9_]+$/);
     expect(tokenB).toMatch(/^[a-z0-9_]+$/);
+  });
+
+  it("isolates explicit project state under a project-scoped launcher root", () => {
+    const configPath = path.join(
+      fs.mkdtempSync(path.join(os.tmpdir(), "wave-shared-project-")),
+      "wave.config.json",
+    );
+    fs.writeFileSync(
+      configPath,
+      `${JSON.stringify(
+        {
+          version: 1,
+          defaultProject: "app",
+          projects: {
+            app: {
+              rootDir: ".",
+              lanes: {
+                main: {},
+              },
+            },
+            service: {
+              rootDir: "services/api",
+              lanes: {
+                main: {},
+              },
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    const config = loadWaveConfig(configPath);
+    const lanePaths = buildLanePaths("main", { config, project: "service" });
+
+    expect(lanePaths.project).toBe("service");
+    expect(lanePaths.docsDir).toBe(path.join(REPO_ROOT, "services/api/docs"));
+    expect(lanePaths.stateDir).toBe(path.join(REPO_ROOT, ".tmp", "projects", "service", "main-wave-launcher"));
+    expect(lanePaths.orchestratorStateDir).toBe(
+      path.join(REPO_ROOT, ".tmp", "wave-orchestrator", "projects", "service"),
+    );
   });
 });

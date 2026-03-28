@@ -160,7 +160,7 @@ The active context for an agent is assembled from:
 
 - repository source and owned files
 - wave markdown and shared plan docs
-- saved project defaults such as `.wave/project-profile.json`
+- saved project defaults such as `.wave/project-profile.json` for the implicit default project, or `.wave/projects/<projectId>/project-profile.json` for explicit projects
 - the generated shared summary and the agent's inbox
 - resolved skills and runtime-specific skill projections
 - selected Context7 snippets for external library truth

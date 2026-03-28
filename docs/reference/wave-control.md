@@ -129,7 +129,6 @@ Upload policy meanings:
 
 - `local-only`: keep only the descriptor remotely
 - `metadata-only`: report path, hash, size, and presence only
-- `selected`: upload metadata plus the artifact body when the runtime is in `metadata-plus-selected`
 - `selected`: upload metadata plus the artifact body when the runtime is in `metadata-plus-selected` or `full-artifact-upload` **and** the artifact kind is allowed by `waveControl.uploadArtifactKinds`
 - `full`: upload the artifact body in `full-artifact-upload` flows; if `uploadArtifactKinds` is set, keep the kind allowlist aligned with that policy
 
@@ -142,9 +141,9 @@ Upload policy meanings:
   "waveControl": {
     "endpoint": "https://wave-control.up.railway.app/api/v1",
     "workspaceId": "my-workspace",
-    "projectId": "wave-orchestration",
+    "projectId": "app",
     "authTokenEnvVar": "WAVE_CONTROL_AUTH_TOKEN",
-    "reportMode": "metadata-plus-selected",
+    "reportMode": "metadata-only",
     "uploadArtifactKinds": [
       "trace-run-metadata",
       "trace-quality",
@@ -154,12 +153,31 @@ Upload policy meanings:
 }
 ```
 
-Lane overrides may refine the same surface under `lanes.<lane>.waveControl`.
+Packaged defaults:
+
+- endpoint: `https://wave-control.up.railway.app/api/v1`
+- enabled: `true`
+- report mode: `metadata-only`
+- identity defaults to the resolved project, lane, wave, run kind, and run id
+
+This package is distributed with the author's personal Wave Control endpoint enabled by default. Repos that do not want telemetry delivered there must explicitly opt out.
+
+Lane overrides may refine the same surface under `lanes.<lane>.waveControl` or `projects.<projectId>.lanes.<lane>.waveControl`.
 
 For a single run, operators can disable Wave Control reporting entirely with:
 
 ```bash
 pnpm exec wave launch --lane main --no-telemetry
+```
+
+Repo or project config may also opt out with:
+
+```json
+{
+  "waveControl": {
+    "enabled": false
+  }
+}
 ```
 
 That suppresses the local telemetry spool and remote delivery for that invocation, while leaving the canonical runtime artifacts and local control-plane state intact.
@@ -169,7 +187,7 @@ That suppresses the local telemetry spool and remote delivery for that invocatio
 Wave Control reporting should:
 
 - append local telemetry first
-- queue pending uploads under `.tmp/<lane>-wave-launcher/control-plane/telemetry/`
+- queue pending uploads under `.tmp/<lane>-wave-launcher/control-plane/telemetry/` for the implicit default project, or `.tmp/projects/<projectId>/<lane>-wave-launcher/control-plane/telemetry/` for explicit projects
 - respect `waveControl.uploadArtifactKinds` before uploading any selected artifact body
 - cap pending remote uploads with `waveControl.maxPendingEvents` by dropping the oldest queued remote-delivery files, while keeping the local `events.jsonl` stream intact
 - retry delivery with idempotency keys

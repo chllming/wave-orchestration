@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   DEFAULT_CODEX_SANDBOX_MODE,
   DEFAULT_EXECUTOR_MODE,
+  loadWaveConfig,
   normalizeCodexSandboxMode,
   normalizeExecutorMode,
   SUPPORTED_EXECUTOR_MODES,
@@ -42,6 +43,7 @@ function printUsage() {
   console.log(`Usage: pnpm exec wave autonomous [options]
 
 Options:
+  --project <id>                 Project id
   --lane <name>                 Lane name (default: ${DEFAULT_WAVE_LANE})
   --timeout-minutes <n>         Per-wave timeout passed to launcher (default: ${DEFAULT_TIMEOUT_MINUTES})
   --max-retries-per-wave <n>    Per-wave relaunches inside launcher (default: ${DEFAULT_MAX_RETRIES_PER_WAVE})
@@ -64,7 +66,9 @@ Options:
 }
 
 export function parseArgs(argv) {
+  const config = loadWaveConfig();
   const options = {
+    project: config.defaultProject,
     lane: DEFAULT_WAVE_LANE,
     timeoutMinutes: DEFAULT_TIMEOUT_MINUTES,
     maxRetriesPerWave: DEFAULT_MAX_RETRIES_PER_WAVE,
@@ -92,6 +96,8 @@ export function parseArgs(argv) {
     }
     if (arg === "--lane") {
       options.lane = sanitizeLaneName(argv[++i]);
+    } else if (arg === "--project") {
+      options.project = String(argv[++i] || "").trim();
     } else if (arg === "--timeout-minutes") {
       options.timeoutMinutes = parsePositiveInt(argv[++i], "--timeout-minutes");
     } else if (arg === "--max-retries-per-wave") {
@@ -132,7 +138,10 @@ export function parseArgs(argv) {
     }
   }
   if (!executorProvided) {
-    options.executorMode = buildLanePaths(options.lane).executors.default;
+    options.executorMode = buildLanePaths(options.lane, {
+      config,
+      project: options.project,
+    }).executors.default;
   }
   options.orchestratorId ||= `${options.lane}-autonomous`;
   if (options.executorMode === "local") {
@@ -146,8 +155,8 @@ export function parseArgs(argv) {
   return { help: false, options };
 }
 
-function getWaveNumbers(lane) {
-  const lanePaths = buildLanePaths(lane);
+function getWaveNumbers(lane, project) {
+  const lanePaths = buildLanePaths(lane, { project });
   if (!fs.existsSync(lanePaths.wavesDir)) {
     throw new Error(`Waves directory not found: ${path.relative(REPO_ROOT, lanePaths.wavesDir)}`);
   }
@@ -184,27 +193,52 @@ function runCommand(args, envOverrides = {}) {
   return Number.isInteger(result.status) ? result.status : 1;
 }
 
-function reconcile(lane) {
+function reconcile(lane, project) {
   return runCommand(
-    [path.join(PACKAGE_ROOT, "scripts", "wave-launcher.mjs"), "--lane", lane, "--reconcile-status"],
+    [
+      path.join(PACKAGE_ROOT, "scripts", "wave-launcher.mjs"),
+      "--project",
+      project,
+      "--lane",
+      lane,
+      "--reconcile-status",
+    ],
     { [WAVE_SUPPRESS_UPDATE_NOTICE_ENV]: "1" },
   );
 }
 
-function dryRun(lane) {
+function dryRun(lane, project) {
   return runCommand(
-    [path.join(PACKAGE_ROOT, "scripts", "wave-launcher.mjs"), "--lane", lane, "--dry-run", "--no-dashboard"],
+    [
+      path.join(PACKAGE_ROOT, "scripts", "wave-launcher.mjs"),
+      "--project",
+      project,
+      "--lane",
+      lane,
+      "--dry-run",
+      "--no-dashboard",
+    ],
     { [WAVE_SUPPRESS_UPDATE_NOTICE_ENV]: "1" },
   );
 }
 
-function listPendingFeedback(lane) {
-  return runCommand([path.join(PACKAGE_ROOT, "scripts", "wave-human-feedback.mjs"), "list", "--lane", lane, "--pending"]);
+function listPendingFeedback(lane, project) {
+  return runCommand([
+    path.join(PACKAGE_ROOT, "scripts", "wave-human-feedback.mjs"),
+    "list",
+    "--project",
+    project,
+    "--lane",
+    lane,
+    "--pending",
+  ]);
 }
 
 function launchSingleWave(params) {
   const args = [
     path.join(PACKAGE_ROOT, "scripts", "wave-launcher.mjs"),
+    "--project",
+    params.project,
     "--lane",
     params.lane,
     "--start-wave",
@@ -359,27 +393,27 @@ export async function runAutonomousCli(argv) {
   }
   await maybeAnnouncePackageUpdate();
   const options = parsed.options;
-  const allWaves = getWaveNumbers(options.lane);
+  const allWaves = getWaveNumbers(options.lane, options.project);
   console.log(`[autonomous] lane=${options.lane} orchestrator=${options.orchestratorId}`);
   console.log(`[autonomous] executor=${options.executorMode}`);
   console.log(`[autonomous] codex_sandbox=${options.codexSandboxMode}`);
   console.log(`[autonomous] waves=${allWaves.join(", ")}`);
 
-  const dryRunStatus = dryRun(options.lane);
+  const dryRunStatus = dryRun(options.lane, options.project);
   if (dryRunStatus !== 0) {
     throw new Error(`[autonomous] dry-run preflight failed with status=${dryRunStatus}`);
   }
-  const feedbackListStatus = listPendingFeedback(options.lane);
+  const feedbackListStatus = listPendingFeedback(options.lane, options.project);
   if (feedbackListStatus !== 0) {
     throw new Error(`[autonomous] feedback preflight failed with status=${feedbackListStatus}`);
   }
-  const reconcileStatus = reconcile(options.lane);
+  const reconcileStatus = reconcile(options.lane, options.project);
   if (reconcileStatus !== 0) {
     throw new Error(`[autonomous] initial reconcile failed with status=${reconcileStatus}`);
   }
 
   let launchedCount = 0;
-  const lanePaths = buildLanePaths(options.lane);
+  const lanePaths = buildLanePaths(options.lane, { project: options.project });
   while (true) {
     const completed = readRunState(lanePaths.defaultRunStatePath).completedWaves;
     const wave = nextIncompleteWave(allWaves, completed);
@@ -405,7 +439,7 @@ export async function runAutonomousCli(argv) {
         wave,
         attempt,
       });
-      reconcile(options.lane);
+      reconcile(options.lane, options.project);
       if (status === 0) {
         launchedCount += 1;
         success = true;

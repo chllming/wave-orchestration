@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import {
-  DEFAULT_WAVE_LANE,
   REPO_ROOT,
   buildLanePaths,
   ensureDirectory,
@@ -107,9 +106,11 @@ function escapeMarkdownCell(value) {
     .replace(/\|/g, "\\|");
 }
 
-function benchmarkTelemetryLanePaths() {
+function benchmarkTelemetryLanePaths(options = {}) {
   try {
-    return buildLanePaths(DEFAULT_WAVE_LANE);
+    return buildLanePaths(options.lane || undefined, {
+      project: options.project || undefined,
+    });
   } catch {
     return null;
   }
@@ -179,8 +180,8 @@ function externalTaskArtifacts(result) {
   return artifacts;
 }
 
-function publishExternalBenchmarkTelemetry({ output, outputDir, failureReview }) {
-  const lanePaths = benchmarkTelemetryLanePaths();
+function publishExternalBenchmarkTelemetry({ output, outputDir, failureReview, project, lane }) {
+  const lanePaths = benchmarkTelemetryLanePaths({ project, lane });
   if (!lanePaths || lanePaths.waveControl?.captureBenchmarkRuns === false) {
     return null;
   }
@@ -1376,7 +1377,13 @@ export function runExternalBenchmarkPilot(options = {}) {
   writeTextAtomic(path.join(outputDir, "results.md"), `${renderExternalResultsMarkdown(output)}\n`);
   writeJsonAtomic(path.join(outputDir, "failure-review.json"), failureReview);
   writeTextAtomic(path.join(outputDir, "failure-review.md"), `${renderExternalFailureReviewMarkdown(failureReview)}\n`);
-  publishExternalBenchmarkTelemetry({ output, outputDir, failureReview });
+  publishExternalBenchmarkTelemetry({
+    output,
+    outputDir,
+    failureReview,
+    project: options.project,
+    lane: options.lane,
+  });
   return {
     ...output,
     outputDir: path.relative(REPO_ROOT, outputDir).replaceAll(path.sep, "/"),

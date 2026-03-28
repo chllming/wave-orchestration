@@ -17,7 +17,7 @@ The published `0.8.9` package already includes the optional `design` worker role
 - planner run review via `wave draft --show-run <run-id>`
 - explicit materialization via `wave draft --apply-run <run-id>`
 - worker role kinds including optional `design`
-- persistent project memory in `.wave/project-profile.json`
+- persistent project memory in `.wave/project-profile.json` for the implicit default project, or `.wave/projects/<projectId>/project-profile.json` for explicit projects
 - transient planner packets in `.wave/planner/runs/<run-id>/`
 - planner-run Context7 injection via `planner.agentic.context7Bundle`
 - JSON specs in `docs/plans/waves/specs/wave-<n>.json`
@@ -57,6 +57,13 @@ Run:
 ```bash
 pnpm exec wave project setup
 pnpm exec wave project show --json
+```
+
+For monorepos, scope that memory explicitly:
+
+```bash
+pnpm exec wave project setup --project backend
+pnpm exec wave project show --project backend --json
 ```
 
 The saved profile remembers:
