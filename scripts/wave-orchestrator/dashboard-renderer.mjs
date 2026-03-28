@@ -1,4 +1,3 @@
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { loadWaveConfig } from "./config.mjs";
@@ -14,6 +13,7 @@ import {
   formatAgeFromTimestamp,
   formatElapsed,
   pad,
+  readJsonOrNull,
   sleep,
   truncate,
 } from "./shared.mjs";
@@ -21,6 +21,10 @@ import {
   createCurrentWaveDashboardTerminalEntry,
   createGlobalDashboardTerminalEntry,
 } from "./terminals.mjs";
+import {
+  attachSession as attachTmuxSession,
+  hasSession as hasTmuxSession,
+} from "./tmux-adapter.mjs";
 
 const DASHBOARD_ATTACH_TARGETS = ["current", "global"];
 
@@ -78,30 +82,7 @@ export function parseDashboardArgs(argv) {
   return { help: false, options };
 }
 
-function tmuxSessionExists(socketName, sessionName) {
-  const result = spawnSync("tmux", ["-L", socketName, "has-session", "-t", sessionName], {
-    cwd: REPO_ROOT,
-    encoding: "utf8",
-    env: { ...process.env, TMUX: "" },
-  });
-  if (result.error) {
-    throw new Error(`tmux session lookup failed: ${result.error.message}`);
-  }
-  if (result.status === 0) {
-    return true;
-  }
-  const combined = `${String(result.stderr || "").toLowerCase()}\n${String(result.stdout || "").toLowerCase()}`;
-  if (
-    combined.includes("can't find session") ||
-    combined.includes("no server running") ||
-    combined.includes("error connecting")
-  ) {
-    return false;
-  }
-  throw new Error((result.stderr || result.stdout || "tmux has-session failed").trim());
-}
-
-function attachDashboardSession(project, lane, target) {
+async function attachDashboardSession(project, lane, target) {
   const config = loadWaveConfig();
   const lanePaths = buildLanePaths(lane, {
     config,
@@ -111,25 +92,112 @@ function attachDashboardSession(project, lane, target) {
     target === "global"
       ? createGlobalDashboardTerminalEntry(lanePaths, "current")
       : createCurrentWaveDashboardTerminalEntry(lanePaths);
-  if (!tmuxSessionExists(lanePaths.tmuxSocketName, entry.sessionName)) {
-    const dashboardsRel = path.relative(REPO_ROOT, path.dirname(lanePaths.globalDashboardPath));
-    throw new Error(
-      `No ${target} dashboard session is live for lane ${lanePaths.lane}. Launch a dashboarded run on that lane, then inspect ${dashboardsRel} if you need the last written dashboard state.`,
-    );
+  if (!await hasTmuxSession(lanePaths.tmuxSocketName, entry.sessionName, { allowMissingBinary: false })) {
+    const fallback = resolveDashboardAttachFallback(lanePaths, target);
+    if (fallback) {
+      return fallback;
+    }
+    throw new Error(buildMissingDashboardAttachError(lanePaths, target));
   }
-  const result = spawnSync("tmux", ["-L", lanePaths.tmuxSocketName, "attach", "-t", entry.sessionName], {
-    cwd: REPO_ROOT,
-    stdio: "inherit",
-    env: { ...process.env, TMUX: "" },
+  try {
+    await attachTmuxSession(lanePaths.tmuxSocketName, entry.sessionName);
+    return null;
+  } catch (error) {
+    if (error?.tmuxMissingSession) {
+      const fallback = resolveDashboardAttachFallback(lanePaths, target);
+      if (fallback) {
+        return fallback;
+      }
+      throw new Error(buildMissingDashboardAttachError(lanePaths, target));
+    }
+    throw error;
+  }
+}
+
+function buildMissingDashboardAttachError(lanePaths, target) {
+  const dashboardsRel = path.relative(REPO_ROOT, path.dirname(lanePaths.globalDashboardPath));
+  return `No ${target} dashboard session is live for lane ${lanePaths.lane}. Launch a dashboarded run on that lane, then inspect ${dashboardsRel} if you need the last written dashboard state.`;
+}
+
+function waveDashboardPathForNumber(lanePaths, waveNumber) {
+  if (!Number.isFinite(Number(waveNumber))) {
+    return null;
+  }
+  const candidate = path.join(lanePaths.dashboardsDir, `wave-${Number(waveNumber)}.json`);
+  return fs.existsSync(candidate) ? candidate : null;
+}
+
+function selectCurrentWaveFromGlobalDashboard(globalState) {
+  const waves = Array.isArray(globalState?.waves) ? globalState.waves : [];
+  const candidates = waves
+    .map((wave) => ({
+      waveNumber: Number.parseInt(String(wave?.wave ?? ""), 10),
+      status: String(wave?.status || "").trim().toLowerCase(),
+      updatedAt: Date.parse(
+        String(wave?.updatedAt || wave?.completedAt || wave?.startedAt || ""),
+      ),
+    }))
+    .filter((entry) => Number.isFinite(entry.waveNumber));
+  if (candidates.length === 0) {
+    return null;
+  }
+  candidates.sort((left, right) => {
+    const leftTerminal = TERMINAL_STATES.has(left.status);
+    const rightTerminal = TERMINAL_STATES.has(right.status);
+    if (leftTerminal !== rightTerminal) {
+      return leftTerminal ? 1 : -1;
+    }
+    const leftUpdatedAt = Number.isFinite(left.updatedAt) ? left.updatedAt : 0;
+    const rightUpdatedAt = Number.isFinite(right.updatedAt) ? right.updatedAt : 0;
+    if (leftUpdatedAt !== rightUpdatedAt) {
+      return rightUpdatedAt - leftUpdatedAt;
+    }
+    return right.waveNumber - left.waveNumber;
   });
-  if (result.error) {
-    throw new Error(`tmux attach failed: ${result.error.message}`);
+  return candidates[0].waveNumber;
+}
+
+export function resolveDashboardAttachFallback(lanePaths, target) {
+  if (target === "global") {
+    return fs.existsSync(lanePaths.globalDashboardPath)
+      ? { dashboardFile: lanePaths.globalDashboardPath }
+      : null;
   }
-  if (result.status !== 0) {
-    throw new Error(
-      `tmux attach exited ${result.status} for lane ${lanePaths.lane} ${target} dashboard session ${entry.sessionName}.`,
-    );
+  const globalState = readJsonOrNull(lanePaths.globalDashboardPath);
+  const preferredWaveNumber = selectCurrentWaveFromGlobalDashboard(globalState);
+  const preferredWavePath = waveDashboardPathForNumber(lanePaths, preferredWaveNumber);
+  if (preferredWavePath) {
+    return { dashboardFile: preferredWavePath };
   }
+  if (!fs.existsSync(lanePaths.dashboardsDir)) {
+    return fs.existsSync(lanePaths.globalDashboardPath)
+      ? { dashboardFile: lanePaths.globalDashboardPath }
+      : null;
+  }
+  const candidates = fs.readdirSync(lanePaths.dashboardsDir, { withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => ({
+      filePath: path.join(lanePaths.dashboardsDir, entry.name),
+      match: entry.name.match(/^wave-(\d+)\.json$/),
+    }))
+    .filter((entry) => entry.match)
+    .map((entry) => ({
+      dashboardFile: entry.filePath,
+      waveNumber: Number.parseInt(entry.match[1], 10),
+      mtimeMs: fs.statSync(entry.filePath).mtimeMs,
+    }))
+    .sort((left, right) => {
+      if (left.mtimeMs !== right.mtimeMs) {
+        return right.mtimeMs - left.mtimeMs;
+      }
+      return right.waveNumber - left.waveNumber;
+    });
+  if (candidates.length > 0) {
+    return { dashboardFile: candidates[0].dashboardFile };
+  }
+  return fs.existsSync(lanePaths.globalDashboardPath)
+    ? { dashboardFile: lanePaths.globalDashboardPath }
+    : null;
 }
 
 function readMessageBoardTail(messageBoardPath, maxLines = 24) {
@@ -460,7 +528,7 @@ Options:
   --dashboard-file <path>  Path to wave/global dashboard JSON
   --message-board <path>   Optional message board path override
   --attach <current|global>
-                          Attach to the stable tmux-backed dashboard session for the lane
+                          Attach to the stable dashboard session for the lane, or follow the last written dashboard file when no live session exists
   --watch                  Refresh continuously
   --refresh-ms <n>         Refresh interval in ms (default: ${DEFAULT_REFRESH_MS})
 `);
@@ -468,8 +536,12 @@ Options:
   }
 
   if (options.attach) {
-    attachDashboardSession(options.project, options.lane, options.attach);
-    return;
+    const fallback = await attachDashboardSession(options.project, options.lane, options.attach);
+    if (!fallback) {
+      return;
+    }
+    options.dashboardFile = fallback.dashboardFile;
+    options.watch = true;
   }
 
   let terminalStateReachedAt = null;

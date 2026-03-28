@@ -2,7 +2,6 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import {
-  DEFAULT_CODEX_SANDBOX_MODE,
   DEFAULT_EXECUTOR_MODE,
   loadWaveConfig,
   normalizeCodexSandboxMode,
@@ -36,6 +35,10 @@ import {
   readMaterializedCoordinationState,
 } from "./coordination-store.mjs";
 import { readWaveLedger } from "./ledger.mjs";
+import {
+  submitLauncherRun,
+  waitForRunState,
+} from "./supervisor-cli.mjs";
 
 const AUTONOMOUS_EXECUTOR_MODES = SUPPORTED_EXECUTOR_MODES.filter((mode) => mode !== "local");
 
@@ -58,7 +61,7 @@ Options:
   --orchestrator-id <id>        Orchestrator ID for coordination board
   --resident-orchestrator       Launch a resident orchestrator session for each live wave
   --executor <mode>             Default executor passed to launcher: ${AUTONOMOUS_EXECUTOR_MODES.join(" | ")} (default: lane config)
-  --codex-sandbox <mode>        Default Codex sandbox mode passed to launcher (default: ${DEFAULT_CODEX_SANDBOX_MODE})
+  --codex-sandbox <mode>        Codex sandbox mode override passed to launcher (default: lane config)
   --dashboard                   Enable dashboards (default: disabled)
   --keep-sessions               Keep tmux sessions between waves
   --keep-terminals              Keep temporary terminal entries between waves
@@ -80,7 +83,7 @@ export function parseArgs(argv) {
     orchestratorId: null,
     residentOrchestrator: false,
     executorMode: DEFAULT_EXECUTOR_MODE,
-    codexSandboxMode: DEFAULT_CODEX_SANDBOX_MODE,
+    codexSandboxMode: null,
     noDashboard: true,
     keepSessions: false,
     keepTerminals: false,
@@ -234,9 +237,8 @@ function listPendingFeedback(lane, project) {
   ]);
 }
 
-function launchSingleWave(params) {
-  const args = [
-    path.join(PACKAGE_ROOT, "scripts", "wave-launcher.mjs"),
+export function buildSingleWaveLauncherArgs(params) {
+  const launcherArgs = [
     "--project",
     params.project,
     "--lane",
@@ -259,26 +261,57 @@ function launchSingleWave(params) {
     String(params.agentLaunchStaggerMs),
     "--executor",
     params.executorMode,
-    "--codex-sandbox",
-    params.codexSandboxMode,
     "--orchestrator-id",
     params.orchestratorId,
     "--coordination-note",
     `autonomous single-wave run wave=${params.wave} attempt=${params.attempt}`,
   ];
   if (params.noDashboard) {
-    args.push("--no-dashboard");
+    launcherArgs.push("--no-dashboard");
+  }
+  if (params.codexSandboxMode) {
+    launcherArgs.push("--codex-sandbox", params.codexSandboxMode);
   }
   if (params.keepSessions) {
-    args.push("--keep-sessions");
+    launcherArgs.push("--keep-sessions");
   }
   if (params.keepTerminals) {
-    args.push("--keep-terminals");
+    launcherArgs.push("--keep-terminals");
   }
   if (params.residentOrchestrator) {
-    args.push("--resident-orchestrator");
+    launcherArgs.push("--resident-orchestrator");
   }
-  return runCommand(args, { [WAVE_SUPPRESS_UPDATE_NOTICE_ENV]: "1" });
+  return launcherArgs;
+}
+
+function launchSingleWave(params) {
+  const launcherArgs = buildSingleWaveLauncherArgs(params);
+  const submission = submitLauncherRun(launcherArgs);
+  console.log(
+    `[autonomous] submitted wave ${params.wave} as run_id=${submission.runId} lane=${submission.lane} project=${submission.project}`,
+  );
+  const observeTimeoutSeconds = Math.max(30, Math.min(60, params.timeoutMinutes * 60));
+  return (async () => {
+    while (true) {
+      const located = await waitForRunState({
+        project: submission.project,
+        lane: submission.lane,
+        adhocRunId: submission.adhocRunId,
+        runId: submission.runId,
+        timeoutSeconds: observeTimeoutSeconds,
+      });
+      if (located.state.status === "completed") {
+        return 0;
+      }
+      if (located.state.status === "failed") {
+        return Number.isInteger(located.state.exitCode) ? located.state.exitCode : 1;
+      }
+      const reconcileStatus = reconcile(params.lane, params.project);
+      if (reconcileStatus !== 0) {
+        return reconcileStatus;
+      }
+    }
+  })();
 }
 
 function requiredInboundDependenciesOpen(lanePaths, lane) {
@@ -434,7 +467,7 @@ export async function runAutonomousCli(argv) {
       console.log(
         `\n[autonomous] launching wave ${wave} (attempt ${attempt}/${options.maxAttemptsPerWave})`,
       );
-      const status = launchSingleWave({
+      const status = await launchSingleWave({
         ...options,
         wave,
         attempt,

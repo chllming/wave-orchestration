@@ -714,6 +714,64 @@ File ownership (only touch these paths):
     });
   });
 
+  it("preserves configured Codex sandbox defaults when no CLI override is provided", () => {
+    const laneProfile = resolveLaneProfile(loadWaveConfig(), "main");
+    laneProfile.executors = {
+      ...laneProfile.executors,
+      codex: {
+        ...laneProfile.executors.codex,
+        sandbox: "workspace-write",
+      },
+    };
+
+    const resolved = resolveAgentExecutor(
+      {
+        agentId: "A1",
+        title: "Implementation",
+        executorConfig: {
+          id: "codex",
+        },
+      },
+      {
+        lane: "main",
+        wave: { wave: 1, componentPromotions: [] },
+        laneProfile,
+        codexSandboxMode: null,
+      },
+    );
+
+    expect(resolved.codex.sandbox).toBe("workspace-write");
+  });
+
+  it("lets an explicit Codex sandbox override win over lane config", () => {
+    const laneProfile = resolveLaneProfile(loadWaveConfig(), "main");
+    laneProfile.executors = {
+      ...laneProfile.executors,
+      codex: {
+        ...laneProfile.executors.codex,
+        sandbox: "workspace-write",
+      },
+    };
+
+    const resolved = resolveAgentExecutor(
+      {
+        agentId: "A1",
+        title: "Implementation",
+        executorConfig: {
+          id: "codex",
+        },
+      },
+      {
+        lane: "main",
+        wave: { wave: 1, componentPromotions: [] },
+        laneProfile,
+        codexSandboxMode: "read-only",
+      },
+    );
+
+    expect(resolved.codex.sandbox).toBe("read-only");
+  });
+
   it("composes imported standing role prompts while keeping ownership local", () => {
     const overlayPrompt = [
       "Primary goal:",

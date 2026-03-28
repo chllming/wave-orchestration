@@ -158,12 +158,18 @@ export function writeWaveRelaunchProjection({
   runs,
   failures,
   derivedState,
+  resumePlan = null,
 }) {
   writeWaveRelaunchPlan(lanePaths, wave.wave, {
     wave: wave.wave,
     attempt,
     phase: derivedState?.ledger?.phase || null,
     selectedAgentIds: runs.map((run) => run.agent.agentId),
+    resumeFromPhase: resumePlan?.resumeFromPhase || null,
+    invalidatedAgentIds: resumePlan?.invalidatedAgentIds || [],
+    reusableAgentIds: resumePlan?.reusableAgentIds || [],
+    reusableProofBundleIds: resumePlan?.reusableProofBundleIds || [],
+    forwardedClosureGaps: resumePlan?.forwardedClosureGaps || [],
     reasonBuckets: relaunchReasonBuckets(runs, failures, derivedState),
     executorStates: Object.fromEntries(
       runs.map((run) => [run.agent.agentId, run.agent.executorResolved || null]),

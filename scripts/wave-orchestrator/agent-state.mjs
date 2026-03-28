@@ -350,7 +350,6 @@ function detectTermination(agent, logText, statusRecord) {
   const patterns = [
     { reason: "max-turns", regex: /Reached max turns \((\d+)\)/i },
     { reason: "timeout", regex: /(timed out(?: after [^\n.]+)?)/i },
-    { reason: "session-missing", regex: /(session [^\n]+ disappeared before [^\n]+ was written)/i },
   ];
   for (const pattern of patterns) {
     const match = String(logText || "").match(pattern.regex);

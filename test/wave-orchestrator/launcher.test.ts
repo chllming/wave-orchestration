@@ -24,7 +24,7 @@ import {
 } from "../../scripts/wave-orchestrator/retry-engine.mjs";
 import {
   acquireLauncherLock,
-  collectUnexpectedSessionFailures,
+  collectUnexpectedSessionWarnings,
   markLauncherFailed,
   reconcileStaleLauncherArtifacts,
   releaseLauncherLock,
@@ -32,6 +32,7 @@ import {
 import {
   readWaveInfraGate,
   runClosureSweepPhase,
+  runClosureSweepPhase as runClosureSweepEnginePhase,
 } from "../../scripts/wave-orchestrator/closure-engine.mjs";
 import {
   formatReconcileBlockedWaveLine,
@@ -42,7 +43,10 @@ import {
   writeAgentResultEnvelopeForRun,
 } from "../../scripts/wave-orchestrator/result-envelope.mjs";
 import { writeAgentExecutionSummary } from "../../scripts/wave-orchestrator/agent-state.mjs";
-import { materializeCoordinationState } from "../../scripts/wave-orchestrator/coordination-store.mjs";
+import {
+  materializeCoordinationState,
+  readMaterializedCoordinationState,
+} from "../../scripts/wave-orchestrator/coordination-store.mjs";
 import { hashAgentPromptFingerprint } from "../../scripts/wave-orchestrator/context7.mjs";
 
 const tempDirs = [];
@@ -2389,26 +2393,29 @@ describe("runClosureSweepPhase", () => {
     const lanePaths = makeLanePaths(dir);
     const runLog = path.join(dir, "wave-0-i8.log");
     const runStatus = path.join(dir, "wave-0-i8.status");
-    const closureRuns = [
-      {
-        agent: { agentId: "I8", title: "Integration" },
-        sessionName: "wave-i8",
-        promptPath: path.join(dir, "i8.prompt.md"),
-        logPath: runLog,
-        statusPath: runStatus,
-        messageBoardPath: path.join(dir, "board.md"),
-        messageBoardSnapshot: "",
-        sharedSummaryPath: path.join(dir, "shared.md"),
-        sharedSummaryText: "",
-        inboxPath: path.join(dir, "i8.inbox.md"),
-        inboxText: "",
-      },
-    ];
+    const contQaReportPath = path.join(dir, "wave-0-cont-qa.md");
+    const closureRuns = ["I8", "A9", "A0"].map((agentId) => ({
+      agent: { agentId, title: agentId === "I8" ? "Integration" : agentId },
+      sessionName: `wave-${agentId.toLowerCase()}`,
+      promptPath: path.join(dir, `${agentId.toLowerCase()}.prompt.md`),
+      logPath: agentId === "I8" ? runLog : path.join(dir, `wave-0-${agentId.toLowerCase()}.log`),
+      statusPath: agentId === "I8" ? runStatus : path.join(dir, `wave-0-${agentId.toLowerCase()}.status`),
+      messageBoardPath: path.join(dir, "board.md"),
+      messageBoardSnapshot: "",
+      sharedSummaryPath: path.join(dir, "shared.md"),
+      sharedSummaryText: "",
+      inboxPath: path.join(dir, `${agentId.toLowerCase()}.inbox.md`),
+      inboxText: "",
+    }));
     const launched = [];
 
     const result = await runClosureSweepPhase({
       lanePaths,
-      wave: { wave: 0, integrationAgentId: "I8" },
+      wave: {
+        wave: 0,
+        integrationAgentId: "I8",
+        contQaReportPath: path.relative(process.cwd(), contQaReportPath),
+      },
       closureRuns,
       coordinationLogPath: path.join(dir, "coordination", "wave-0.jsonl"),
       refreshDerivedState: () => ({
@@ -2442,9 +2449,21 @@ describe("runClosureSweepPhase", () => {
           JSON.stringify({ code: 0, promptHash: "hash" }, null, 2),
           "utf8",
         );
+        if (params.agent.agentId === "A0") {
+          fs.writeFileSync(contQaReportPath, "# cont-QA\n\nVerdict: PASS\n", "utf8");
+        }
+        const logText =
+          params.agent.agentId === "I8"
+            ? "[wave-integration] state=ready-for-doc-closure claims=0 conflicts=0 blockers=0 detail=ready\n"
+            : params.agent.agentId === "A9"
+              ? "[wave-doc-closure] state=closed paths=docs/plans/current-state.md detail=shared-plan-updated\n"
+              : [
+                  "[wave-gate] architecture=pass integration=pass durability=pass live=pass docs=pass detail=ready",
+                  "[wave-verdict] pass detail=ready",
+                ].join("\n");
         fs.writeFileSync(
           params.logPath,
-          "[wave-integration] state=ready-for-doc-closure claims=0 conflicts=0 blockers=0 detail=ready\n",
+          `${logText}\n`,
           "utf8",
         );
         return { executorId: "codex" };
@@ -2452,7 +2471,7 @@ describe("runClosureSweepPhase", () => {
       waitForWaveCompletionFn: async () => ({ failures: [], timedOut: false }),
     });
 
-    expect(launched).toEqual(["I8"]);
+    expect(launched).toEqual(["I8", "A9", "A0"]);
     expect(result.failures).toEqual([]);
   });
 
@@ -2570,6 +2589,252 @@ describe("runClosureSweepPhase", () => {
 
     expect(launched).toEqual(["E0", "A7", "A8", "A9", "A0"]);
     expect(result.failures).toEqual([]);
+  });
+
+  it("forwards closure-stage wave-proof-gap records and continues later closure stages", async () => {
+    const dir = makeTempDir();
+    const lanePaths = makeLanePaths(dir);
+    const coordinationLogPath = path.join(dir, "coordination", "wave-0.jsonl");
+    const closureRuns = ["A7", "A8", "A9", "A0"].map((agentId) => ({
+      agent: agentId === "A7"
+        ? {
+            agentId,
+            title: agentId,
+            rolePromptPaths: ["docs/agents/wave-security-role.md"],
+            ownedPaths: ["docs/security-review.md"],
+          }
+        : { agentId, title: agentId },
+      sessionName: `wave-${agentId.toLowerCase()}`,
+      promptPath: path.join(dir, `${agentId}.prompt.md`),
+      logPath: path.join(dir, `wave-0-${agentId.toLowerCase()}.log`),
+      statusPath: path.join(dir, `wave-0-${agentId.toLowerCase()}.status`),
+      messageBoardPath: path.join(dir, "board.md"),
+      messageBoardSnapshot: "",
+      sharedSummaryPath: path.join(dir, "shared.md"),
+      sharedSummaryText: "",
+      inboxPath: path.join(dir, `${agentId}.inbox.md`),
+      inboxText: "",
+    }));
+    const launched = [];
+
+    const result = await runClosureSweepEnginePhase({
+      lanePaths,
+      wave: {
+        wave: 0,
+        integrationAgentId: "A8",
+        documentationAgentId: "A9",
+        contQaAgentId: "A0",
+      },
+      closureRuns,
+      coordinationLogPath,
+      refreshDerivedState: () => ({
+        integrationSummary: {
+          recommendation: "ready-for-doc-closure",
+          detail: "Integration is coherent.",
+        },
+      }),
+      dashboardState: {
+        attempt: 1,
+        agents: closureRuns.map((run) => ({ agentId: run.agent.agentId, attempts: 0 })),
+      },
+      recordCombinedEvent: () => {},
+      flushDashboards: () => {},
+      options: {
+        orchestratorId: "orch",
+        executorMode: "codex",
+        codexSandboxMode: "danger-full-access",
+        agentRateLimitRetries: 0,
+        agentRateLimitBaseDelaySeconds: 1,
+        agentRateLimitMaxDelaySeconds: 1,
+        context7Enabled: false,
+        timeoutMinutes: 5,
+      },
+      feedbackStateByRequestId: new Map(),
+      appendCoordination: () => {},
+      launchAgentSessionFn: async (_lanePaths, params) => {
+        launched.push(params.agent.agentId);
+        fs.writeFileSync(
+          params.statusPath,
+          JSON.stringify({ code: 0, promptHash: "hash" }, null, 2),
+          "utf8",
+        );
+        fs.writeFileSync(params.logPath, "closure output\n", "utf8");
+        return { executorId: "codex" };
+      },
+      waitForWaveCompletionFn: async () => ({ failures: [], timedOut: false }),
+      readWaveContEvalGateFn: () => ({ ok: true, agentId: null, statusCode: "pass", detail: "pass", logPath: null }),
+      readWaveSecurityGateFn: () => ({
+        ok: false,
+        agentId: "A7",
+        statusCode: "wave-proof-gap",
+        detail: "A7 reported a proof gap.",
+        logPath: "logs/wave-0-a7.log",
+      }),
+      readWaveIntegrationBarrierFn: () => ({
+        ok: true,
+        agentId: "A8",
+        statusCode: "pass",
+        detail: "ready",
+        logPath: "logs/wave-0-a8.log",
+      }),
+      readWaveDocumentationGateFn: () => ({
+        ok: true,
+        agentId: "A9",
+        statusCode: "pass",
+        detail: "ready",
+        logPath: "logs/wave-0-a9.log",
+      }),
+      readWaveComponentMatrixGateFn: () => ({
+        ok: true,
+        agentId: "A9",
+        statusCode: "pass",
+        detail: "ready",
+        logPath: "logs/wave-0-a9.log",
+      }),
+      readWaveContQaGateFn: () => ({
+        ok: true,
+        agentId: "A0",
+        statusCode: "pass",
+        detail: "ready",
+        logPath: "logs/wave-0-a0.log",
+      }),
+      materializeAgentExecutionSummaryForRunFn: () => null,
+      monitorWaveHumanFeedbackFn: () => false,
+    });
+
+    expect(launched).toEqual(["A7", "A8", "A9", "A0"]);
+    expect(result.failures).toHaveLength(1);
+    expect(result.failures[0]).toMatchObject({
+      agentId: "A7",
+      statusCode: "wave-proof-gap",
+    });
+
+    const coordinationState = readMaterializedCoordinationState(coordinationLogPath);
+    const forwarded = coordinationState.byId.get("wave-0-closure-gap-security-review-A7-attempt-1");
+    expect(forwarded).toMatchObject({
+      kind: "blocker",
+      agentId: "A7",
+      blockerSeverity: "closure-critical",
+    });
+    expect(forwarded.targets).toEqual(["agent:A8", "agent:A9", "agent:A0"]);
+  });
+
+  it("still stops immediately on non-forwardable closure failures", async () => {
+    const dir = makeTempDir();
+    const lanePaths = makeLanePaths(dir);
+    const closureRuns = ["A7", "A8", "A9", "A0"].map((agentId) => ({
+      agent: agentId === "A7"
+        ? {
+            agentId,
+            title: agentId,
+            rolePromptPaths: ["docs/agents/wave-security-role.md"],
+            ownedPaths: ["docs/security-review.md"],
+          }
+        : { agentId, title: agentId },
+      sessionName: `wave-${agentId.toLowerCase()}`,
+      promptPath: path.join(dir, `${agentId}.prompt.md`),
+      logPath: path.join(dir, `wave-0-${agentId.toLowerCase()}.log`),
+      statusPath: path.join(dir, `wave-0-${agentId.toLowerCase()}.status`),
+      messageBoardPath: path.join(dir, "board.md"),
+      messageBoardSnapshot: "",
+      sharedSummaryPath: path.join(dir, "shared.md"),
+      sharedSummaryText: "",
+      inboxPath: path.join(dir, `${agentId}.inbox.md`),
+      inboxText: "",
+    }));
+    const launched = [];
+
+    const result = await runClosureSweepEnginePhase({
+      lanePaths,
+      wave: {
+        wave: 0,
+        integrationAgentId: "A8",
+        documentationAgentId: "A9",
+        contQaAgentId: "A0",
+      },
+      closureRuns,
+      coordinationLogPath: path.join(dir, "coordination", "wave-0.jsonl"),
+      refreshDerivedState: () => ({
+        integrationSummary: {
+          recommendation: "ready-for-doc-closure",
+          detail: "Integration is coherent.",
+        },
+      }),
+      dashboardState: {
+        attempt: 1,
+        agents: closureRuns.map((run) => ({ agentId: run.agent.agentId, attempts: 0 })),
+      },
+      recordCombinedEvent: () => {},
+      flushDashboards: () => {},
+      options: {
+        orchestratorId: "orch",
+        executorMode: "codex",
+        codexSandboxMode: "danger-full-access",
+        agentRateLimitRetries: 0,
+        agentRateLimitBaseDelaySeconds: 1,
+        agentRateLimitMaxDelaySeconds: 1,
+        context7Enabled: false,
+        timeoutMinutes: 5,
+      },
+      feedbackStateByRequestId: new Map(),
+      appendCoordination: () => {},
+      launchAgentSessionFn: async (_lanePaths, params) => {
+        launched.push(params.agent.agentId);
+        fs.writeFileSync(
+          params.statusPath,
+          JSON.stringify({ code: 0, promptHash: "hash" }, null, 2),
+          "utf8",
+        );
+        fs.writeFileSync(params.logPath, "closure output\n", "utf8");
+        return { executorId: "codex" };
+      },
+      waitForWaveCompletionFn: async () => ({ failures: [], timedOut: false }),
+      readWaveContEvalGateFn: () => ({ ok: true, agentId: null, statusCode: "pass", detail: "pass", logPath: null }),
+      readWaveSecurityGateFn: () => ({
+        ok: false,
+        agentId: "A7",
+        statusCode: "missing-wave-proof",
+        detail: "A7 is missing proof.",
+        logPath: "logs/wave-0-a7.log",
+      }),
+      readWaveIntegrationBarrierFn: () => ({
+        ok: true,
+        agentId: "A8",
+        statusCode: "pass",
+        detail: "ready",
+        logPath: "logs/wave-0-a8.log",
+      }),
+      readWaveDocumentationGateFn: () => ({
+        ok: true,
+        agentId: "A9",
+        statusCode: "pass",
+        detail: "ready",
+        logPath: "logs/wave-0-a9.log",
+      }),
+      readWaveComponentMatrixGateFn: () => ({
+        ok: true,
+        agentId: "A9",
+        statusCode: "pass",
+        detail: "ready",
+        logPath: "logs/wave-0-a9.log",
+      }),
+      readWaveContQaGateFn: () => ({
+        ok: true,
+        agentId: "A0",
+        statusCode: "pass",
+        detail: "ready",
+        logPath: "logs/wave-0-a0.log",
+      }),
+      materializeAgentExecutionSummaryForRunFn: () => null,
+      monitorWaveHumanFeedbackFn: () => false,
+    });
+
+    expect(launched).toEqual(["A7"]);
+    expect(result.failures).toHaveLength(1);
+    expect(result.failures[0]).toMatchObject({
+      agentId: "A7",
+      statusCode: "missing-wave-proof",
+    });
   });
 });
 
@@ -3434,7 +3699,7 @@ describe("launcher lock handling", () => {
 });
 
 describe("reconcileStaleLauncherArtifacts", () => {
-  it("removes stale lane artifacts while preserving reusable state and non-lane terminals", () => {
+  it("removes stale lane artifacts while preserving reusable state and non-lane terminals", async () => {
     const dir = makeTempDir();
     const lanePaths = makeLanePaths(dir);
     const lockPath = lanePaths.launcherLockPath;
@@ -3498,7 +3763,7 @@ describe("reconcileStaleLauncherArtifacts", () => {
       "utf8",
     );
 
-    expect(reconcileStaleLauncherArtifacts(lanePaths)).toMatchObject({
+    await expect(reconcileStaleLauncherArtifacts(lanePaths)).resolves.toMatchObject({
       removedLock: true,
       clearedDashboards: true,
       staleWaves: [4],
@@ -3513,17 +3778,31 @@ describe("reconcileStaleLauncherArtifacts", () => {
   });
 });
 
-describe("collectUnexpectedSessionFailures", () => {
-  it("reports pending agents whose tmux sessions disappear before status writes", () => {
+describe("collectUnexpectedSessionWarnings", () => {
+  it("reads warning-only terminal projection loss from runtime records", () => {
     const dir = makeTempDir();
     const lanePaths = makeLanePaths(dir);
     const logPath = path.join(dir, "wave-4-a1.log");
     const statusPath = path.join(dir, "wave-4-a1.status");
+    const runtimePath = path.join(dir, "wave-4-a1.runtime.json");
 
     fs.writeFileSync(logPath, "", "utf8");
+    fs.writeFileSync(
+      runtimePath,
+      JSON.stringify(
+        {
+          agentId: "A1",
+          terminalDisposition: "projection-missing",
+          lastHeartbeatAt: new Date().toISOString(),
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
 
     expect(
-      collectUnexpectedSessionFailures(
+      collectUnexpectedSessionWarnings(
         lanePaths,
         [
           {
@@ -3531,6 +3810,7 @@ describe("collectUnexpectedSessionFailures", () => {
             sessionName: "oc_leap_claw_wave4_a1",
             statusPath,
             logPath,
+            runtimePath,
           },
         ],
         new Set(["A1"]),
@@ -3538,9 +3818,75 @@ describe("collectUnexpectedSessionFailures", () => {
     ).toMatchObject([
       {
         agentId: "A1",
-        statusCode: "session-missing",
+        statusCode: "terminal-session-missing",
       },
     ]);
+  });
+});
+
+describe("runClosureSweepPhase required stage checks", () => {
+  it("fails when a required closure stage is missing from the closure run set", async () => {
+    const dir = makeTempDir();
+    const lanePaths = makeLanePaths(dir);
+    const coordinationLogPath = path.join(dir, "coordination.jsonl");
+    const dashboardState = { agents: [], attempt: 1 };
+
+    const result = await runClosureSweepEnginePhase({
+      lanePaths,
+      wave: {
+        wave: 4,
+        agents: [{ agentId: "A8" }, { agentId: "A9" }, { agentId: "A0" }],
+      },
+      closureRuns: [
+        {
+          agent: { agentId: "A9" },
+          sessionName: "wave-4-a9",
+          promptPath: path.join(dir, "A9.prompt.md"),
+          logPath: path.join(dir, "A9.log"),
+          statusPath: path.join(dir, "A9.status.json"),
+          messageBoardPath: path.join(dir, "board.md"),
+          sharedSummaryPath: path.join(dir, "shared.md"),
+          inboxPath: path.join(dir, "A9.md"),
+        },
+        {
+          agent: { agentId: "A0" },
+          sessionName: "wave-4-a0",
+          promptPath: path.join(dir, "A0.prompt.md"),
+          logPath: path.join(dir, "A0.log"),
+          statusPath: path.join(dir, "A0.status.json"),
+          messageBoardPath: path.join(dir, "board.md"),
+          sharedSummaryPath: path.join(dir, "shared.md"),
+          inboxPath: path.join(dir, "A0.md"),
+        },
+      ],
+      coordinationLogPath,
+      refreshDerivedState: () => ({}),
+      dashboardState,
+      recordCombinedEvent: () => {},
+      flushDashboards: () => {},
+      options: {
+        timeoutMinutes: 1,
+        codexSandboxMode: null,
+        agentRateLimitRetries: 0,
+        agentRateLimitBaseDelaySeconds: 1,
+        agentRateLimitMaxDelaySeconds: 1,
+        context7Enabled: false,
+      },
+      feedbackStateByRequestId: new Map(),
+      appendCoordination: () => {},
+      launchAgentSessionFn: async () => ({}),
+      waitForWaveCompletionFn: async () => ({ failures: [], timedOut: false }),
+    });
+
+    expect(result).toMatchObject({
+      timedOut: false,
+      failures: [
+        {
+          statusCode: "missing-closure-run",
+          agentId: "A8",
+        },
+      ],
+    });
   });
 });
 

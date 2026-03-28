@@ -1,4 +1,5 @@
 import path from "node:path";
+import { appendCoordinationRecord } from "./coordination-store.mjs";
 import {
   parseStructuredSignalsFromLog,
   refreshWaveDashboardAgentStates,
@@ -57,6 +58,68 @@ function recordClosureGateFailure({
   });
 }
 
+function isForwardableClosureGap(gate) {
+  return gate?.statusCode === "wave-proof-gap";
+}
+
+function forwardedClosureGapRecord({
+  stage,
+  wave,
+  lanePaths,
+  gate,
+  attempt,
+  targetAgentIds = [],
+}) {
+  return {
+    id: `wave-${wave.wave}-closure-gap-${stage.key}-${gate.agentId}-attempt-${attempt || 1}`,
+    kind: "blocker",
+    lane: lanePaths.lane,
+    wave: wave.wave,
+    agentId: gate.agentId,
+    status: "open",
+    priority: "high",
+    blocking: true,
+    blockerSeverity: "closure-critical",
+    summary: `${stage.label} reported a proof gap and was forwarded to later closure stages.`,
+    detail: gate.detail,
+    artifactRefs: gate.logPath ? [gate.logPath] : [],
+    targets: targetAgentIds.map((agentId) => `agent:${agentId}`),
+    attempt: attempt || 1,
+  };
+}
+
+function stageRequiresRun(stage, wave, lanePaths) {
+  switch (stage.key) {
+    case "integration":
+    case "documentation":
+    case "cont-qa":
+      return true;
+    case "cont-eval":
+      return Array.isArray(wave?.agents) && wave.agents.some((agent) => agent?.agentId === stage.agentId);
+    case "security-review":
+      return (
+        Array.isArray(wave?.agents) &&
+        wave.agents.some((agent) =>
+          isSecurityReviewAgent(agent, {
+            securityRolePromptPath: lanePaths?.securityRolePromptPath,
+          }),
+        )
+      );
+    default:
+      return false;
+  }
+}
+
+function missingClosureRunGate(stage) {
+  return {
+    ok: false,
+    agentId: stage.agentId,
+    statusCode: "missing-closure-run",
+    detail: `${stage.label} is required for this wave but no matching closure run was provided.`,
+    logPath: null,
+  };
+}
+
 export async function runClosureSweepPhase({
   lanePaths,
   wave,
@@ -113,10 +176,24 @@ export async function runClosureSweepPhase({
       ? readWaveContQaGateFn
       : readWaveContQaGateDefault;
   const stagedRuns = planClosureStages({ lanePaths, wave, closureRuns });
+  const forwardedFailures = [];
   const { contQaAgentId, contEvalAgentId, integrationAgentId, documentationAgentId } =
     resolveWaveRoleBindings(wave, lanePaths);
-  for (const stage of stagedRuns) {
+  for (const [stageIndex, stage] of stagedRuns.entries()) {
     if (stage.runs.length === 0) {
+      if (stageRequiresRun(stage, wave, lanePaths)) {
+        const gate = missingClosureRunGate(stage);
+        recordClosureGateFailure({
+          wave,
+          lanePaths,
+          gate,
+          label: stage.label,
+          recordCombinedEvent,
+          appendCoordination,
+          actionRequested: stage.actionRequested,
+        });
+        return failureResultFromGate(gate, null);
+      }
       continue;
     }
     for (const runInfo of stage.runs) {
@@ -228,6 +305,43 @@ export async function runClosureSweepPhase({
       contQaAgentId,
     });
     if (!gate.ok) {
+      if (isForwardableClosureGap(gate)) {
+        const targetAgentIds = stagedRuns
+          .slice(stageIndex + 1)
+          .flatMap((candidate) => candidate.runs.map((run) => run.agent.agentId))
+          .filter(Boolean);
+        forwardedFailures.push({
+          agentId: gate.agentId,
+          statusCode: gate.statusCode,
+          logPath: gate.logPath || (stage.runs[0]?.logPath ? path.relative(REPO_ROOT, stage.runs[0].logPath) : null),
+          detail: gate.detail,
+        });
+        appendCoordinationRecord(
+          coordinationLogPath,
+          forwardedClosureGapRecord({
+            stage,
+            wave,
+            lanePaths,
+            gate,
+            attempt: dashboardState?.attempt || 1,
+            targetAgentIds,
+          }),
+        );
+        recordCombinedEvent({
+          level: "warn",
+          agentId: gate.agentId,
+          message: `${stage.label} reported a proof gap; continuing later closure stages with the gap as input.`,
+        });
+        appendCoordination({
+          event: "closure_gap_forwarded",
+          waves: [wave.wave],
+          status: "blocked",
+          details: `agent=${gate.agentId}; reason=${gate.statusCode}; ${gate.detail}`,
+          actionRequested: `Lane ${lanePaths.lane} owners should resolve the forwarded closure proof gap after downstream closure evidence is collected.`,
+        });
+        refreshDerivedState?.(dashboardState?.attempt || 0);
+        continue;
+      }
       recordClosureGateFailure({
         wave,
         lanePaths,
@@ -243,7 +357,7 @@ export async function runClosureSweepPhase({
       );
     }
   }
-  return { failures: [], timedOut: false };
+  return { failures: forwardedFailures, timedOut: false };
 }
 
 export function planClosureStages({ lanePaths, wave, closureRuns }) {

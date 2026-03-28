@@ -2203,7 +2203,7 @@ export function resolveAgentExecutor(agent, options = {}) {
         profile?.codex?.sandbox ||
         (executorId === "codex"
           ? normalizeCodexSandboxMode(
-              options.codexSandboxMode || laneProfile.executors.codex.sandbox,
+              options.codexSandboxMode ?? laneProfile.executors.codex.sandbox ?? DEFAULT_CODEX_SANDBOX_MODE,
               "executor.codex.sandbox",
             )
           : laneProfile.executors.codex.sandbox || DEFAULT_CODEX_SANDBOX_MODE),

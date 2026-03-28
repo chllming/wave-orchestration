@@ -74,6 +74,7 @@ import {
   appendTerminalEntries,
   createGlobalDashboardTerminalEntry,
   createTemporaryTerminalEntries,
+  createWaveAgentSessionName,
   killTmuxSessionIfExists,
   normalizeTerminalSurface,
   pruneOrphanLaneTemporaryTerminalEntries,
@@ -144,7 +145,6 @@ import {
   summarizeResolvedSkills,
 } from "./skills.mjs";
 import {
-  collectUnexpectedSessionFailures as collectUnexpectedSessionFailuresImpl,
   launchAgentSession as launchAgentSessionImpl,
   refreshResolvedSkillsForRun,
   waitForWaveCompletion as waitForWaveCompletionImpl,
@@ -200,7 +200,7 @@ import {
   acquireLauncherLock,
   releaseLauncherLock,
   reconcileStaleLauncherArtifacts,
-  collectUnexpectedSessionFailures,
+  collectUnexpectedSessionWarnings,
   launchAgentSession,
   waitForWaveCompletion,
   monitorWaveHumanFeedback,
@@ -211,7 +211,6 @@ import {
   pruneDryRunExecutorPreviewDirs,
   recordAttemptState,
   recordWaveRunState,
-  runTmux,
   syncLiveWaveSignals,
 } from "./session-supervisor.mjs";
 import { buildControlStatusPayload } from "./control-cli.mjs";
@@ -230,6 +229,10 @@ import {
   formatReconcilePreservedWaveLine,
 } from "./reconcile-format.mjs";
 import { computeReducerSnapshot } from "./reducer-snapshot.mjs";
+import {
+  launcherProgressPathForRun,
+  updateLauncherProgress,
+} from "./launcher-progress.mjs";
 
 function printUsage(lanePaths, terminalSurface) {
   console.log(`Usage: pnpm exec wave launch [options]
@@ -255,7 +258,7 @@ Options:
   --agent-launch-stagger-ms <n>
                         Delay between agent launches (default: ${DEFAULT_AGENT_LAUNCH_STAGGER_MS})
   --executor <mode>      Default agent executor mode: ${SUPPORTED_EXECUTOR_MODES.join(" | ")} (default: ${lanePaths.executors.default})
-  --codex-sandbox <mode> Codex sandbox mode: ${CODEX_SANDBOX_MODES.join(" | ")} (default: ${DEFAULT_CODEX_SANDBOX_MODE})
+  --codex-sandbox <mode> Codex sandbox mode override: ${CODEX_SANDBOX_MODES.join(" | ")} (default: lane config)
   --manifest-out <path>  Write parsed wave manifest JSON (default: ${path.relative(REPO_ROOT, lanePaths.defaultManifestPath)})
   --dry-run              Parse waves and update manifest only
   --terminal-surface <mode>
@@ -298,7 +301,7 @@ function parseArgs(argv) {
     agentRateLimitMaxDelaySeconds: DEFAULT_AGENT_RATE_LIMIT_MAX_DELAY_SECONDS,
     agentLaunchStaggerMs: DEFAULT_AGENT_LAUNCH_STAGGER_MS,
     executorMode: lanePaths.executors.default,
-    codexSandboxMode: DEFAULT_CODEX_SANDBOX_MODE,
+    codexSandboxMode: null,
     manifestOut: lanePaths.defaultManifestPath,
     dryRun: false,
     terminalSurface: resolveDefaultTerminalSurface(
@@ -654,7 +657,7 @@ function recoverableFailureReason(failure, summary = null) {
     return statusCode;
   }
   const terminationReason = String(summary?.terminationReason || "").trim().toLowerCase();
-  if (["timeout", "max-turns", "session-missing"].includes(terminationReason)) {
+  if (["timeout", "max-turns"].includes(terminationReason)) {
     return terminationReason;
   }
   const detailText = `${failure?.detail || ""} ${summary?.terminationHint || ""}`.toLowerCase();
@@ -747,6 +750,23 @@ export async function runLauncherCli(argv) {
     return;
   }
   const { lanePaths, options } = parsed;
+  const supervisorRunId = String(process.env.WAVE_SUPERVISOR_RUN_ID || "").trim() || null;
+  const launcherProgressPath = launcherProgressPathForRun(lanePaths, supervisorRunId);
+  const writeLauncherRunProgress = (patch = {}) => {
+    if (!launcherProgressPath || !supervisorRunId) {
+      return null;
+    }
+    return updateLauncherProgress(
+      launcherProgressPath,
+      {
+        runId: supervisorRunId,
+        ...patch,
+      },
+      {
+        runId: supervisorRunId,
+      },
+    );
+  };
   if (!options.reconcileStatus) {
     await maybeAnnouncePackageUpdate();
   }
@@ -824,7 +844,7 @@ export async function runLauncherCli(argv) {
   }
 
   try {
-    const staleArtifactCleanup = reconcileStaleLauncherArtifacts(lanePaths, {
+    const staleArtifactCleanup = await reconcileStaleLauncherArtifacts(lanePaths, {
       terminalSurface: options.terminalSurface,
     });
     const context7BundleIndex = loadContext7BundleIndex(lanePaths.context7BundleIndexPath);
@@ -1036,6 +1056,18 @@ export async function runLauncherCli(argv) {
       feedbackRequestsDir: lanePaths.feedbackRequestsDir,
     });
     writeDashboardProjections({ lanePaths, globalDashboard });
+    writeLauncherRunProgress({
+      phase: "starting",
+      waveNumber: null,
+      attemptNumber: null,
+      selectedAgentIds: [],
+      launchedAgentIds: [],
+      completedAgentIds: [],
+      resumeFromPhase: null,
+      forwardedClosureGaps: [],
+      finalized: false,
+      finalDisposition: null,
+    });
 
     if (terminalRegistryEnabled && !options.keepTerminals) {
       const removed = removeLaneTemporaryTerminalEntries(lanePaths.terminalsPath, lanePaths);
@@ -1047,7 +1079,7 @@ export async function runLauncherCli(argv) {
     }
 
     if (options.cleanupSessions) {
-      const killed = cleanupLaneTmuxSessions(lanePaths);
+      const killed = await cleanupLaneTmuxSessions(lanePaths);
       if (killed.length > 0) {
         recordGlobalDashboardEvent(globalDashboard, {
           message: `Pre-run cleanup removed ${killed.length} stale tmux sessions for lane ${lanePaths.lane}.`,
@@ -1070,7 +1102,7 @@ export async function runLauncherCli(argv) {
         globalDashboardTerminalAppended = true;
         currentWaveDashboardTerminalAppended = true;
       }
-      launchWaveDashboardSession(lanePaths, {
+      await launchWaveDashboardSession(lanePaths, {
         sessionName: globalDashboardTerminalEntry.sessionName,
         dashboardPath: lanePaths.globalDashboardPath,
       });
@@ -1154,33 +1186,14 @@ export async function runLauncherCli(argv) {
       };
 
       try {
-        terminalEntries = createTemporaryTerminalEntries(
-          lanePaths,
-          wave.wave,
-          wave.agents,
-          runTag,
-          false,
-        );
-        if (terminalRegistryEnabled) {
-          appendTerminalEntries(lanePaths.terminalsPath, terminalEntries);
-          terminalsAppended = true;
-        }
-
         const agentRuns = wave.agents.map((agent) => {
           const safeName = `wave-${wave.wave}-${agent.slug}`;
-          const terminalName = `${lanePaths.terminalNamePrefix}${wave.wave}-${agent.slug}`;
-          const sessionName = terminalEntries.find(
-            (entry) => entry.terminalName === terminalName,
-          )?.sessionName;
-          if (!sessionName) {
-            throw new Error(`Failed to resolve session name for ${agent.agentId}`);
-          }
           return {
             agent,
             lane: lanePaths.lane,
             wave: wave.wave,
             resultsDir: lanePaths.resultsDir,
-            sessionName,
+            sessionName: createWaveAgentSessionName(lanePaths, wave.wave, agent.slug),
             promptPath: path.join(lanePaths.promptsDir, `${safeName}.prompt.md`),
             logPath: path.join(lanePaths.logsDir, `${safeName}.log`),
             statusPath: path.join(lanePaths.statusDir, `${safeName}.status`),
@@ -1198,6 +1211,17 @@ export async function runLauncherCli(argv) {
             inboxText: derivedState.inboxesByAgentId[agent.agentId]?.text || "",
           };
         });
+        terminalEntries = createTemporaryTerminalEntries(
+          lanePaths,
+          wave.wave,
+          agentRuns,
+          runTag,
+          false,
+        );
+        if (terminalRegistryEnabled) {
+          appendTerminalEntries(lanePaths.terminalsPath, terminalEntries);
+          terminalsAppended = true;
+        }
         const roleBindings = resolveWaveRoleBindings(wave, lanePaths, wave.agents);
 
         const refreshDerivedState = (attemptNumber = 0) => {
@@ -1396,7 +1420,7 @@ export async function runLauncherCli(argv) {
         syncWaveSignals();
 
         if (options.dashboard && currentWaveDashboardTerminalEntry) {
-          launchWaveDashboardSession(lanePaths, {
+          await launchWaveDashboardSession(lanePaths, {
             sessionName: currentWaveDashboardTerminalEntry.sessionName,
             dashboardPath,
             messageBoardPath,
@@ -1447,15 +1471,16 @@ export async function runLauncherCli(argv) {
             residentOrchestratorRun.lastPromptHash = launchResult?.promptHash || null;
             residentOrchestratorRun.lastExecutorId =
               launchResult?.executorId || residentOrchestratorRun.agent.executorResolved?.id || null;
+            residentOrchestratorRun.runtimePath = launchResult?.runtimePath || null;
             recordCombinedEvent({
               agentId: residentOrchestratorRun.agent.agentId,
-              message: `Resident orchestrator launched in tmux session ${residentOrchestratorRun.sessionName}`,
+              message: `Resident orchestrator launched via ${launchResult?.sessionBackend || "process"} backend`,
             });
             appendCoordination({
               event: "resident_orchestrator_start",
               waves: [wave.wave],
               status: "running",
-              details: `session=${residentOrchestratorRun.sessionName}; executor=${residentOrchestratorRun.lastExecutorId || "unknown"}`,
+              details: `backend=${launchResult?.sessionBackend || "process"}; session=${residentOrchestratorRun.sessionName}; executor=${residentOrchestratorRun.lastExecutorId || "unknown"}`,
               actionRequested: "None",
             });
             syncWaveSignals();
@@ -1497,12 +1522,36 @@ export async function runLauncherCli(argv) {
         let traceAttempt = 1;
         let completionGateSnapshot = null;
         let completionTraceDir = null;
+        const terminalAgentIdsForWave = () =>
+          agentRuns
+            .filter((run) => readStatusRecordIfPresent(run.statusPath))
+            .map((run) => run.agent.agentId);
         recordWaveRunState(lanePaths, wave.wave, "started", {
           agentIds: wave.agents.map((agent) => agent.agentId),
           runVariant: lanePaths.runVariant || "live",
         });
+        writeLauncherRunProgress({
+          waveNumber: wave.wave,
+          attemptNumber: 0,
+          phase: "wave-started",
+          selectedAgentIds: runsToLaunch.map((run) => run.agent.agentId),
+          launchedAgentIds: [],
+          completedAgentIds: terminalAgentIdsForWave(),
+          finalized: false,
+          finalDisposition: null,
+        });
 
         while (attempt <= options.maxRetriesPerWave + 1) {
+          writeLauncherRunProgress({
+            waveNumber: wave.wave,
+            attemptNumber: attempt,
+            phase: "attempt-starting",
+            selectedAgentIds: runsToLaunch.map((run) => run.agent.agentId),
+            launchedAgentIds: [],
+            completedAgentIds: [],
+            finalized: false,
+            finalDisposition: null,
+          });
           refreshDerivedState(attempt - 1);
           lastLiveCoordinationRefreshAt = Date.now();
           dashboardState.attempt = attempt;
@@ -1602,13 +1651,22 @@ export async function runLauncherCli(argv) {
               runInfo.lastExecutorId = launchResult?.executorId || runInfo.agent.executorResolved?.id || null;
               runInfo.lastSkillProjection =
                 launchResult?.skills || summarizeResolvedSkills(runInfo.agent.skillsResolved);
+              writeLauncherRunProgress({
+                waveNumber: wave.wave,
+                attemptNumber: attempt,
+                phase: "attempt-running",
+                selectedAgentIds: runsToLaunch.map((run) => run.agent.agentId),
+                launchedAgentIds: runsToLaunch
+                  .filter((run) => run.lastLaunchAttempt === attempt)
+                  .map((run) => run.agent.agentId),
+              });
               setWaveDashboardAgent(dashboardState, runInfo.agent.agentId, {
                 state: "running",
                 detail: "Session launched",
               });
               recordCombinedEvent({
                 agentId: runInfo.agent.agentId,
-                message: `Launched in tmux session ${runInfo.sessionName}`,
+                message: `Launched via ${launchResult?.sessionBackend || "process"} backend`,
               });
               const context7Mode = launchResult?.context7?.mode || "none";
               if (runInfo.agent.context7Resolved?.bundleId !== "none") {
@@ -1681,6 +1739,18 @@ export async function runLauncherCli(argv) {
           materializeAgentExecutionSummaries(wave, agentRuns);
           failures = annotateFailuresWithRecoveryHints(failures, agentRuns);
           refreshDerivedState(attempt);
+          const reducerDecisionForProgress = latestReducerSnapshot || refreshReducerSnapshot(attempt);
+          writeLauncherRunProgress({
+            waveNumber: wave.wave,
+            attemptNumber: attempt,
+            phase: failures.length === 0 ? "attempt-succeeded" : "attempt-failed",
+            selectedAgentIds: runsToLaunch.map((run) => run.agent.agentId),
+            launchedAgentIds: runsToLaunch.map((run) => run.agent.agentId),
+            completedAgentIds: terminalAgentIdsForWave(),
+            resumeFromPhase: reducerDecisionForProgress?.resumePlan?.resumeFromPhase || null,
+            forwardedClosureGaps: reducerDecisionForProgress?.resumePlan?.forwardedClosureGaps || [],
+            gateSnapshotSummary: reducerDecisionForProgress?.reducerState?.gateSnapshot?.overall || null,
+          });
           syncWaveSignals();
           lastLiveCoordinationRefreshAt = Date.now();
           emitCoordinationAlertEvents(derivedState);
@@ -2097,6 +2167,19 @@ export async function runLauncherCli(argv) {
               runs: runsToLaunch,
               failures,
               derivedState,
+              resumePlan: (latestReducerSnapshot || refreshReducerSnapshot(attempt))?.resumePlan || null,
+            });
+            writeLauncherRunProgress({
+              waveNumber: wave.wave,
+              attemptNumber: attempt,
+              phase: "waiting-shared-component",
+              selectedAgentIds: runsToLaunch.map((run) => run.agent.agentId),
+              launchedAgentIds: runsToLaunch.map((run) => run.agent.agentId),
+              completedAgentIds: terminalAgentIdsForWave(),
+              resumeFromPhase:
+                (latestReducerSnapshot || refreshReducerSnapshot(attempt))?.resumePlan?.resumeFromPhase || null,
+              forwardedClosureGaps:
+                (latestReducerSnapshot || refreshReducerSnapshot(attempt))?.resumePlan?.forwardedClosureGaps || [],
             });
             flushDashboards();
             traceAttempt += 1;
@@ -2121,6 +2204,16 @@ export async function runLauncherCli(argv) {
             updateWaveDashboardMessageBoard(dashboardState, messageBoardPath);
             flushDashboards();
             await flushWaveControlTelemetry();
+            writeLauncherRunProgress({
+              waveNumber: wave.wave,
+              attemptNumber: attempt,
+              phase: "wave-completed",
+              selectedAgentIds: [],
+              launchedAgentIds: [],
+              completedAgentIds: terminalAgentIdsForWave(),
+              resumeFromPhase: "completed",
+              forwardedClosureGaps: [],
+            });
             break;
           }
 
@@ -2179,6 +2272,7 @@ export async function runLauncherCli(argv) {
                   runs: recoveryPlan.selectedRuns,
                   failures,
                   derivedState,
+                  resumePlan: reducerDecision?.resumePlan || null,
                 });
               }
               recordAttemptState(lanePaths, wave.wave, attempt, "failed", {
@@ -2217,6 +2311,16 @@ export async function runLauncherCli(argv) {
                 details: `attempt=${attempt}/${options.maxRetriesPerWave + 1}; request=${queuedRecovery.requestId}; agents=${recoverySelectedAgentIds.join(",")}; reason=${(failures || []).map((failure) => failure.recoveryReason || failure.statusCode).join(",")}`,
                 actionRequested:
                   `Lane ${lanePaths.lane} owners should resume the queued targeted recovery or let autonomous relaunch the selected agents.`,
+              });
+              writeLauncherRunProgress({
+                waveNumber: wave.wave,
+                attemptNumber: attempt,
+                phase: "recovery-queued",
+                selectedAgentIds: recoverySelectedAgentIds,
+                launchedAgentIds: runsToLaunch.map((run) => run.agent.agentId),
+                completedAgentIds: terminalAgentIdsForWave(),
+                resumeFromPhase: reducerDecision?.resumePlan?.resumeFromPhase || null,
+                forwardedClosureGaps: reducerDecision?.resumePlan?.forwardedClosureGaps || [],
               });
               await flushWaveControlTelemetry();
               const error = new Error(
@@ -2386,6 +2490,19 @@ export async function runLauncherCli(argv) {
             runs: runsToLaunch,
             failures,
             derivedState,
+            resumePlan: (latestReducerSnapshot || refreshReducerSnapshot(attempt))?.resumePlan || null,
+          });
+          writeLauncherRunProgress({
+            waveNumber: wave.wave,
+            attemptNumber: attempt + 1,
+            phase: "retry-queued",
+            selectedAgentIds: runsToLaunch.map((run) => run.agent.agentId),
+            launchedAgentIds: [],
+            completedAgentIds: terminalAgentIdsForWave(),
+            resumeFromPhase:
+              (latestReducerSnapshot || refreshReducerSnapshot(attempt))?.resumePlan?.resumeFromPhase || null,
+            forwardedClosureGaps:
+              (latestReducerSnapshot || refreshReducerSnapshot(attempt))?.resumePlan?.forwardedClosureGaps || [],
           });
           flushDashboards();
           attempt += 1;
@@ -2418,7 +2535,7 @@ export async function runLauncherCli(argv) {
         });
       } finally {
         if (residentOrchestratorRun) {
-          killTmuxSessionIfExists(lanePaths.tmuxSocketName, residentOrchestratorRun.sessionName);
+          await killTmuxSessionIfExists(lanePaths.tmuxSocketName, residentOrchestratorRun.sessionName);
         }
         if (terminalsAppended && !options.keepTerminals) {
           removeTerminalEntries(lanePaths.terminalsPath, terminalEntries);
@@ -2431,7 +2548,7 @@ export async function runLauncherCli(argv) {
           if (currentWaveDashboardTerminalEntry) {
             excludeSessionNames.add(currentWaveDashboardTerminalEntry.sessionName);
           }
-          cleanupLaneTmuxSessions(lanePaths, { excludeSessionNames });
+          await cleanupLaneTmuxSessions(lanePaths, { excludeSessionNames });
         }
         if (globalWave && globalWave.status === "running") {
           globalWave.status = dashboardState?.status || "failed";
@@ -2446,6 +2563,12 @@ export async function runLauncherCli(argv) {
     globalDashboard.status = "completed";
     recordGlobalDashboardEvent(globalDashboard, { message: "All selected waves completed." });
     writeDashboardProjections({ lanePaths, globalDashboard });
+    writeLauncherRunProgress({
+      phase: "completed",
+      finalized: true,
+      finalDisposition: "completed",
+      exitCode: 0,
+    });
     appendCoordination({
       event: "launcher_finish",
       waves: selectedWavesForCoordination,
@@ -2460,6 +2583,12 @@ export async function runLauncherCli(argv) {
       appendCoordination,
       error,
     );
+    writeLauncherRunProgress({
+      phase: "failed",
+      finalized: true,
+      finalDisposition: "failed",
+      exitCode: Number.isInteger(error?.exitCode) ? error.exitCode : 1,
+    });
     writeDashboardProjections({ lanePaths, globalDashboard });
     throw error;
   } finally {
@@ -2475,14 +2604,14 @@ export async function runLauncherCli(argv) {
     }
     if (options.cleanupSessions && globalDashboardTerminalEntry) {
       try {
-        killTmuxSessionIfExists(lanePaths.tmuxSocketName, globalDashboardTerminalEntry.sessionName);
+        await killTmuxSessionIfExists(lanePaths.tmuxSocketName, globalDashboardTerminalEntry.sessionName);
       } catch {
         // no-op
       }
     }
     if (options.cleanupSessions && currentWaveDashboardTerminalEntry) {
       try {
-        killTmuxSessionIfExists(
+        await killTmuxSessionIfExists(
           lanePaths.tmuxSocketName,
           currentWaveDashboardTerminalEntry.sessionName,
         );

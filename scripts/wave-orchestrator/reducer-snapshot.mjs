@@ -147,6 +147,12 @@ function buildReducerShadowDiff({
             }
           : null,
     resumeFromPhase: resumePlan?.resumeFromPhase || null,
+    forwardedClosureGaps: (resumePlan?.forwardedClosureGaps || []).map((gap) => ({
+      stageKey: gap.stageKey || null,
+      agentId: gap.agentId || null,
+      targets: normalizeShadowIdList(gap.targets || []),
+      resolved: gap.resolved === true,
+    })),
   };
   const shadowDiff = {
     helperAssignmentBarrier: shadowSlice(

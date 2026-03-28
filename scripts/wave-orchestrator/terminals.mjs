@@ -1,4 +1,3 @@
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -7,10 +6,11 @@ import {
   REPO_ROOT,
   TERMINAL_COLOR,
   TERMINAL_ICON,
-  TMUX_COMMAND_TIMEOUT_MS,
   ensureDirectory,
+  shellQuote,
   writeJsonAtomic,
 } from "./shared.mjs";
+import { killSessionIfExists } from "./tmux-adapter.mjs";
 
 export const TERMINAL_SURFACES = ["vscode", "tmux", "none"];
 
@@ -95,13 +95,15 @@ export function createWaveAgentSessionName(lanePaths, wave, agentSlug) {
 export function createTemporaryTerminalEntries(
   lanePaths,
   wave,
-  agents,
+  agentRuns,
   runTag,
   includeDashboard = false,
 ) {
-  const agentEntries = agents.map((agent) => {
+  const agentEntries = (agentRuns || []).map((run) => {
+    const agent = run?.agent || run;
     const terminalName = `${lanePaths.terminalNamePrefix}${wave}-${agent.slug}`;
-    const sessionName = createWaveAgentSessionName(lanePaths, wave, agent.slug);
+    const sessionName = run?.sessionName || createWaveAgentSessionName(lanePaths, wave, agent.slug);
+    const logPath = String(run?.logPath || "").trim();
     return {
       terminalName,
       sessionName,
@@ -109,7 +111,9 @@ export function createTemporaryTerminalEntries(
         name: terminalName,
         icon: TERMINAL_ICON,
         color: TERMINAL_COLOR,
-        command: `TMUX= tmux -L ${lanePaths.tmuxSocketName} new -As ${sessionName}`,
+        command: logPath
+          ? `bash -lc "mkdir -p ${shellQuote(path.dirname(logPath))} && touch ${shellQuote(logPath)} && tail -n 200 -F ${shellQuote(logPath)}"`
+          : `TMUX= tmux -L ${lanePaths.tmuxSocketName} new -As ${sessionName}`,
       },
     };
   });
@@ -221,30 +225,6 @@ export function pruneOrphanLaneTemporaryTerminalEntries(
   };
 }
 
-export function killTmuxSessionIfExists(socketName, sessionName) {
-  const result = spawnSync("tmux", ["-L", socketName, "kill-session", "-t", sessionName], {
-    cwd: REPO_ROOT,
-    encoding: "utf8",
-    env: { ...process.env, TMUX: "" },
-    timeout: TMUX_COMMAND_TIMEOUT_MS,
-  });
-  if (result.error) {
-    if (result.error.code === "ETIMEDOUT") {
-      throw new Error(`kill existing session ${sessionName} failed: tmux command timed out`);
-    }
-    throw new Error(`kill existing session ${sessionName} failed: ${result.error.message}`);
-  }
-  if (result.status === 0) {
-    return;
-  }
-  const combined = `${String(result.stderr || "").toLowerCase()}\n${String(result.stdout || "").toLowerCase()}`;
-  if (
-    combined.includes("can't find session") ||
-    combined.includes("no server running") ||
-    combined.includes("no current target") ||
-    combined.includes("error connecting")
-  ) {
-    return;
-  }
-  throw new Error(`kill existing session ${sessionName} failed: ${(result.stderr || "").trim()}`);
+export async function killTmuxSessionIfExists(socketName, sessionName) {
+  await killSessionIfExists(socketName, sessionName);
 }

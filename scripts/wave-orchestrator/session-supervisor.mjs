@@ -1,4 +1,3 @@
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -22,7 +21,6 @@ import {
   ensureDirectory,
   shellQuote,
   PACKAGE_ROOT,
-  TMUX_COMMAND_TIMEOUT_MS,
   toIsoTimestamp,
   writeJsonAtomic,
 } from "./shared.mjs";
@@ -33,14 +31,23 @@ import {
   pruneOrphanLaneTemporaryTerminalEntries,
 } from "./terminals.mjs";
 import {
+  createSession as createTmuxSession,
+  listSessions as listTmuxSessions,
+  runTmuxCommand,
+} from "./tmux-adapter.mjs";
+import {
   recordGlobalDashboardEvent,
 } from "./dashboard-state.mjs";
 import { buildHumanFeedbackWorkflowUpdate } from "./human-input-workflow.mjs";
 import {
-  collectUnexpectedSessionFailures as collectUnexpectedSessionFailuresImpl,
+  collectUnexpectedSessionWarnings as collectUnexpectedSessionWarningsImpl,
   launchAgentSession as launchAgentSessionImpl,
   waitForWaveCompletion as waitForWaveCompletionImpl,
 } from "./launcher-runtime.mjs";
+import {
+  buildSupervisorPaths,
+  supervisorAgentRuntimePathForRun,
+} from "./supervisor-cli.mjs";
 import {
   agentUsesSignalHygiene,
   buildSignalStatusLine,
@@ -63,6 +70,13 @@ function isProcessAlive(pid) {
 
 function relativeArtifactPath(filePath) {
   return filePath ? path.relative(REPO_ROOT, filePath) : null;
+}
+
+function readRuntimeRecord(run) {
+  if (!run?.runtimePath || !fs.existsSync(run.runtimePath)) {
+    return null;
+  }
+  return readJsonOrNull(run.runtimePath);
 }
 
 export function recordWaveRunState(lanePaths, waveNumber, state, data = {}) {
@@ -235,8 +249,8 @@ function isLaneSessionName(lanePaths, sessionName) {
   );
 }
 
-function listLaneTmuxSessionNames(lanePaths) {
-  return listTmuxSessionNames(lanePaths).filter((sessionName) =>
+async function listLaneTmuxSessionNames(lanePaths) {
+  return (await listTmuxSessionNames(lanePaths)).filter((sessionName) =>
     isLaneSessionName(lanePaths, sessionName),
   );
 }
@@ -415,20 +429,28 @@ export function monitorResidentOrchestratorSession({
     });
     return true;
   }
-  const activeSessions = new Set(listLaneTmuxSessionNames(lanePaths));
-  if (!activeSessions.has(run.sessionName)) {
+  const runtimeRecord = readRuntimeRecord(run);
+  if (
+    runtimeRecord &&
+    ["completed", "failed", "terminated"].includes(
+      String(runtimeRecord.terminalDisposition || ""),
+    )
+  ) {
     sessionState.closed = true;
+    const exitCode = Number.parseInt(String(runtimeRecord.exitCode ?? ""), 10);
     recordCombinedEvent({
-      level: "warn",
+      level: Number.isFinite(exitCode) && exitCode === 0 ? "info" : "warn",
       agentId: run.agent.agentId,
       message:
-        "Resident orchestrator session disappeared before writing a status file; launcher continues as the control plane.",
+        Number.isFinite(exitCode) && exitCode === 0
+          ? "Resident orchestrator ended via runtime record before writing a status file; launcher continues as the control plane."
+          : "Resident orchestrator ended via runtime record before writing a status file; launcher continues as the control plane.",
     });
     appendCoordination({
-      event: "resident_orchestrator_missing",
+      event: "resident_orchestrator_runtime_terminal",
       waves: [waveNumber],
-      status: "warn",
-      details: `tmux session ${run.sessionName} disappeared before ${path.relative(REPO_ROOT, run.statusPath)} was written.`,
+      status: Number.isFinite(exitCode) && exitCode === 0 ? "resolved" : "warn",
+      details: `runtime record reached ${runtimeRecord.terminalDisposition} before ${path.relative(REPO_ROOT, run.statusPath)} was written.`,
       actionRequested: "None",
     });
     return true;
@@ -505,7 +527,7 @@ export function pruneDryRunExecutorPreviewDirs(lanePaths, waves) {
   return removedPaths.toSorted();
 }
 
-export function reconcileStaleLauncherArtifacts(lanePaths, options = {}) {
+export async function reconcileStaleLauncherArtifacts(lanePaths, options = {}) {
   const outcome = {
     removedLock: false,
     removedSessions: [],
@@ -527,8 +549,8 @@ export function reconcileStaleLauncherArtifacts(lanePaths, options = {}) {
     outcome.removedLock = true;
   }
 
-  outcome.removedSessions = cleanupLaneTmuxSessions(lanePaths);
-  const activeSessionNames = new Set(listLaneTmuxSessionNames(lanePaths));
+  outcome.removedSessions = await cleanupLaneTmuxSessions(lanePaths);
+  const activeSessionNames = new Set(await listLaneTmuxSessionNames(lanePaths));
   if (terminalSurfaceUsesTerminalRegistry(options.terminalSurface || "vscode")) {
     const terminalCleanup = pruneOrphanLaneTemporaryTerminalEntries(
       lanePaths.terminalsPath,
@@ -562,87 +584,35 @@ export function reconcileStaleLauncherArtifacts(lanePaths, options = {}) {
 }
 
 export function runTmux(lanePaths, args, description) {
-  const result = spawnSync("tmux", ["-L", lanePaths.tmuxSocketName, ...args], {
-    cwd: REPO_ROOT,
-    encoding: "utf8",
-    env: { ...process.env, TMUX: "" },
-    timeout: TMUX_COMMAND_TIMEOUT_MS,
+  return runTmuxCommand(lanePaths.tmuxSocketName, args, {
+    description,
+    mutate: ["new-session", "kill-session"].includes(String(args?.[0] || "")),
   });
-  if (result.error) {
-    if (result.error.code === "ETIMEDOUT") {
-      throw new Error(
-        `${description} failed: tmux command timed out after ${TMUX_COMMAND_TIMEOUT_MS}ms`,
-      );
-    }
-    throw new Error(`${description} failed: ${result.error.message}`);
-  }
-  if (result.status !== 0) {
-    throw new Error(
-      `${description} failed: ${(result.stderr || "").trim() || "tmux command failed"}`,
-    );
-  }
 }
 
 function listTmuxSessionNames(lanePaths) {
-  const result = spawnSync(
-    "tmux",
-    ["-L", lanePaths.tmuxSocketName, "list-sessions", "-F", "#{session_name}"],
-    {
-      cwd: REPO_ROOT,
-      encoding: "utf8",
-      env: { ...process.env, TMUX: "" },
-      timeout: TMUX_COMMAND_TIMEOUT_MS,
-    },
-  );
-  if (result.error) {
-    if (result.error.code === "ENOENT") {
-      return [];
-    }
-    if (result.error.code === "ETIMEDOUT") {
-      throw new Error(`list tmux sessions failed: timed out after ${TMUX_COMMAND_TIMEOUT_MS}ms`);
-    }
-    throw new Error(`list tmux sessions failed: ${result.error.message}`);
-  }
-  if (result.status !== 0) {
-    const combined = `${String(result.stderr || "").toLowerCase()}\n${String(result.stdout || "").toLowerCase()}`;
-    if (
-      combined.includes("no server running") ||
-      combined.includes("failed to connect") ||
-      combined.includes("error connecting")
-    ) {
-      return [];
-    }
-    throw new Error(
-      `list tmux sessions failed: ${(result.stderr || "").trim() || "unknown error"}`,
-    );
-  }
-  return String(result.stdout || "")
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
+  return listTmuxSessions(lanePaths.tmuxSocketName);
 }
 
-export function cleanupLaneTmuxSessions(lanePaths, { excludeSessionNames = new Set() } = {}) {
-  const sessionNames = listTmuxSessionNames(lanePaths);
+export async function cleanupLaneTmuxSessions(lanePaths, { excludeSessionNames = new Set() } = {}) {
+  const sessionNames = await listTmuxSessionNames(lanePaths);
   const killed = [];
   for (const sessionName of sessionNames) {
     if (excludeSessionNames.has(sessionName) || !isLaneSessionName(lanePaths, sessionName)) {
       continue;
     }
-    killTmuxSessionIfExists(lanePaths.tmuxSocketName, sessionName);
+    await killTmuxSessionIfExists(lanePaths.tmuxSocketName, sessionName);
     killed.push(sessionName);
   }
   return killed;
 }
 
-export function collectUnexpectedSessionFailures(lanePaths, agentRuns, pendingAgentIds) {
-  return collectUnexpectedSessionFailuresImpl(lanePaths, agentRuns, pendingAgentIds, {
-    listLaneTmuxSessionNamesFn: listLaneTmuxSessionNames,
-  });
+export function collectUnexpectedSessionWarnings(lanePaths, agentRuns, pendingAgentIds) {
+  return collectUnexpectedSessionWarningsImpl(lanePaths, agentRuns, pendingAgentIds, {});
 }
 
-export function launchWaveDashboardSession(lanePaths, { sessionName, dashboardPath, messageBoardPath }) {
-  killTmuxSessionIfExists(lanePaths.tmuxSocketName, sessionName);
+export async function launchWaveDashboardSession(lanePaths, { sessionName, dashboardPath, messageBoardPath }) {
+  await killTmuxSessionIfExists(lanePaths.tmuxSocketName, sessionName);
   const messageBoardArg = messageBoardPath
     ? ` --message-board ${shellQuote(messageBoardPath)}`
     : "";
@@ -653,15 +623,31 @@ export function launchWaveDashboardSession(lanePaths, { sessionName, dashboardPa
     )}${messageBoardArg} --lane ${shellQuote(lanePaths.lane)} --watch`,
     "exec bash -l",
   ].join("; ");
-  runTmux(
-    lanePaths,
-    ["new-session", "-d", "-s", sessionName, `bash -lc ${shellQuote(command)}`],
-    `launch dashboard session ${sessionName}`,
+  await createTmuxSession(
+    lanePaths.tmuxSocketName,
+    sessionName,
+    `bash -lc ${shellQuote(command)}`,
+    { description: `launch dashboard session ${sessionName}` },
   );
 }
 
 export async function launchAgentSession(lanePaths, params) {
-  const result = await launchAgentSessionImpl(lanePaths, params, { runTmuxFn: runTmux });
+  const supervisorRunId = String(process.env.WAVE_SUPERVISOR_RUN_ID || "").trim();
+  const runtimePath = supervisorRunId
+    ? supervisorAgentRuntimePathForRun(
+      buildSupervisorPaths(lanePaths),
+      supervisorRunId,
+      params?.agent?.agentId || "unknown-agent",
+    )
+    : null;
+  const result = await launchAgentSessionImpl(
+    lanePaths,
+    {
+      ...params,
+      runtimePath,
+    },
+    { runTmuxFn: runTmux },
+  );
   const controlPlane = params?.controlPlane || null;
   if (!params?.dryRun && controlPlane?.waveNumber !== undefined && controlPlane?.attempt) {
     recordAgentRunStarted(lanePaths, {
@@ -669,11 +655,15 @@ export async function launchAgentSession(lanePaths, params) {
       attempt: controlPlane.attempt,
       runInfo: {
         ...params,
+        runtimePath,
         lastExecutorId: result?.executorId || params?.agent?.executorResolved?.id || null,
       },
     });
   }
-  return result;
+  return {
+    ...result,
+    runtimePath,
+  };
 }
 
 export async function waitForWaveCompletion(
@@ -684,7 +674,7 @@ export async function waitForWaveCompletion(
   options = {},
 ) {
   const result = await waitForWaveCompletionImpl(lanePaths, agentRuns, timeoutMinutes, onProgress, {
-    collectUnexpectedSessionFailuresFn: collectUnexpectedSessionFailures,
+    collectUnexpectedSessionWarningsFn: collectUnexpectedSessionWarnings,
   });
   const controlPlane = options?.controlPlane || null;
   if (controlPlane?.waveNumber !== undefined && controlPlane?.attempt) {

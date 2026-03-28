@@ -7,13 +7,14 @@ import {
   DEFAULT_WAIT_PROGRESS_INTERVAL_MS,
   REPO_ROOT,
   ensureDirectory,
+  readJsonOrNull,
   shellQuote,
+  sleep,
   writeJsonAtomic,
 } from "./shared.mjs";
 import { readStatusCodeIfPresent } from "./dashboard-state.mjs";
 import { buildExecutorLaunchSpec } from "./executors.mjs";
 import { hashAgentPromptFingerprint, prefetchContext7ForSelection } from "./context7.mjs";
-import { killTmuxSessionIfExists } from "./terminals.mjs";
 import { isDesignAgent, resolveDesignReportPath, resolveWaveRoleBindings } from "./role-helpers.mjs";
 import {
   resolveAgentSkills,
@@ -25,6 +26,10 @@ import {
   agentSignalPath,
   agentUsesSignalHygiene,
 } from "./signals.mjs";
+import {
+  spawnAgentProcessRunner,
+  terminateAgentProcessRuntime,
+} from "./agent-process-runner.mjs";
 
 export function refreshResolvedSkillsForRun(runInfo, waveDefinition, lanePaths) {
   runInfo.agent.skillsResolved = resolveAgentSkills(
@@ -35,32 +40,42 @@ export function refreshResolvedSkillsForRun(runInfo, waveDefinition, lanePaths) 
   return runInfo.agent.skillsResolved;
 }
 
-export function collectUnexpectedSessionFailures(
+export function collectUnexpectedSessionWarnings(
   lanePaths,
   agentRuns,
   pendingAgentIds,
   { listLaneTmuxSessionNamesFn },
 ) {
-  const activeSessionNames = new Set(listLaneTmuxSessionNamesFn(lanePaths));
-  const failures = [];
+  const warnings = [];
   for (const run of agentRuns) {
     if (!pendingAgentIds.has(run.agent.agentId) || fs.existsSync(run.statusPath)) {
       continue;
     }
-    if (activeSessionNames.has(run.sessionName)) {
+    if (!run.runtimePath || !fs.existsSync(run.runtimePath)) {
       continue;
     }
-    failures.push({
+    const runtimeRecord = JSON.parse(fs.readFileSync(run.runtimePath, "utf8"));
+    if (!runtimeRecord || typeof runtimeRecord !== "object") {
+      continue;
+    }
+    if (runtimeRecord.terminalDisposition !== "projection-missing") {
+      continue;
+    }
+    warnings.push({
       agentId: run.agent.agentId,
-      statusCode: "session-missing",
+      statusCode: "terminal-session-missing",
       logPath: path.relative(REPO_ROOT, run.logPath),
-      detail: `tmux session ${run.sessionName} disappeared before ${path.relative(REPO_ROOT, run.statusPath)} was written.`,
+      detail: `terminal projection for ${run.sessionName} disappeared before ${path.relative(REPO_ROOT, run.statusPath)} was written.`,
     });
   }
-  return failures;
+  return warnings;
 }
 
-export async function launchAgentSession(lanePaths, params, { runTmuxFn }) {
+export async function launchAgentSession(
+  lanePaths,
+  params,
+  { spawnRunnerFn = spawnAgentProcessRunner } = {},
+) {
   const {
     wave,
     waveDefinition = null,
@@ -84,11 +99,22 @@ export async function launchAgentSession(lanePaths, params, { runTmuxFn }) {
     context7Enabled,
     designExecutionMode = null,
     dryRun = false,
+    runtimePath = null,
   } = params;
   ensureDirectory(path.dirname(promptPath));
   ensureDirectory(path.dirname(logPath));
   ensureDirectory(path.dirname(statusPath));
+  if (runtimePath && fs.existsSync(runtimePath)) {
+    const priorRuntime = readJsonOrNull(runtimePath);
+    if (priorRuntime && typeof priorRuntime === "object") {
+      await terminateAgentProcessRuntime(priorRuntime);
+    }
+  }
   fs.rmSync(statusPath, { force: true });
+  if (runtimePath) {
+    ensureDirectory(path.dirname(runtimePath));
+    fs.rmSync(runtimePath, { force: true });
+  }
 
   const context7 = await prefetchContext7ForSelection(agent.context7Resolved, {
     cacheDir: lanePaths.context7CacheDir,
@@ -170,7 +196,6 @@ export async function launchAgentSession(lanePaths, params, { runTmuxFn }) {
       skills: summarizeResolvedSkills(agent.skillsResolved),
     };
   }
-  killTmuxSessionIfExists(lanePaths.tmuxSocketName, sessionName);
 
   const executionLines = [];
   if (launchSpec.env) {
@@ -231,23 +256,66 @@ export async function launchAgentSession(lanePaths, params, { runTmuxFn }) {
     `export WAVE_ORCHESTRATOR_ID=${shellQuote(orchestratorId || "")}`,
     `export WAVE_EXECUTOR_MODE=${shellQuote(resolvedExecutorMode)}`,
     ...executionLines,
-    `node -e ${shellQuote(
-      "const fs=require('node:fs'); const statusPath=process.argv[1]; const payload={code:Number(process.argv[2]),promptHash:process.argv[3]||null,orchestratorId:process.argv[4]||null,attempt:Number(process.argv[5])||1,completedAt:new Date().toISOString()}; fs.writeFileSync(statusPath, JSON.stringify(payload, null, 2)+'\\n', 'utf8');",
-    )} ${shellQuote(statusPath)} "$status" ${shellQuote(promptHash)} ${shellQuote(orchestratorId || "")} ${shellQuote(String(attempt || 1))}`,
-    `echo "[${lanePaths.lane}-wave-launcher] ${sessionName} finished with code $status"`,
-    "exit \"$status\"",
   ].join("\n");
-
-  runTmuxFn(
-    lanePaths,
-    ["new-session", "-d", "-s", sessionName, `bash -lc ${shellQuote(command)}`],
-    `launch session ${sessionName}`,
-  );
+  const payloadPath = path.join(overlayDir, "runner-payload.json");
+  const initialRuntimeRecord = runtimePath
+    ? {
+      runId: process.env.WAVE_SUPERVISOR_RUN_ID || null,
+      waveNumber: wave,
+      attempt: Number(attempt || 1),
+      agentId: agent.agentId,
+      sessionName,
+      tmuxSessionName: null,
+      sessionBackend: "process",
+      attachMode: "log-tail",
+      runnerPid: null,
+      executorPid: null,
+      pid: null,
+      pgid: null,
+      startedAt: new Date().toISOString(),
+      lastHeartbeatAt: new Date().toISOString(),
+      statusPath,
+      logPath,
+      exitCode: null,
+      exitReason: null,
+      terminalDisposition: "launching",
+    }
+    : null;
+  if (runtimePath && initialRuntimeRecord) {
+    writeJsonAtomic(runtimePath, initialRuntimeRecord);
+  }
+  const runner = spawnRunnerFn({
+    payloadPath,
+    runId: process.env.WAVE_SUPERVISOR_RUN_ID || null,
+    lane: lanePaths.lane,
+    waveNumber: wave,
+    attempt: Number(attempt || 1),
+    agentId: agent.agentId,
+    sessionName,
+    runtimePath,
+    statusPath,
+    logPath,
+    promptHash,
+    orchestratorId: orchestratorId || "",
+    executorId: resolvedExecutorMode,
+    env: launchSpec.env || {},
+    command,
+  });
+  if (runtimePath && initialRuntimeRecord) {
+    writeJsonAtomic(runtimePath, {
+      ...initialRuntimeRecord,
+      runnerPid: runner?.runnerPid || null,
+      lastHeartbeatAt: new Date().toISOString(),
+    });
+  }
   return {
     promptHash,
     context7,
     executorId: resolvedExecutorMode,
     skills: summarizeResolvedSkills(agent.skillsResolved),
+    runtimePath,
+    sessionBackend: "process",
+    attachMode: "log-tail",
   };
 }
 
@@ -256,7 +324,7 @@ export async function waitForWaveCompletion(
   agentRuns,
   timeoutMinutes,
   onProgress = null,
-  { collectUnexpectedSessionFailuresFn },
+  { collectUnexpectedSessionWarningsFn = () => [] },
 ) {
   const defaultTimeoutMs = timeoutMinutes * 60 * 1000;
   const startedAt = Date.now();
@@ -272,8 +340,7 @@ export async function waitForWaveCompletion(
   );
   const pending = new Set(agentRuns.map((run) => run.agent.agentId));
   const timedOutAgentIds = new Set();
-  let sessionFailures = [];
-
+  let sessionWarnings = [];
   const refreshPending = () => {
     for (const run of agentRuns) {
       if (pending.has(run.agent.agentId) && fs.existsSync(run.statusPath)) {
@@ -282,51 +349,58 @@ export async function waitForWaveCompletion(
     }
   };
 
-  await new Promise((resolve) => {
-    const interval = setInterval(() => {
-      refreshPending();
-      onProgress?.({ pendingAgentIds: new Set(pending), timedOut: false });
-      if (pending.size === 0) {
-        clearInterval(interval);
-        resolve();
-        return;
-      }
-      sessionFailures = collectUnexpectedSessionFailuresFn(lanePaths, agentRuns, pending);
-      if (sessionFailures.length > 0) {
-        onProgress?.({
-          pendingAgentIds: new Set(pending),
-          timedOut: false,
-          failures: sessionFailures,
-        });
-        clearInterval(interval);
-        resolve();
-        return;
-      }
-      const now = Date.now();
-      for (const run of agentRuns) {
-        if (!pending.has(run.agent.agentId)) {
-          continue;
-        }
-        const deadline = timeoutAtByAgentId.get(run.agent.agentId) || startedAt + defaultTimeoutMs;
-        if (now <= deadline) {
-          continue;
-        }
-        timedOutAgentIds.add(run.agent.agentId);
-        pending.delete(run.agent.agentId);
-        killTmuxSessionIfExists(lanePaths.tmuxSocketName, run.sessionName);
-      }
-      if (pending.size === 0) {
-        clearInterval(interval);
-        resolve();
-      }
-    }, DEFAULT_WAIT_PROGRESS_INTERVAL_MS);
+  while (true) {
     refreshPending();
     onProgress?.({ pendingAgentIds: new Set(pending), timedOut: false });
-  });
-
-  if (sessionFailures.length > 0) {
-    onProgress?.({ pendingAgentIds: new Set(), timedOut: false, failures: sessionFailures });
-    return { failures: sessionFailures, timedOut: false };
+    if (pending.size === 0) {
+      break;
+    }
+    sessionWarnings = collectUnexpectedSessionWarningsFn(lanePaths, agentRuns, pending);
+    if (sessionWarnings.length > 0) {
+      onProgress?.({
+        pendingAgentIds: new Set(pending),
+        timedOut: false,
+        warnings: sessionWarnings,
+      });
+    }
+    const now = Date.now();
+    for (const run of agentRuns) {
+      if (!pending.has(run.agent.agentId)) {
+        continue;
+      }
+      if (run.runtimePath && fs.existsSync(run.runtimePath)) {
+        try {
+          const runtimeRecord = readJsonOrNull(run.runtimePath);
+          if (
+            runtimeRecord &&
+            typeof runtimeRecord === "object" &&
+            ["completed", "failed", "terminated"].includes(
+              String(runtimeRecord.terminalDisposition || ""),
+            )
+          ) {
+            pending.delete(run.agent.agentId);
+            continue;
+          }
+        } catch {
+          // best-effort runtime observation only
+        }
+      }
+      const deadline = timeoutAtByAgentId.get(run.agent.agentId) || startedAt + defaultTimeoutMs;
+      if (now <= deadline) {
+        continue;
+      }
+      timedOutAgentIds.add(run.agent.agentId);
+      pending.delete(run.agent.agentId);
+      const runtimeRecord =
+        run.runtimePath && fs.existsSync(run.runtimePath) ? readJsonOrNull(run.runtimePath) : null;
+      if (runtimeRecord) {
+        await terminateAgentProcessRuntime(runtimeRecord);
+      }
+    }
+    if (pending.size === 0) {
+      break;
+    }
+    await sleep(DEFAULT_WAIT_PROGRESS_INTERVAL_MS);
   }
 
   const failures = [];
@@ -336,10 +410,19 @@ export async function waitForWaveCompletion(
       continue;
     }
     if (code === null || timedOutAgentIds.has(run.agent.agentId)) {
+      let runtimeRecord = null;
+      if (run.runtimePath && fs.existsSync(run.runtimePath)) {
+        runtimeRecord = readJsonOrNull(run.runtimePath);
+      }
       failures.push({
         agentId: run.agent.agentId,
-        statusCode: timedOutAgentIds.has(run.agent.agentId) ? "timeout-no-status" : "missing-status",
+        statusCode: timedOutAgentIds.has(run.agent.agentId)
+          ? "timeout-no-status"
+          : runtimeRecord?.terminalDisposition === "failed"
+            ? "runtime-failed-before-status"
+            : "missing-status",
         logPath: path.relative(REPO_ROOT, run.logPath),
+        detail: runtimeRecord?.exitReason || null,
       });
       continue;
     }

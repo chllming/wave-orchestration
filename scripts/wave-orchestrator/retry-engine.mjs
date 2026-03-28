@@ -1196,6 +1196,66 @@ function collectResumeExecutorChanges(waveState) {
     }));
 }
 
+const CLOSURE_STAGE_ORDER = [
+  "cont-eval",
+  "security-review",
+  "integrating",
+  "docs-closure",
+  "cont-qa-closure",
+];
+
+function closureStageForAgentId(agentId, roleBindings) {
+  if (!agentId) {
+    return null;
+  }
+  if (agentId === roleBindings?.contEvalAgentId) {
+    return "cont-eval";
+  }
+  if ((roleBindings?.securityReviewerAgentIds || []).includes(agentId)) {
+    return "security-review";
+  }
+  if (agentId === roleBindings?.integrationAgentId) {
+    return "integrating";
+  }
+  if (agentId === roleBindings?.documentationAgentId) {
+    return "docs-closure";
+  }
+  if (agentId === roleBindings?.contQaAgentId) {
+    return "cont-qa-closure";
+  }
+  return null;
+}
+
+function collectForwardedClosureGaps(waveState, waveDefinition, lanePaths) {
+  const roleBindings = resolveWaveRoleBindings(waveDefinition, lanePaths, waveDefinition?.agents);
+  return normalizeRetryTargets(waveState?.retryTargetSet)
+    .filter((target) => target?.statusCode === "wave-proof-gap" || target?.reason === "wave-proof-gap")
+    .map((target) => {
+      const stageKey = closureStageForAgentId(target.agentId, roleBindings);
+      if (!stageKey) {
+        return null;
+      }
+      return {
+        stageKey,
+        agentId: target.agentId,
+        attempt: waveState?.attempt ?? null,
+        detail: target.detail || target.reason || target.statusCode || null,
+        targets: normalizeRetryTargets(waveState?.retryTargetSet)
+          .filter((entry) => closureStageForAgentId(entry.agentId, roleBindings))
+          .map((entry) => entry.agentId)
+          .filter((agentId) => {
+            const agentStage = closureStageForAgentId(agentId, roleBindings);
+            return CLOSURE_STAGE_ORDER.indexOf(agentStage) >= CLOSURE_STAGE_ORDER.indexOf(stageKey);
+          }),
+        resolved: false,
+      };
+    })
+    .filter(Boolean)
+    .sort(
+      (left, right) => CLOSURE_STAGE_ORDER.indexOf(left.stageKey) - CLOSURE_STAGE_ORDER.indexOf(right.stageKey),
+    );
+}
+
 /**
  * Deterministic resume planner operating on reducer output (WaveState).
  * Pure function — no file I/O.
@@ -1207,8 +1267,29 @@ export function buildResumePlan(waveState, options = {}) {
   const canResume = reason !== "all-gates-pass";
   const pendingAgentIds = waveState.closureEligibility?.pendingAgentIds || [];
   const provenAgentIds = waveState.closureEligibility?.ownedSliceProvenAgentIds || [];
+  const forwardedClosureGaps = collectForwardedClosureGaps(waveState, waveDefinition, lanePaths);
   const invalidatedAgentIds = [...pendingAgentIds].sort();
   const reusableAgentIds = [...provenAgentIds].sort();
+  if (forwardedClosureGaps.length > 0) {
+    const roleBindings = resolveWaveRoleBindings(waveDefinition, lanePaths, waveDefinition?.agents);
+    const earliestGap = forwardedClosureGaps[0];
+    const invalidatedClosureAgentIds = roleBindings.closureAgentIds.filter((agentId) => {
+      const stageKey = closureStageForAgentId(agentId, roleBindings);
+      return CLOSURE_STAGE_ORDER.indexOf(stageKey) >= CLOSURE_STAGE_ORDER.indexOf(earliestGap.stageKey);
+    });
+    for (const agentId of invalidatedClosureAgentIds) {
+      if (!invalidatedAgentIds.includes(agentId)) {
+        invalidatedAgentIds.push(agentId);
+      }
+    }
+    invalidatedAgentIds.sort();
+    for (const agentId of invalidatedClosureAgentIds) {
+      const index = reusableAgentIds.indexOf(agentId);
+      if (index >= 0) {
+        reusableAgentIds.splice(index, 1);
+      }
+    }
+  }
   const proofBundles =
     waveState.closureEligibility?.proofBundles ||
     waveState.proofAvailability?.activeProofBundles ||
@@ -1219,7 +1300,9 @@ export function buildResumePlan(waveState, options = {}) {
     .sort();
   const gateSnapshot = waveState.gateSnapshot || {};
   let resumeFromPhase = "completed";
-  if (canResume && gateSnapshot.overall && !gateSnapshot.overall.ok) {
+  if (forwardedClosureGaps.length > 0) {
+    resumeFromPhase = forwardedClosureGaps[0].stageKey;
+  } else if (canResume && gateSnapshot.overall && !gateSnapshot.overall.ok) {
     resumeFromPhase = phaseFromGate(gateSnapshot.overall.gate);
   } else if (canResume) {
     resumeFromPhase = "implementation";
@@ -1239,6 +1322,7 @@ export function buildResumePlan(waveState, options = {}) {
     humanInputBlockers: collectResumeHumanInputBlockers(waveState),
     gateBlockers: collectResumeGateBlockers(gateSnapshot),
     closureEligibility: waveState.closureEligibility || null,
+    forwardedClosureGaps,
     deterministic: true,
     createdAt: toIsoTimestamp(),
   };

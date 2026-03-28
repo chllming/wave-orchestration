@@ -71,4 +71,32 @@ describe("terminal helpers", () => {
       "oc_main_wave_dashboard7",
     ]);
   });
+
+  it("uses log-follow commands for process-backed agent terminals when log paths are available", () => {
+    const lanePaths = {
+      tmuxSocketName: "socket-main",
+      tmuxSessionPrefix: "oc_main_wave",
+      tmuxDashboardSessionPrefix: "oc_main_wave_dashboard",
+      terminalNamePrefix: "main-wave",
+      dashboardTerminalNamePrefix: "main-wave-dashboard",
+    };
+
+    const entries = createTemporaryTerminalEntries(
+      lanePaths,
+      4,
+      [
+        {
+          agent: { slug: "a1" },
+          sessionName: "oc_main_wave4_a1",
+          logPath: "/tmp/wave-a1.log",
+        },
+      ],
+      "run-4",
+      false,
+    );
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0].config.command).toContain("tail -n 200 -F");
+    expect(entries[0].config.command).toContain("/tmp/wave-a1.log");
+  });
 });

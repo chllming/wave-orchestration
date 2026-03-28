@@ -3,13 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  buildSingleWaveLauncherArgs,
   nextIncompleteWave,
   parseArgs,
   readAutonomousBarrier,
 } from "../../scripts/wave-orchestrator/autonomous.mjs";
 import { appendDependencyTicket } from "../../scripts/wave-orchestrator/coordination-store.mjs";
-import { DEFAULT_CODEX_SANDBOX_MODE } from "../../scripts/wave-orchestrator/config.mjs";
-
 const tempDirs = [];
 
 function makeTempDir() {
@@ -30,7 +29,7 @@ describe("autonomous parseArgs", () => {
     expect(parsed.help).toBe(false);
     expect(parsed.options.maxAttemptsPerWave).toBe(1);
     expect(parsed.options.executorMode).toBe("codex");
-    expect(parsed.options.codexSandboxMode).toBe(DEFAULT_CODEX_SANDBOX_MODE);
+    expect(parsed.options.codexSandboxMode).toBe(null);
   });
 
   it("rejects the local executor", () => {
@@ -40,6 +39,63 @@ describe("autonomous parseArgs", () => {
   it("accepts an explicit codex sandbox override", () => {
     const parsed = parseArgs(["--codex-sandbox", "workspace-write"]);
     expect(parsed.options.codexSandboxMode).toBe("workspace-write");
+  });
+
+  it("builds single-wave launcher args without referencing stale local variables", () => {
+    expect(
+      buildSingleWaveLauncherArgs({
+        project: "default",
+        lane: "main",
+        wave: 3,
+        attempt: 2,
+        timeoutMinutes: 20,
+        maxRetriesPerWave: 1,
+        agentRateLimitRetries: 2,
+        agentRateLimitBaseDelaySeconds: 5,
+        agentRateLimitMaxDelaySeconds: 15,
+        agentLaunchStaggerMs: 1000,
+        executorMode: "codex",
+        orchestratorId: "main-autonomous",
+        noDashboard: true,
+        codexSandboxMode: "workspace-write",
+        keepSessions: true,
+        keepTerminals: true,
+        residentOrchestrator: true,
+      }),
+    ).toEqual([
+      "--project",
+      "default",
+      "--lane",
+      "main",
+      "--start-wave",
+      "3",
+      "--end-wave",
+      "3",
+      "--timeout-minutes",
+      "20",
+      "--max-retries-per-wave",
+      "1",
+      "--agent-rate-limit-retries",
+      "2",
+      "--agent-rate-limit-base-delay-seconds",
+      "5",
+      "--agent-rate-limit-max-delay-seconds",
+      "15",
+      "--agent-launch-stagger-ms",
+      "1000",
+      "--executor",
+      "codex",
+      "--orchestrator-id",
+      "main-autonomous",
+      "--coordination-note",
+      "autonomous single-wave run wave=3 attempt=2",
+      "--no-dashboard",
+      "--codex-sandbox",
+      "workspace-write",
+      "--keep-sessions",
+      "--keep-terminals",
+      "--resident-orchestrator",
+    ]);
   });
 });
 

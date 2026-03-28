@@ -47,6 +47,7 @@ import {
   buildSignalStatusLine,
   syncWaveSignalProjections,
 } from "./signals.mjs";
+import { summarizeSupervisorStateForWave } from "./supervisor-cli.mjs";
 
 function printUsage() {
   console.log(`Usage:
@@ -657,6 +658,12 @@ export function buildControlStatusPayload({ lanePaths, wave, agentId = "" }) {
   const controlState = readWaveControlPlaneState(lanePaths, wave.wave);
   const proofRegistry = readWaveProofRegistry(lanePaths, wave.wave) || { entries: [] };
   const relaunchPlan = readWaveRelaunchPlanSnapshot(lanePaths, wave.wave);
+  const supervisor = summarizeSupervisorStateForWave(lanePaths, wave.wave, {
+    agentId,
+  });
+  const forwardedClosureGaps = Array.isArray(relaunchPlan?.forwardedClosureGaps)
+    ? relaunchPlan.forwardedClosureGaps
+    : [];
   const rerunRequest = controlState.activeRerunRequest
     ? {
         ...controlState.activeRerunRequest,
@@ -718,6 +725,8 @@ export function buildControlStatusPayload({ lanePaths, wave, agentId = "" }) {
     selectionSource: selection.source,
     rerunRequest,
     relaunchPlan,
+    forwardedClosureGaps,
+    supervisor,
     nextTimer: isCompletedPhase(phase) ? null : nextTaskDeadline(tasks),
     activeAttempt: controlState.activeAttempt,
   };
@@ -758,6 +767,33 @@ function printStatus(payload) {
     console.log(buildSignalStatusLine(payload.signals.wave, payload));
   }
   console.log(`blocking=${blocking}`);
+  if (payload.supervisor) {
+    console.log(
+      `supervisor=${payload.supervisor.terminalDisposition || payload.supervisor.status} run_id=${payload.supervisor.runId} launcher_pid=${payload.supervisor.launcherPid || "none"}`,
+    );
+    if (payload.supervisor.sessionBackend || payload.supervisor.recoveryState || payload.supervisor.resumeAction) {
+      console.log(
+        `supervisor-backend=${payload.supervisor.sessionBackend || "unknown"} recovery=${payload.supervisor.recoveryState || "unknown"} resume=${payload.supervisor.resumeAction || "none"}`,
+      );
+    }
+    if ((payload.supervisor.agentRuntimeSummary || []).length > 0) {
+      console.log("supervisor-runtime:");
+      for (const record of payload.supervisor.agentRuntimeSummary) {
+        console.log(
+          `- ${record.agentId || "unknown"} ${record.terminalDisposition || "unknown"} pid=${record.pid || "none"} backend=${record.sessionBackend || "process"} attach=${record.attachMode || "log-tail"} heartbeat=${record.lastHeartbeatAt || "n/a"}`,
+        );
+      }
+    }
+  }
+  if ((payload.forwardedClosureGaps || []).length > 0) {
+    console.log("forwarded-closure-gaps:");
+    for (const gap of payload.forwardedClosureGaps) {
+      const targets = Array.isArray(gap.targets) && gap.targets.length > 0 ? gap.targets.join(",") : "none";
+      console.log(
+        `- ${gap.stageKey} agent=${gap.agentId || "unknown"} attempt=${gap.attempt ?? "n/a"} targets=${targets}${gap.detail ? ` detail=${gap.detail}` : ""}`,
+      );
+    }
+  }
   if (payload.nextTimer) {
     console.log(`next-timer=${payload.nextTimer.kind} ${payload.nextTimer.taskId} at ${payload.nextTimer.at}`);
   }

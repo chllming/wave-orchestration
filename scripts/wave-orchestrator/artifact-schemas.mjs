@@ -101,6 +101,13 @@ export function normalizeRelaunchPlan(payload, defaults = {}) {
     attempt: normalizeInteger(source.attempt, null),
     phase: normalizeText(source.phase, null),
     selectedAgentIds: Array.isArray(source.selectedAgentIds) ? source.selectedAgentIds : [],
+    resumeFromPhase: normalizeText(source.resumeFromPhase, null),
+    invalidatedAgentIds: normalizeStringArray(source.invalidatedAgentIds),
+    reusableAgentIds: normalizeStringArray(source.reusableAgentIds),
+    reusableProofBundleIds: normalizeStringArray(source.reusableProofBundleIds),
+    forwardedClosureGaps: Array.isArray(source.forwardedClosureGaps)
+      ? cloneJson(source.forwardedClosureGaps)
+      : [],
     reasonBuckets: isPlainObject(source.reasonBuckets) ? source.reasonBuckets : {},
     executorStates: isPlainObject(source.executorStates) ? source.executorStates : {},
     fallbackHistory: isPlainObject(source.fallbackHistory) ? source.fallbackHistory : {},

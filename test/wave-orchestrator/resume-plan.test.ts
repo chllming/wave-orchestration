@@ -438,6 +438,73 @@ describe("buildResumePlan", () => {
     expect(plan.resumeFromPhase).toBe("cont-qa-closure");
   });
 
+  it("restarts closure from the earliest forwarded proof-gap stage and invalidates later closure reuse", () => {
+    const waveState = {
+      wave: 3,
+      lane: "main",
+      attempt: 2,
+      closureEligibility: makeClosureEligibility({
+        waveMayClose: false,
+        ownedSliceProvenAgentIds: ["A7", "A8", "A9", "A0"],
+        proofBundles: [
+          { id: "proof-A7", agentId: "A7", state: "active" },
+          { id: "proof-A8", agentId: "A8", state: "active" },
+          { id: "proof-A9", agentId: "A9", state: "active" },
+          { id: "proof-A0", agentId: "A0", state: "active" },
+        ],
+      }),
+      gateSnapshot: makeGateSnapshot({
+        securityGate: {
+          ok: false,
+          agentId: "A7",
+          statusCode: "wave-proof-gap",
+          detail: "Security review needs proof gap follow-up.",
+        },
+        overall: {
+          ok: false,
+          gate: "securityGate",
+          statusCode: "wave-proof-gap",
+          detail: "Security review needs proof gap follow-up.",
+          agentId: "A7",
+        },
+      }),
+      openBlockers: [],
+      retryTargetSet: {
+        agentIds: ["A7", "A8", "A9", "A0"],
+        targets: [
+          { agentId: "A7", reason: "wave-proof-gap", statusCode: "wave-proof-gap", detail: "gap" },
+          { agentId: "A8", reason: "wave-proof-gap", statusCode: "wave-proof-gap", detail: "forwarded" },
+          { agentId: "A9", reason: "wave-proof-gap", statusCode: "wave-proof-gap", detail: "forwarded" },
+          { agentId: "A0", reason: "wave-proof-gap", statusCode: "wave-proof-gap", detail: "forwarded" },
+        ],
+      },
+    };
+
+    const plan = buildResumePlan(waveState, {
+      waveDefinition: {
+        wave: 3,
+        agents: [
+          { agentId: "A7", capabilities: ["security-review"] },
+          { agentId: "A8" },
+          { agentId: "A9" },
+          { agentId: "A0" },
+        ],
+        integrationAgentId: "A8",
+        documentationAgentId: "A9",
+        contQaAgentId: "A0",
+      },
+      lanePaths: { lane: "main" },
+    });
+
+    expect(plan.resumeFromPhase).toBe("security-review");
+    expect(plan.invalidatedAgentIds).toEqual(["A0", "A7", "A8", "A9"]);
+    expect(plan.reusableAgentIds).toEqual([]);
+    expect(plan.forwardedClosureGaps[0]).toMatchObject({
+      stageKey: "security-review",
+      agentId: "A7",
+    });
+  });
+
   it("suggests executor fallback for rate-limit-exhausted agents", () => {
     const waveState = {
       wave: 3,

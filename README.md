@@ -55,7 +55,7 @@ The framework does three things:
 - `wave-state-reducer.mjs`
   Rebuilds deterministic wave state from canonical inputs for live queries and replay.
 - `session-supervisor.mjs`
-  Owns launches, waits, tmux sessions, lock handling, resident orchestrator sessions, and observed `wave_run`, `attempt`, and `agent_run` lifecycle facts.
+  Owns detached agent launches, waits, dashboard tmux sessions, lock handling, resident orchestrator sessions, and observed `wave_run`, `attempt`, and `agent_run` lifecycle facts.
 - `projection-writer.mjs`
   Persists dashboards, traces, summaries, inboxes, board projections, assignment/dependency snapshots, ledgers, docs queues, and integration/security summaries.
 
@@ -319,6 +319,7 @@ codex mcp list
 - [docs/plans/context7-wave-orchestrator.md](./docs/plans/context7-wave-orchestrator.md): Context7 setup and bundle authoring
 - [docs/reference/runtime-config/README.md](./docs/reference/runtime-config/README.md): executor, runtime, and skill-projection configuration
 - [docs/reference/wave-control.md](./docs/reference/wave-control.md): local-first telemetry contract and Railway control-plane model
+- [docs/reference/package-publishing-flow.md](./docs/reference/package-publishing-flow.md): end-to-end package publishing flow, workflows, and lifecycle scripts
 - [docs/reference/proof-metrics.md](./docs/reference/proof-metrics.md): README failure cases mapped to concrete telemetry and benchmark evidence
 - [docs/reference/skills.md](./docs/reference/skills.md): skill bundle format, resolution order, and runtime projection
 - [docs/research/coordination-failure-review.md](./docs/research/coordination-failure-review.md): MAS failure modes from the research and how Wave responds

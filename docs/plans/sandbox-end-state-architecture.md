@@ -37,8 +37,8 @@ Sandbox-facing commands should follow an async submit/observe pattern:
 Compatibility rules:
 
 - `wave launch` remains the canonical full launcher surface for direct local execution and dry-run validation.
-- `wave autonomous` must stop depending on one long blocking `spawnSync` call when it is used in sandbox-oriented flows.
-- `wave submit`, `wave supervise`, `wave status`, and `wave wait` are the preferred sandbox-facing surface, even while some internals remain partial.
+- `wave autonomous` should submit and observe wave execution when it is used in sandbox-oriented flows.
+- `wave submit`, `wave supervise`, `wave status`, `wave wait`, and `wave attach` are the preferred sandbox-facing surface, even while some internals remain partial.
 
 ---
 
@@ -69,7 +69,7 @@ Authority rules:
 
 - `tmux` is projection-only
 - dashboards, summaries, inboxes, and board markdown remain projections only
-- missing `tmux` state cannot by itself fail a run
+- missing `tmux` state cannot by itself fail a run and is warning-only telemetry
 - pid checks, heartbeats, and atomic status files outrank terminal presence for liveness
 
 ---
@@ -125,17 +125,20 @@ Non-forwardable closure failures remain hard stops. Examples include malformed o
 
 Already landed:
 
-- `wave submit`, `wave supervise`, `wave status`, and `wave wait` exist as a thin file-backed async wrapper over the existing launcher
+- `wave submit`, `wave supervise`, `wave status`, `wave wait`, and `wave attach` exist as a file-backed async wrapper over the existing launcher
+- supervisor state now includes lease-backed daemon ownership, `events.jsonl`, exact lane-scoped lookup, and detached launcher-status reconciliation
+- agent runtime records now capture per-agent pid, heartbeat, runner metadata, terminal disposition, and attach or log-follow metadata for supervisor-owned runs
+- `wave autonomous` now submits and observes single-wave runs through the supervisor surface instead of binding them to one blocking launcher subprocess
 - closure-stage `wave-proof-gap` forwarding now continues later closure stages and records the blocker instead of failing the whole sweep immediately
+- retry planning now invalidates later closure reuse from the earliest forwarded closure-gap stage
+- agent execution now uses detached process runners by default; tmux remains dashboard-only and `wave attach --agent` falls back to log following when no live session exists
+- launcher progress journaling now lets the supervisor recover finalized runs and safely resume the active wave without a repo-wide rescan
 
 Still missing for the true end state:
 
-- durable supervisor leases and heartbeat renewal across daemon restarts
-- full adoption of active runs after daemon failure
-- canonical `events.jsonl` supervisor history and explicit per-agent heartbeat state
-- removal of `tmux` and `spawnSync` from the broader hot monitoring path
-- retry invalidation from the earliest forwarded closure-gap stage
-- a fully converged sandbox path where `wave autonomous` no longer binds multi-hour work to one blocking client command
+- broader resume semantics beyond “restart the active wave with preserved control state”; recovery can now use finalized progress journals and canonical run-state completion, but multi-wave and auto-next recovery is still conservative
+- fully tmux-free live dashboard projection; dashboard attach now falls back to the last written dashboard file, but live dashboard sessions still use tmux today
+- full success inference from canonical runtime facts alone; the daemon still refuses to synthesize success from agent runtime files without either finalized progress or canonical run-state completion
 
 ---
 

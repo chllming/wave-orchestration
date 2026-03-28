@@ -14,7 +14,7 @@ When a command targets lane-scoped runtime state, it also accepts `--project <id
 - Runtime:
   `wave launch`, `wave autonomous`, and `wave local` cover dry-run validation, live execution, and executor-specific prompt transport.
 - Sandbox async supervision:
-  `wave submit`, `wave supervise`, `wave status`, and `wave wait` provide the sandbox-friendly submit-and-observe surface for long-running waves.
+  `wave submit`, `wave supervise`, `wave status`, `wave wait`, and `wave attach` provide the sandbox-friendly submit-and-observe surface for long-running waves.
 - Operator control:
   `wave control` is the preferred surface for live status, tasks, reruns, proof bundles, and telemetry.
 - Compatibility and inspection:
@@ -45,7 +45,7 @@ Closure-role bindings do not have a CLI override surface. When a wave file decla
 | `--auto-next` | off | Start from next unfinished wave and continue |
 | `--resume-control-state` | off | Preserve the prior auto-generated relaunch plan instead of treating the launch as a fresh wave start |
 | `--executor <id>` | `codex` | Default executor: `codex`, `claude`, `opencode`, `local` |
-| `--codex-sandbox <mode>` | `danger-full-access` | Codex sandbox isolation level |
+| `--codex-sandbox <mode>` | lane config | Codex sandbox isolation override; falls back to `danger-full-access` only when config is unset |
 | `--timeout-minutes <n>` | `240` | Max minutes to wait per wave |
 | `--max-retries-per-wave <n>` | `1` | Relaunch failed agents per wave |
 | `--agent-rate-limit-retries <n>` | `2` | Per-agent retries for 429 errors |
@@ -53,9 +53,9 @@ Closure-role bindings do not have a CLI override surface. When a wave file decla
 | `--agent-rate-limit-max-delay-seconds <n>` | `180` | Max backoff delay for 429 |
 | `--agent-launch-stagger-ms <n>` | `1200` | Delay between agent launches |
 | `--terminal-surface <mode>` | `vscode` | `tmux`, `vscode`, or `none` |
-| `--no-dashboard` | off | Disable per-wave tmux dashboard |
-| `--cleanup-sessions` | on | Kill lane tmux sessions after each wave |
-| `--keep-sessions` | off | Keep lane tmux sessions |
+| `--no-dashboard` | off | Disable the per-wave dashboard projection session |
+| `--cleanup-sessions` | on | Kill lane tmux dashboard and projection sessions after each wave |
+| `--keep-sessions` | off | Keep lane tmux dashboard and projection sessions |
 | `--keep-terminals` | off | Keep temporary terminal entries |
 | `--orchestrator-id <id>` | generated | Stable orchestrator identity |
 | `--orchestrator-board <path>` | default board path | Write coordination-board updates to a specific shared board |
@@ -82,7 +82,7 @@ wave autonomous [options]
 | `--project <id>` | config default | Project id |
 | `--lane <name>` | `main` | Lane name |
 | `--executor <id>` | lane config | `codex`, `claude`, or `opencode` (not `local`) |
-| `--codex-sandbox <mode>` | `danger-full-access` | Codex sandbox mode |
+| `--codex-sandbox <mode>` | lane config | Codex sandbox override passed to launcher; falls back to `danger-full-access` only when config is unset |
 | `--timeout-minutes <n>` | `240` | Per-wave timeout passed to launcher |
 | `--max-retries-per-wave <n>` | `1` | Per-wave relaunches inside launcher |
 | `--max-attempts-per-wave <n>` | `1` | External attempts per wave |
@@ -93,7 +93,7 @@ wave autonomous [options]
 | `--orchestrator-id <id>` | `<lane>-autonomous` | Orchestrator identity |
 | `--resident-orchestrator` | off | Launch resident orchestrator for each wave |
 | `--dashboard` | off | Enable dashboards |
-| `--keep-sessions` | off | Keep tmux sessions between waves |
+| `--keep-sessions` | off | Keep tmux dashboard and projection sessions between waves |
 | `--keep-terminals` | off | Keep terminal entries between waves |
 
 When you run Wave in a sandbox with short-lived `exec` sessions, prefer the async supervisor surface instead of binding the whole run to one long-lived `wave autonomous` client process. The end-state sandbox model is documented in [../plans/sandbox-end-state-architecture.md](../plans/sandbox-end-state-architecture.md).
@@ -102,13 +102,13 @@ When you run Wave in a sandbox with short-lived `exec` sessions, prefer the asyn
 
 Submit a launcher request for daemon-owned execution and return quickly with a `runId`.
 
-```
-wave submit [launcher options]
+``` 
+wave submit [launcher options] [--json]
 ```
 
-Current implementation status: this is a thin file-backed wrapper over `wave-launcher.mjs`. It is the preferred sandbox-facing entrypoint, but the durable lease and adoption model described in [../plans/sandbox-end-state-architecture.md](../plans/sandbox-end-state-architecture.md) is still partial.
+Current implementation status: this is a file-backed wrapper over `wave-launcher.mjs` with daemon leases, exact-context lookup, launcher-status reconciliation, and partial runtime adoption. It is the preferred sandbox-facing entrypoint, but the broader daemon convergence described in [../plans/sandbox-end-state-architecture.md](../plans/sandbox-end-state-architecture.md) is still partial.
 
-`wave submit` accepts the same launcher options you would pass to `wave launch`, for example `--project`, `--lane`, `--start-wave`, `--end-wave`, `--executor`, `--codex-sandbox`, `--timeout-minutes`, `--agent-launch-stagger-ms`, `--resident-orchestrator`, `--no-dashboard`, and `--dry-run`.
+`wave submit` accepts the same launcher options you would pass to `wave launch`, for example `--project`, `--lane`, `--start-wave`, `--end-wave`, `--executor`, `--codex-sandbox`, `--timeout-minutes`, `--agent-launch-stagger-ms`, `--resident-orchestrator`, `--no-dashboard`, and `--dry-run`. Use `--json` when you want a structured payload containing `runId`, `project`, `lane`, optional `adhocRunId`, and `statePath`.
 
 ## wave supervise
 
@@ -118,27 +118,37 @@ Run the supervisor loop that claims queued submitted runs and reconciles launche
 wave supervise [--project <id>] [--lane <name>] [--once]
 ```
 
-Use `--once` for a single reconciliation pass in tests or wrapper scripts. The intended end state is a durable daemon that owns launch, monitoring, adoption, and cleanup.
+Use `--once` for a single reconciliation pass in tests or wrapper scripts. The shipped daemon now renews a lease, reconciles detached launcher status, and can adopt already-running submitted runs from the same lane-scoped supervisor root.
 
 ## wave status
 
 Read the current supervisor-owned state for a submitted run.
 
 ```
-wave status --run-id <id> [--json]
+wave status --run-id <id> --project <id> --lane <name> [--adhoc-run <id>] [--json]
 ```
 
-Current implementation status: reads the thin file-backed supervisor state. In the full end state this will read canonical daemon-owned run state with lease and heartbeat metadata.
+Current implementation status: reads the thin file-backed supervisor state from the exact lane-scoped supervisor root. `--project` and `--lane` are required so status does not guess across unrelated state trees.
 
 ## wave wait
 
 Wait for a submitted run to reach terminal state or until the wait timeout expires.
 
 ```
-wave wait --run-id <id> [--timeout-seconds <n>] [--json]
+wave wait --run-id <id> --project <id> --lane <name> [--adhoc-run <id>] [--timeout-seconds <n>] [--json]
 ```
 
 `wave wait` is observational only. Timing out does not cancel or kill the underlying run.
+
+## wave attach
+
+Attach to a projection for a submitted run.
+
+```
+wave attach --run-id <id> --project <id> --lane <name> [--adhoc-run <id>] (--agent <id> | --dashboard)
+```
+
+`--agent <id>` attaches to a live session only when the runtime record explicitly exposes one; otherwise it follows the recorded log, or prints the recent log tail if the agent is already terminal. `--dashboard` reuses the current lane dashboard attach surface and falls back to the last written dashboard file when no live dashboard session exists. Missing projections are treated as operator errors, not as run-health failures.
 
 ## wave control
 
@@ -160,6 +170,10 @@ The JSON payload now includes:
   Versioned wave-level signal state for wrappers and external operators.
 - `signals.agents`
   Versioned per-agent signal state, including `shouldWake` plus any observed ack metadata.
+- `supervisor`
+  The most relevant lane-scoped supervisor run for this wave, including degraded states such as `launcher-lost-agents-running`, recovery fields such as `sessionBackend`, `recoveryState`, and `resumeAction`, plus any recorded per-agent runtime summary.
+- `forwardedClosureGaps`
+  Earliest-first forwarded `wave-proof-gap` records from the relaunch plan, including the stage key, originating agent, attempt, detail, and downstream closure targets.
 
 Starter repos also include `scripts/wave-status.sh` and `scripts/wave-watch.sh` as thin readers over this JSON payload. They use exit `0` for completed, `20` for input-required, `40` for failed, and `30` from `wave-watch.sh --until-change` when the signal changed but the wave stayed active. For the full wrapper contract, read [../guides/signal-wrappers.md](../guides/signal-wrappers.md).
 
@@ -550,6 +564,8 @@ Live dashboard viewer.
 wave dashboard --dashboard-file <path> [--project <id>] [--lane <lane>] [--message-board <path>] [--watch] [--refresh-ms <n>]
 wave dashboard --project <id> --lane <lane> --attach current|global
 ```
+
+`wave dashboard --attach current|global` attaches to the live dashboard session when one exists; otherwise it follows the last written dashboard JSON for that target.
 
 ## Workspace Commands
 
