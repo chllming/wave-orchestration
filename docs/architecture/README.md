@@ -1093,10 +1093,12 @@ The supervisor state is authoritative for *what the daemon observed about proces
 
 ### Typical Sandbox Workflow
 
+For operator setup in LEAPclaw, OpenClaw, Nemoshell, Docker, and similar short-lived exec environments, read [../guides/sandboxed-environments.md](../guides/sandboxed-environments.md) first. The example below shows the runtime shape, not the full operator checklist.
+
 ```bash
 # Client: quick exit, daemon takes over
 runId=$(wave submit --project backend --lane main \
-  --executor codex --codex-sandbox danger-full-access --json | jq -r .runId)
+  --executor codex --no-dashboard --json | jq -r .runId)
 
 # Client: wait with timeout (non-cancelling)
 wave wait --run-id "$runId" --project backend --lane main --timeout-seconds 600
@@ -1112,6 +1114,7 @@ The sandbox supervisor model is functional but some design-doc features are stil
 - **Per-agent runtime records** now exist and carry PID, PGID, heartbeat, runner metadata, and terminal disposition, and the supervisor can now recover completed runs from finalized progress journals or canonical run-state when the launcher exits late
 - **Full orphan adoption** across daemon restarts remains partial; the daemon can continue supervising degraded runs, resume the active wave, and recover finalized status from canonical state, but it still refuses to synthesize success from agent runtime files alone
 - **Tmux is now dashboard-only**. Agent execution uses detached process runners, `wave attach --agent` falls back to log following when no live interactive session exists, and dashboard attach falls back to the last written dashboard file when no live dashboard session is present
+- **Setup guidance is split by intent**. Use [../guides/sandboxed-environments.md](../guides/sandboxed-environments.md) for operator setup, deployment, and container advice, and keep [../plans/sandbox-end-state-architecture.md](../plans/sandbox-end-state-architecture.md) for the deeper design rationale and remaining gap analysis
 
 ---
 
@@ -1490,5 +1493,6 @@ Run state:             .tmp/<lane>-wave-launcher/run-state.json
 Supervisor state:      .tmp/<lane>-wave-launcher/supervisor/
 Supervisor daemon lock: .tmp/<lane>-wave-launcher/supervisor/daemon.lock
 Supervisor runs:       .tmp/<lane>-wave-launcher/supervisor/runs/<runId>/
+Sandbox setup guide:   docs/guides/sandboxed-environments.md
 Sandbox architecture:  docs/plans/sandbox-end-state-architecture.md
 ```

@@ -8,6 +8,7 @@ The important detail is:
 
 - live agent runs use detached process runners
 - terminal surfaces control how operators follow logs and attach to dashboard projections
+- sandbox-safe submission and supervision are documented separately in [sandboxed-environments.md](./sandboxed-environments.md)
 
 ## The Three Terminal Surfaces
 
@@ -76,6 +77,7 @@ Important flags:
 - Use `vscode` for local interactive operator work when the temporary terminal registry is useful.
 - Use `tmux` for remote, CI-like, or editor-independent operation.
 - Use `none` only with `--dry-run`.
+- In constrained sandboxes or containers, treat dashboards as optional and prefer `--no-dashboard` unless `tmux` is installed and you actually want the extra projection process.
 - Prefer `wave dashboard --attach current|global` over manual `tmux -L <socket> attach ...` lookups; it will fall back to the last written dashboard file when no live session exists.
 - Pair `--keep-sessions` with incident review or deep debugging, not as a default steady-state mode.
 - Pair `--no-dashboard` with scripted dry-runs or when the board and summaries are sufficient.

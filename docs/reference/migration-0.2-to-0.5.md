@@ -1,12 +1,12 @@
 ---
 title: "Wave Orchestration Migration Guide: 0.2 to 0.5"
-summary: "How to migrate a repository from the earlier 0.2 wave baseline to the current post-roadmap Wave model."
+summary: "How to migrate a repository from the earlier 0.2 wave baseline to the current Wave model."
 ---
 
 # Wave Orchestration Migration Guide: 0.2 to 0.5
 
 This guide explains how to migrate a repository from the earlier Wave
-Orchestration 0.2 baseline to the current post-roadmap Wave model.
+Orchestration 0.2 baseline to the current Wave model.
 
 Current mainline note:
 
@@ -20,10 +20,11 @@ It uses two concrete references:
 - the 0.2-style baseline in the sibling `~/slowfast.ai` repo
 - the current target shape in this standalone `wave-orchestration` repo
 
-This is a migration guide for the current architecture described in
-[Roadmap](../roadmap.md), not just a changelog of whatever happens to be landed
-in one point-in-time package build. This document is about the shipped runtime
-shape, not only the semver label.
+This is a migration guide for the current shipped architecture and release
+direction described across [docs/architecture/README.md](../architecture/README.md)
+and [Roadmap](../roadmap.md), not just a changelog of whatever happens to be
+landed in one point-in-time package build. This document is about the shipped
+runtime shape, not only the semver label.
 
 ## Baseline And Target
 
@@ -34,7 +35,8 @@ Use these files as the concrete examples while migrating:
 - 0.2 baseline wave example: `~/slowfast.ai/docs/plans/waves/wave-7.md`
 - current target config: [wave.config.json](../../wave.config.json)
 - current target sample wave: [wave-0.md](../plans/waves/wave-0.md)
-- current target architecture: [roadmap.md](../roadmap.md)
+- current target architecture: [architecture/README.md](../architecture/README.md)
+- current release direction: [roadmap.md](../roadmap.md)
 - current package workflow: [README.md](../../README.md)
 
 The migration is intentionally evolutionary:

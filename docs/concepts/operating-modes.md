@@ -82,10 +82,10 @@ That usually means:
 
 ## Relationship To The Roadmap
 
-The roadmap still includes stronger explicit oversight vs dark-factory workflows. What is shipped today is the planning foundation:
+The current roadmap is a release-direction document, not a backlog of planner phases. What is shipped today is still the planning foundation:
 
 - stored project defaults
 - typed values in planner output
 - better environment modeling
 
-The stricter execution semantics are the next step, not a hidden already-finished feature.
+The stricter execution semantics are still future work, not a hidden already-finished feature in `0.9.1`.

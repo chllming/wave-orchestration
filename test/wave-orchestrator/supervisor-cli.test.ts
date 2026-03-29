@@ -20,8 +20,15 @@ function trackCleanup(targetPath) {
   return targetPath;
 }
 
+function trackLaneDocsCleanup(lane) {
+  return trackCleanup(path.join(REPO_ROOT, "docs", lane));
+}
+
 afterEach(() => {
-  for (const targetPath of cleanupPaths.splice(0)) {
+  const targets = cleanupPaths
+    .splice(0)
+    .sort((left, right) => String(right).length - String(left).length);
+  for (const targetPath of targets) {
     fs.rmSync(targetPath, { recursive: true, force: true });
   }
 });
@@ -70,7 +77,8 @@ describe("supervisor-cli", () => {
     const lane = `test-supervisor-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
     const lanePaths = buildLanePaths(lane, { config, project: config.defaultProject });
     trackCleanup(lanePaths.stateDir);
-    const laneWaveDir = trackCleanup(path.join(REPO_ROOT, "docs", lane, "plans", "waves"));
+    const laneDocsDir = trackLaneDocsCleanup(lane);
+    const laneWaveDir = path.join(laneDocsDir, "plans", "waves");
     fs.mkdirSync(laneWaveDir, { recursive: true });
     fs.copyFileSync(
       path.join(REPO_ROOT, "docs", "plans", "waves", "wave-1.md"),
@@ -378,7 +386,8 @@ describe("supervisor-cli", () => {
     const lane = `test-supervisor-resume-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
     const lanePaths = buildLanePaths(lane, { config, project: config.defaultProject });
     trackCleanup(lanePaths.stateDir);
-    const laneWaveDir = trackCleanup(path.join(REPO_ROOT, "docs", lane, "plans", "waves"));
+    const laneDocsDir = trackLaneDocsCleanup(lane);
+    const laneWaveDir = path.join(laneDocsDir, "plans", "waves");
     fs.mkdirSync(laneWaveDir, { recursive: true });
     fs.copyFileSync(
       path.join(REPO_ROOT, "docs", "plans", "waves", "wave-1.md"),
@@ -457,7 +466,7 @@ describe("supervisor-cli", () => {
     expect(events).toContain("\"resumed\":true");
   }, 30000);
 
-  it("reconciles launcher terminal artifacts before status reads", () => {
+  it("reconciles launcher terminal artifacts before status reads and preserves the terminal wave for bounded multi-wave runs", () => {
     const config = loadWaveConfig();
     const lane = `test-supervisor-status-read-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
     const lanePaths = buildLanePaths(lane, { config, project: config.defaultProject });
@@ -476,8 +485,9 @@ describe("supervisor-cli", () => {
           status: "running",
           submittedAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
-          launcherArgs: ["--project", config.defaultProject, "--lane", lane, "--start-wave", "1", "--end-wave", "1"],
+          launcherArgs: ["--project", config.defaultProject, "--lane", lane, "--start-wave", "1", "--end-wave", "3"],
           launcherPid: 999994,
+          activeWave: 1,
         },
         null,
         2,
@@ -500,6 +510,7 @@ describe("supervisor-cli", () => {
       status: "completed",
       terminalDisposition: "completed",
       exitCode: 0,
+      activeWave: 3,
     });
   });
 

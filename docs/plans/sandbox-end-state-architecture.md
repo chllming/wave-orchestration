@@ -4,6 +4,8 @@ This document is the sandbox-runtime companion to [end-state-architecture.md](./
 
 The goal is straightforward: sandbox client commands must stay short and disposable, while long-running wave ownership moves to a durable supervisor that can survive launcher exit, sandbox timeout, and terminal churn.
 
+For the operator-facing setup flow in LEAPclaw, OpenClaw, Nemoshell, Docker, and similar environments, read [../guides/sandboxed-environments.md](../guides/sandboxed-environments.md). This page is the deeper design and authority-model reference.
+
 ---
 
 ## Problem Statement
@@ -131,7 +133,7 @@ Already landed:
 - `wave autonomous` now submits and observes single-wave runs through the supervisor surface instead of binding them to one blocking launcher subprocess
 - closure-stage `wave-proof-gap` forwarding now continues later closure stages and records the blocker instead of failing the whole sweep immediately
 - retry planning now invalidates later closure reuse from the earliest forwarded closure-gap stage
-- agent execution now uses detached process runners by default; tmux remains dashboard-only and `wave attach --agent` falls back to log following when no live session exists
+- agent execution now uses detached process runners by default, which lowers tmux session churn and memory pressure in wide fan-outs; tmux remains dashboard-only and `wave attach --agent` falls back to log following when no live session exists
 - launcher progress journaling now lets the supervisor recover finalized runs and safely resume the active wave without a repo-wide rescan
 
 Still missing for the true end state:

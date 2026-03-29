@@ -1,10 +1,11 @@
 # Current State
 
-- The published package is `0.9.0`; that release adds first-class monorepo project support, project-aware runtime isolation, and default metadata delivery to Wave Control while keeping the shipped design-role and signal-hygiene starter surface.
+- The published package is `0.9.1`; that release keeps the shipped monorepo, design-role, and signal-hygiene surfaces, but now also moves live agent execution to detached process runners, reduces tmux and memory pressure during wide orchestration bursts, and hardens the sandbox-safe supervisor path for LEAPclaw, OpenClaw, Nemoshell, Docker, and similar short-lived exec environments.
 - The canonical shipped runtime architecture is documented in `docs/plans/end-state-architecture.md`; the sandbox-runtime companion is `docs/plans/sandbox-end-state-architecture.md`; historical cutover notes remain in `docs/plans/architecture-hardening-migration.md`.
 - The repository contains the published `@chllming/wave-orchestration` package plus the starter scaffold used by `wave init`.
 - The runtime is package-first and non-destructive for adopting repos: `wave init --adopt-existing` records existing repo-owned plans, waves, prompts, and config without overwriting them, and `wave upgrade` writes only `.wave/install-state.json` plus `.wave/upgrade-history/`.
-- The recommended `0.9.0` operating stance is documented in `docs/guides/recommendations-0.9.0.md`: keep proof and closure strict, keep generic `budget.turns` advisory, and use softer coordination states only for non-proof follow-up.
+- The recommended `0.9.1` operating stance is documented in `docs/guides/recommendations-0.9.1.md`: keep proof and closure strict, keep generic `budget.turns` advisory, and use softer coordination states only for non-proof follow-up.
+- Sandbox-safe setup guidance now ships in `docs/guides/sandboxed-environments.md`: use `wave submit/supervise/status/wait/attach` for short-lived clients, keep `tmux` optional and dashboard-only, and preserve `.tmp/` plus `.wave/` when running inside Nemoshell or Docker.
 - Runtime launch entrypoints now perform a best-effort npmjs version check, cache the result under `.wave/package-update-check.json`, and point operators at `pnpm exec wave self-update` when a newer published package exists.
 - This source repo is itself kept as an adopted Wave workspace, so `node scripts/wave.mjs doctor --json` should pass from the repo root.
 - The default lane is `main`.
@@ -46,6 +47,7 @@
   - orchestrator-first clarification triage plus human escalation artifacts
   - answered human-feedback responses that reconcile canonical coordination state, helper assignments, and safe continuation intent even when the launcher is no longer active
   - optional `--resident-orchestrator` support for a long-running, non-owning orchestrator session during live waves
+  - detached process-backed agent execution, per-agent runtime records, and log-follow attach behavior so normal agents no longer require tmux-backed execution sessions
   - seeded operator wrappers `scripts/wave-status.sh` and `scripts/wave-watch.sh` that expose machine-friendly wait, completion, failure, and input-required status by reading `wave control status --json`
   - persisted relaunch plans under `.tmp/<lane>-wave-launcher/status/` so targeted retry intent can survive a launcher restart
   - a canonical control-plane event log under `.tmp/<lane>-wave-launcher/control-plane/` that records operator tasks, rerun requests, proof bundles, contradictions, facts, human-input workflow, observed `wave_run`, `attempt`, and `agent_run` lifecycle events, plus `wave_signal` and `agent_signal` update events as append-only JSONL; `wave control` materializes state from this log

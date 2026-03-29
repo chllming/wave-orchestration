@@ -107,23 +107,23 @@ Wave is built to mitigate those failures with a canonical authority set, generat
 
 Current release:
 
-- `@chllming/wave-orchestration@0.9.0`
-- Release tag: [`v0.9.0`](https://github.com/chllming/agent-wave-orchestrator/releases/tag/v0.9.0)
+- `@chllming/wave-orchestration@0.9.1`
+- Release tag: [`v0.9.1`](https://github.com/chllming/agent-wave-orchestrator/releases/tag/v0.9.1)
 - Public install path: npmjs
 - Authenticated fallback: GitHub Packages
 
-Highlights in `0.9.0`:
+Highlights in `0.9.1`:
 
-- Monorepo repos can now declare `defaultProject` plus `projects.<projectId>` in `wave.config.json`, with project-owned lanes, docs roots, planner defaults, ad-hoc runs, dependency tickets, and launcher state.
-- Lane-scoped CLI surfaces now accept `--project`, including launch, autonomous, dashboard, control, coordination, dependencies, ad-hoc runs, proof, retry, feedback, drafting, and benchmarks.
-- Wave Control now defaults to `https://wave-control.up.railway.app/api/v1` with `reportMode: "metadata-only"`, and metadata delivery includes `projectId`, `lane`, `wave`, and related benchmark identity by default unless explicitly opted out.
-- Release docs, migration guidance, the new monorepo setup guide, the versioned recommendations guide, the manifest, and the tracked install-state fixtures now all point at the `0.9.0` surface.
+- Live agent execution now uses detached process runners by default, which reduces tmux churn and memory pressure during wider orchestration bursts. Tmux is now optional and dashboard-only.
+- The sandbox-safe runtime path is now `wave submit`, `wave supervise`, `wave status`, `wave wait`, and `wave attach`, which behaves better under short-lived exec clients such as LEAPclaw, OpenClaw, and Nemoshell.
+- Supervisor recovery, launcher progress journaling, and exact-context reads are now hardier for multi-wave runs, reruns, and daemon/client loss in containerized or sandboxed environments.
+- Release docs, migration guidance, sandbox setup guides, the versioned recommendations guide, the manifest, and the tracked install-state fixtures now all point at the `0.9.1` surface.
 
 Requirements:
 
 - Node.js 22+
 - `pnpm`
-- `tmux` on `PATH` for dashboarded runs
+- optional: `tmux` on `PATH` for dashboarded runs
 - at least one executor on `PATH`: `codex`, `claude`, or `opencode`
 - optional: `CONTEXT7_API_KEY` for launcher-side prefetch
 - optional: `WAVE_CONTROL_AUTH_TOKEN` for remote Wave Control reporting
@@ -198,6 +198,7 @@ Validation to run:
 Useful docs:
 - `README.md`
 - `docs/plans/migration.md`
+- `docs/guides/sandboxed-environments.md`
 - `docs/guides/monorepo-projects.md`
 - `docs/guides/planner.md`
 - `docs/reference/runtime-config/README.md`
@@ -231,6 +232,38 @@ If a non-resident agent should stay alive and react only to orchestrator-written
 
 When runtime launch commands detect a newer npmjs release, Wave prints a non-blocking update notice on stderr. The fast path is `pnpm exec wave self-update`, which updates the dependency, prints the changelog delta, and then records the workspace upgrade report.
 
+## Sandboxed And Containerized Setups
+
+If Wave is running inside LEAPclaw, OpenClaw, Nemoshell, Docker, or another environment where the client shell is short-lived, do not bind the whole run to one blocking `wave launch` or `wave autonomous` process.
+
+Use the async supervisor path instead:
+
+```bash
+# Long-lived daemon
+pnpm exec wave supervise --project backend --lane main
+
+# Short-lived client
+runId=$(pnpm exec wave submit \
+  --project backend \
+  --lane main \
+  --start-wave 2 \
+  --end-wave 2 \
+  --no-dashboard \
+  --json | jq -r .runId)
+
+pnpm exec wave status --run-id "$runId" --project backend --lane main --json
+pnpm exec wave wait --run-id "$runId" --project backend --lane main --timeout-seconds 300 --json
+```
+
+Practical defaults for constrained environments:
+
+- set the Codex sandbox mode in `wave.config.json` instead of relying on per-command overrides
+- keep `tmux` optional and use `--no-dashboard` when you do not need a live dashboard
+- preserve `.tmp/` and `.wave/` across container restarts
+- use `wave attach --agent <id>` for log-follow attach when there is no live interactive terminal session
+
+For the full setup guidance, read [docs/guides/sandboxed-environments.md](./docs/guides/sandboxed-environments.md).
+
 ## Manual Commands
 
 These commands are still useful when you want to validate, debug, or inspect the runtime directly. They are not the recommended first-touch onboarding path.
@@ -241,7 +274,7 @@ pnpm exec wave project setup
 pnpm exec wave draft --wave 1 --template implementation
 
 # Run one wave with a real executor
-pnpm exec wave launch --lane main --start-wave 0 --end-wave 0 --executor codex --codex-sandbox danger-full-access
+pnpm exec wave launch --lane main --start-wave 0 --end-wave 0 --executor codex
 
 # Disable Wave Control reporting for a single launcher run
 pnpm exec wave launch --lane main --no-telemetry
@@ -253,8 +286,11 @@ pnpm exec wave launch --project backend --lane main --dry-run --no-dashboard
 pnpm exec wave feedback list --lane main --pending
 pnpm exec wave dep show --lane main --wave 0 --json
 
-# Run autonomous mode after the wave set is stable
-pnpm exec wave autonomous --lane main --executor codex --codex-sandbox danger-full-access
+# Submit a sandbox-safe run from a short-lived client
+pnpm exec wave submit --project backend --lane main --start-wave 2 --end-wave 2 --no-dashboard --json
+
+# Run autonomous mode only when the client shell can stay alive for the full run
+pnpm exec wave autonomous --lane main --executor codex
 
 # Pull the latest published package and record the workspace upgrade
 pnpm exec wave self-update
@@ -307,6 +343,7 @@ codex mcp list
 - [docs/concepts/context7-vs-skills.md](./docs/concepts/context7-vs-skills.md): compiled context, external truth, and repo-owned operating knowledge
 - [docs/guides/planner.md](./docs/guides/planner.md): `wave project` and `wave draft` workflow
 - [docs/agents/wave-design-role.md](./docs/agents/wave-design-role.md): standing prompt for the optional pre-implementation design steward
+- [docs/guides/sandboxed-environments.md](./docs/guides/sandboxed-environments.md): recommended setup for LEAPclaw, OpenClaw, Nemoshell, Docker, and other short-lived exec environments
 - [docs/guides/terminal-surfaces.md](./docs/guides/terminal-surfaces.md): tmux, VS Code terminal registry, and dry-run surfaces
 - [docs/guides/signal-wrappers.md](./docs/guides/signal-wrappers.md): versioned signal snapshots, wrapper scripts, and long-running-agent ack loops
 - [docs/reference/sample-waves.md](./docs/reference/sample-waves.md): showcase-first authored waves, including a high-fidelity repo-landed rollout example

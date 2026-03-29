@@ -351,6 +351,24 @@ function resolvedActiveWave(state, progressJournal) {
   );
 }
 
+function resolvedCompletedActiveWave(state, progressJournal) {
+  if (Number.isFinite(Number(progressJournal?.waveNumber))) {
+    return Number(progressJournal.waveNumber);
+  }
+  const selectedWaves = selectedWavesFromLauncherArgs(
+    Array.isArray(state?.launcherArgs) ? state.launcherArgs : [],
+  );
+  if (selectedWaves.length > 0) {
+    return selectedWaves[selectedWaves.length - 1];
+  }
+  if (Number.isFinite(Number(state?.activeWave))) {
+    return Number(state.activeWave);
+  }
+  return deriveActiveWaveFromLauncherArgs(
+    Array.isArray(state?.launcherArgs) ? state.launcherArgs : [],
+  );
+}
+
 export function startSupervisorRun(
   state,
   statePath,
@@ -459,6 +477,8 @@ export function reconcileSupervisorRun(state, statePath) {
   const launcherAlive = isProcessAlive(launcherPid);
   if (launcherStatus && typeof launcherStatus === "object") {
     const exitCode = Number.parseInt(String(launcherStatus.exitCode ?? ""), 10);
+    const terminalActiveWave =
+      exitCode === 0 ? resolvedCompletedActiveWave(state, progressJournal) : activeWave;
     appendSupervisorEvent(paths, runId, {
       type: "launcher-status-reconciled",
       runId,
@@ -472,7 +492,7 @@ export function reconcileSupervisorRun(state, statePath) {
       updatedAt: toIsoTimestamp(),
       terminalDisposition: exitCode === 0 ? "completed" : "failed",
       agentRuntimeSummary: buildAgentRuntimeSummary(runtimeRecords),
-      activeWave,
+      activeWave: terminalActiveWave,
       sessionBackend: "process",
       recoveryState: "healthy",
       resumeAction: null,
@@ -516,6 +536,10 @@ export function reconcileSupervisorRun(state, statePath) {
     ["completed", "failed"].includes(String(progressJournal.finalDisposition || ""))
   ) {
     const exitCode = Number.parseInt(String(progressJournal.exitCode ?? ""), 10);
+    const terminalActiveWave =
+      progressJournal.finalDisposition === "completed"
+        ? resolvedCompletedActiveWave(state, progressJournal)
+        : activeWave;
     appendSupervisorEvent(paths, runId, {
       type: "launcher-status-reconciled",
       runId,
@@ -530,7 +554,7 @@ export function reconcileSupervisorRun(state, statePath) {
       updatedAt: toIsoTimestamp(),
       terminalDisposition: progressJournal.finalDisposition,
       agentRuntimeSummary: buildAgentRuntimeSummary(runtimeRecords),
-      activeWave,
+      activeWave: terminalActiveWave,
       sessionBackend: "process",
       recoveryState: "recovered-from-progress",
       resumeAction: null,
@@ -607,6 +631,8 @@ function reconcileSupervisorReadState(state, statePath) {
   const launcherAlive = isProcessAlive(launcherPid);
   if (launcherStatus && typeof launcherStatus === "object") {
     const exitCode = Number.parseInt(String(launcherStatus.exitCode ?? ""), 10);
+    const terminalActiveWave =
+      exitCode === 0 ? resolvedCompletedActiveWave(state, progressJournal) : activeWave;
     return writeRunState(statePath, {
       ...state,
       status: exitCode === 0 ? "completed" : "failed",
@@ -615,7 +641,7 @@ function reconcileSupervisorReadState(state, statePath) {
       updatedAt: toIsoTimestamp(),
       terminalDisposition: exitCode === 0 ? "completed" : "failed",
       agentRuntimeSummary: buildAgentRuntimeSummary(runtimeRecords),
-      activeWave,
+      activeWave: terminalActiveWave,
       sessionBackend: "process",
       recoveryState: "healthy",
       resumeAction: null,
@@ -627,6 +653,10 @@ function reconcileSupervisorReadState(state, statePath) {
     ["completed", "failed"].includes(String(progressJournal.finalDisposition || ""))
   ) {
     const exitCode = Number.parseInt(String(progressJournal.exitCode ?? ""), 10);
+    const terminalActiveWave =
+      progressJournal.finalDisposition === "completed"
+        ? resolvedCompletedActiveWave(state, progressJournal)
+        : activeWave;
     return writeRunState(statePath, {
       ...state,
       status: progressJournal.finalDisposition === "completed" ? "completed" : "failed",
@@ -635,7 +665,7 @@ function reconcileSupervisorReadState(state, statePath) {
       updatedAt: toIsoTimestamp(),
       terminalDisposition: progressJournal.finalDisposition,
       agentRuntimeSummary: buildAgentRuntimeSummary(runtimeRecords),
-      activeWave,
+      activeWave: terminalActiveWave,
       sessionBackend: "process",
       recoveryState: "recovered-from-progress",
       resumeAction: null,

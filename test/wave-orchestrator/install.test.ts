@@ -119,6 +119,7 @@ describe("wave init", () => {
     expect(fs.existsSync(path.join(repoDir, "docs", "reference", "cli-reference.md"))).toBe(true);
     expect(fs.existsSync(path.join(repoDir, "docs", "reference", "package-publishing-flow.md"))).toBe(true);
     expect(fs.existsSync(path.join(repoDir, "docs", "reference", "npmjs-token-publishing.md"))).toBe(true);
+    expect(fs.existsSync(path.join(repoDir, "docs", "guides", "sandboxed-environments.md"))).toBe(true);
     expect(fs.existsSync(path.join(repoDir, "docs", "plans", "end-state-architecture.md"))).toBe(true);
     expect(fs.existsSync(path.join(repoDir, "docs", "plans", "sandbox-end-state-architecture.md"))).toBe(true);
     expect(fs.existsSync(path.join(repoDir, "CHANGELOG.md"))).toBe(true);
@@ -221,7 +222,8 @@ describe("wave init", () => {
       "docs/evals/cases/wave-expert-routing-preservation.json",
       "docs/guides/author-and-run-waves.md",
       "docs/guides/monorepo-projects.md",
-      "docs/guides/recommendations-0.9.0.md",
+      "docs/guides/recommendations-0.9.1.md",
+      "docs/guides/sandboxed-environments.md",
       "docs/guides/signal-wrappers.md",
       "docs/plans/component-cutover-matrix.json",
       "docs/plans/component-cutover-matrix.md",

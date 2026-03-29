@@ -130,6 +130,29 @@ describe("release surface alignment", () => {
     expect(cliReference).toContain("`resumeAction`");
   });
 
+  it("ships a sandbox setup guide from the main doc surfaces", () => {
+    const rootReadme = fs.readFileSync(path.join(repoRoot, "README.md"), "utf8");
+    const docsReadme = fs.readFileSync(path.join(repoRoot, "docs", "README.md"), "utf8");
+    const guide = fs.readFileSync(
+      path.join(repoRoot, "docs", "guides", "sandboxed-environments.md"),
+      "utf8",
+    );
+    const architectureReadme = fs.readFileSync(
+      path.join(repoRoot, "docs", "architecture", "README.md"),
+      "utf8",
+    );
+
+    expect(rootReadme).toContain("docs/guides/sandboxed-environments.md");
+    expect(docsReadme).toContain("guides/sandboxed-environments.md");
+    expect(guide).toContain("LEAPclaw");
+    expect(guide).toContain("OpenClaw");
+    expect(guide).toContain("Nemoshell");
+    expect(guide).toContain("Docker");
+    expect(guide).toContain("wave submit");
+    expect(guide).toContain("wave supervise");
+    expect(architectureReadme).toContain("guides/sandboxed-environments.md");
+  });
+
   it("documents the adopted-repo planner migration surface", () => {
     const plannerGuide = fs.readFileSync(path.join(repoRoot, "docs", "guides", "planner.md"), "utf8");
     const migrationGuide = fs.readFileSync(path.join(repoRoot, "docs", "plans", "migration.md"), "utf8");

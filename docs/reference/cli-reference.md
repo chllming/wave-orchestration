@@ -106,9 +106,11 @@ Submit a launcher request for daemon-owned execution and return quickly with a `
 wave submit [launcher options] [--json]
 ```
 
-Current implementation status: this is a file-backed wrapper over `wave-launcher.mjs` with daemon leases, exact-context lookup, launcher-status reconciliation, and partial runtime adoption. It is the preferred sandbox-facing entrypoint, but the broader daemon convergence described in [../plans/sandbox-end-state-architecture.md](../plans/sandbox-end-state-architecture.md) is still partial.
+Current implementation status: this is a file-backed wrapper over `wave-launcher.mjs` with daemon leases, exact-context lookup, launcher-status reconciliation, progress journaling, and process-backed agent execution. It is the preferred sandbox-facing entrypoint for LEAPclaw, OpenClaw, Nemoshell, Docker, and similar short-lived exec environments, even though the broader daemon convergence described in [../plans/sandbox-end-state-architecture.md](../plans/sandbox-end-state-architecture.md) is still conservative in some recovery paths.
 
 `wave submit` accepts the same launcher options you would pass to `wave launch`, for example `--project`, `--lane`, `--start-wave`, `--end-wave`, `--executor`, `--codex-sandbox`, `--timeout-minutes`, `--agent-launch-stagger-ms`, `--resident-orchestrator`, `--no-dashboard`, and `--dry-run`. Use `--json` when you want a structured payload containing `runId`, `project`, `lane`, optional `adhocRunId`, and `statePath`.
+
+For concrete setup guidance, read [../guides/sandboxed-environments.md](../guides/sandboxed-environments.md).
 
 ## wave supervise
 
@@ -627,7 +629,7 @@ Interactive draft currently offers worker role kinds:
 - `research`
 - `security`
 
-Agentic planner payloads also accept `workerAgents[].roleKind = "design"`. The shipped `0.9.0` surface uses `design-pass` as the default executor profile for that role and typically assigns a packet path like `docs/plans/waves/design/wave-<n>-<agentId>.md`. Interactive draft scaffolds the docs-first default; hybrid design stewards are authored by explicitly adding implementation-owned paths and the normal implementation contract sections.
+Agentic planner payloads also accept `workerAgents[].roleKind = "design"`. The shipped `0.9.1` surface uses `design-pass` as the default executor profile for that role and typically assigns a packet path like `docs/plans/waves/design/wave-<n>-<agentId>.md`. Interactive draft scaffolds the docs-first default; hybrid design stewards are authored by explicitly adding implementation-owned paths and the normal implementation contract sections.
 
 ## Ad-Hoc Task Commands
 
