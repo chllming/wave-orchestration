@@ -72,7 +72,9 @@ a:hover {
 }
 
 button,
-input {
+input,
+select,
+textarea {
   font: inherit;
 }
 
@@ -276,6 +278,11 @@ code {
   background: var(--wc-bg-elevated);
   color: var(--wc-text);
   transition: border-color 180ms var(--wc-ease);
+}
+
+.form-textarea {
+  min-height: 8rem;
+  resize: vertical;
 }
 
 .form-input::placeholder {
@@ -506,6 +513,61 @@ code {
   display: grid;
   gap: 0.75rem;
   margin-top: 1rem;
+}
+
+.admin-grid {
+  display: grid;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.admin-panel {
+  border: 1px solid var(--wc-border);
+  padding: 1rem;
+  background: var(--wc-bg-elevated);
+}
+
+.admin-row {
+  align-items: flex-start;
+}
+
+.admin-actions {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.credential-list {
+  margin-top: 1rem;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.credential-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem;
+  border: 1px solid var(--wc-border);
+  background: var(--wc-bg-sunken);
+}
+
+.credential-form {
+  display: grid;
+  gap: 0.75rem;
+  max-width: 28rem;
+}
+
+.checkbox-grid {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--wc-text);
 }
 
 .token-plaintext {

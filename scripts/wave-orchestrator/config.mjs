@@ -80,6 +80,7 @@ export const DEFAULT_WAVE_CONTROL_REPORT_MODE = "metadata-only";
 export const DEFAULT_WAVE_CONTROL_REQUEST_TIMEOUT_MS = 5000;
 export const DEFAULT_WAVE_CONTROL_FLUSH_BATCH_SIZE = 25;
 export const DEFAULT_WAVE_CONTROL_MAX_PENDING_EVENTS = 1000;
+export const WAVE_CONTROL_RUNTIME_CREDENTIAL_PROVIDERS = ["anthropic", "openai"];
 export const EXTERNAL_PROVIDER_MODES = ["direct", "broker", "hybrid"];
 export const DEFAULT_CONTEXT7_API_KEY_ENV_VAR = "CONTEXT7_API_KEY";
 export const DEFAULT_CORRIDOR_API_TOKEN_ENV_VAR = "CORRIDOR_API_TOKEN";
@@ -684,6 +685,31 @@ function normalizeWaveControl(rawWaveControl = {}, label = "waveControl") {
     rawWaveControl && typeof rawWaveControl === "object" && !Array.isArray(rawWaveControl)
       ? rawWaveControl
       : {};
+  const credentials = Array.isArray(waveControl.credentials) ? waveControl.credentials : [];
+  const normalizedCredentials = [];
+  const seenCredentialEnvVars = new Set();
+  for (const [index, entry] of credentials.entries()) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new Error(`${label}.credentials[${index}] must be an object with id and envVar.`);
+    }
+    const id = String(entry.id || "").trim().toLowerCase();
+    if (!/^[a-z0-9][a-z0-9._-]*$/.test(id)) {
+      throw new Error(
+        `${label}.credentials[${index}].id must match /^[a-z0-9][a-z0-9._-]*$/.`,
+      );
+    }
+    const envVar = String(entry.envVar || "").trim().toUpperCase();
+    if (!/^[A-Z_][A-Z0-9_]*$/.test(envVar)) {
+      throw new Error(
+        `${label}.credentials[${index}].envVar must match /^[A-Z_][A-Z0-9_]*$/.`,
+      );
+    }
+    if (seenCredentialEnvVars.has(envVar)) {
+      throw new Error(`${label}.credentials contains duplicate envVar mappings for ${envVar}.`);
+    }
+    seenCredentialEnvVars.add(envVar);
+    normalizedCredentials.push({ id, envVar });
+  }
   const reportMode = normalizeWaveControlReportMode(
     waveControl.reportMode,
     `${label}.reportMode`,
@@ -715,6 +741,18 @@ function normalizeWaveControl(rawWaveControl = {}, label = "waveControl") {
         ),
       ),
     ),
+    credentialProviders: normalizeOptionalStringArray(waveControl.credentialProviders, []).map(
+      (providerId, index) => {
+        const normalized = String(providerId || "").trim().toLowerCase();
+        if (!WAVE_CONTROL_RUNTIME_CREDENTIAL_PROVIDERS.includes(normalized)) {
+          throw new Error(
+            `${label}.credentialProviders[${index}] must be one of: ${WAVE_CONTROL_RUNTIME_CREDENTIAL_PROVIDERS.join(", ")}`,
+          );
+        }
+        return normalized;
+      },
+    ),
+    credentials: normalizedCredentials,
     reportMode,
     uploadArtifactKinds: normalizeOptionalStringArray(
       waveControl.uploadArtifactKinds,

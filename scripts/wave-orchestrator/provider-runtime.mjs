@@ -40,3 +40,65 @@ export async function requestProvider(fetchImpl, url, options = {}) {
     `${options.method || "GET"} ${url} failed (${response.status}): ${payload?.error || payload?.message || response.statusText || "unknown error"}`,
   );
 }
+
+export async function requestWaveControlProviderEnv(fetchImpl, waveControl = {}, providers = []) {
+  const endpoint = String(waveControl.endpoint || DEFAULT_WAVE_CONTROL_ENDPOINT).trim();
+  if (!endpoint) {
+    throw new Error("Wave Control endpoint is not configured.");
+  }
+  if (isDefaultWaveControlEndpoint(endpoint)) {
+    throw new Error("Wave Control provider credential leasing requires an owned Wave Control deployment.");
+  }
+  const token = resolveWaveControlAuthToken(waveControl);
+  if (!token) {
+    throw new Error("WAVE_API_TOKEN is not set; Wave Control credential leasing is unavailable.");
+  }
+  const response = await requestProvider(
+    fetchImpl,
+    `${endpoint.replace(/\/$/, "")}/runtime/provider-env`,
+    {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        accept: "application/json",
+      },
+      body: JSON.stringify({ providers }),
+    },
+  );
+  const payload = await readJsonResponse(response, null);
+  return payload?.env && typeof payload.env === "object" && !Array.isArray(payload.env)
+    ? payload.env
+    : {};
+}
+
+export async function requestWaveControlCredentialEnv(fetchImpl, waveControl = {}, credentials = []) {
+  const endpoint = String(waveControl.endpoint || DEFAULT_WAVE_CONTROL_ENDPOINT).trim();
+  if (!endpoint) {
+    throw new Error("Wave Control endpoint is not configured.");
+  }
+  if (isDefaultWaveControlEndpoint(endpoint)) {
+    throw new Error("Wave Control credential leasing requires an owned Wave Control deployment.");
+  }
+  const token = resolveWaveControlAuthToken(waveControl);
+  if (!token) {
+    throw new Error("WAVE_API_TOKEN is not set; Wave Control credential leasing is unavailable.");
+  }
+  const response = await requestProvider(
+    fetchImpl,
+    `${endpoint.replace(/\/$/, "")}/runtime/credential-env`,
+    {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        accept: "application/json",
+      },
+      body: JSON.stringify({ credentials }),
+    },
+  );
+  const payload = await readJsonResponse(response, null);
+  return payload?.env && typeof payload.env === "object" && !Array.isArray(payload.env)
+    ? payload.env
+    : {};
+}

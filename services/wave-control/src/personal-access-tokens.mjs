@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 
-export const PERSONAL_ACCESS_TOKEN_ALLOWED_SCOPES = ["broker:read", "ingest:write"];
+export const PERSONAL_ACCESS_TOKEN_ALLOWED_SCOPES = ["broker:read", "credential:read", "ingest:write"];
 
 const PERSONAL_ACCESS_TOKEN_ALLOWED_SCOPE_SET = new Set(PERSONAL_ACCESS_TOKEN_ALLOWED_SCOPES);
 

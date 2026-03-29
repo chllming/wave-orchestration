@@ -221,6 +221,8 @@ Supported top-level fields:
 | `workspaceId` | string | derived from repo path | Stable workspace identity used across runs |
 | `projectId` | string | resolved project id | Stable project identity used for cross-workspace reporting and filtering |
 | `authTokenEnvVar` | string | `WAVE_API_TOKEN` | Primary environment variable name holding the bearer token |
+| `credentialProviders` | string[] | `[]` | Allowlisted runtime credential leases requested from an owned Wave Control deployment before executor launch. Supported values: `openai`, `anthropic` |
+| `credentials` | `{ id, envVar }[]` | `[]` | Arbitrary per-user credential leases requested from an owned Wave Control deployment before executor launch |
 | `reportMode` | string | `metadata-only` | `disabled`, `metadata-only`, `metadata-plus-selected`, or `full-artifact-upload` |
 | `uploadArtifactKinds` | string[] | selected proof/trace/benchmark kinds | Artifact classes eligible for body upload when an artifact's upload policy requests a body |
 | `requestTimeoutMs` | integer | `5000` | Per-batch network timeout |
@@ -249,6 +251,8 @@ Example:
     "endpoint": "https://wave-control.up.railway.app/api/v1",
     "workspaceId": "wave-main",
     "projectId": "app",
+    "credentialProviders": ["openai"],
+    "credentials": [{ "id": "github_pat", "envVar": "GITHUB_TOKEN" }],
     "reportMode": "metadata-only",
     "uploadArtifactKinds": [
       "trace-run-metadata",
@@ -260,6 +264,9 @@ Example:
 ```
 
 Runtime-emitted Wave Control events also attach:
+
+- `orchestratorId` from the active launcher or resident orchestrator
+- `runtimeVersion` from the installed Wave package metadata
 
 ## External Providers
 
@@ -297,8 +304,16 @@ Wave can resolve third-party auth directly in the repo runtime or through an own
 - Corridor writes `.tmp/<lane>-wave-launcher/security/wave-<n>-corridor.json` and can fail closure when the fetch fails or matched findings meet the configured threshold
 - Broker mode is intended for self-hosted or team-owned Wave Control only; the packaged default endpoint is rejected as a provider-secret proxy
 
-- `orchestratorId` from the active launcher or resident orchestrator
-- `runtimeVersion` from the installed Wave package metadata
+`waveControl.credentialProviders` is related but separate from `externalProviders`:
+
+- use `externalProviders.context7` and `externalProviders.corridor` for brokered or direct API access during planning / closure flows
+- use `waveControl.credentialProviders` only when an executor needs env vars leased into its runtime
+- use `waveControl.credentials` when an executor needs arbitrary user-owned secrets leased into env vars such as `GITHUB_TOKEN` or `NPM_TOKEN`
+- only `openai` and `anthropic` are valid leased providers today
+- `context7` and `corridor` remain broker-only and are never returned as raw env secrets
+- `waveControl.credentials[*].id` must match `/^[a-z0-9][a-z0-9._-]*$/`
+- `waveControl.credentials[*].envVar` must match `/^[A-Z_][A-Z0-9_]*$/`
+- when provider or arbitrary credentials are leased, Wave injects them into the live executor environment and redacts those keys in `launch-preview.json`
 
 Those fields are queryable in the `wave-control` service alongside `workspaceId`,
 `projectId`, `runKind`, `runId`, `lane`, and benchmark ids.

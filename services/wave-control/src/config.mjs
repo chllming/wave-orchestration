@@ -1,3 +1,8 @@
+import {
+  listInvalidServiceTokenScopes,
+  normalizeServiceTokenScopes,
+} from "./service-tokens.mjs";
+
 function normalizeText(value, fallback = "") {
   const normalized = String(value ?? "").trim();
   return normalized || fallback;
@@ -32,6 +37,45 @@ function normalizeTokenList(value) {
     .filter(Boolean);
 }
 
+function normalizeServiceTokensJson(value) {
+  const raw = normalizeText(value, "");
+  if (!raw) {
+    return [];
+  }
+  let parsed = null;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error("WAVE_CONTROL_SERVICE_TOKENS_JSON must be valid JSON.");
+  }
+  if (!Array.isArray(parsed)) {
+    throw new Error("WAVE_CONTROL_SERVICE_TOKENS_JSON must be a JSON array.");
+  }
+  const seenTokens = new Set();
+  return parsed.map((entry, index) => {
+    const token = normalizeText(entry?.token, "");
+    if (!token) {
+      throw new Error(`WAVE_CONTROL_SERVICE_TOKENS_JSON[${index}].token is required.`);
+    }
+    if (seenTokens.has(token)) {
+      throw new Error("WAVE_CONTROL_SERVICE_TOKENS_JSON must not contain duplicate token values.");
+    }
+    seenTokens.add(token);
+    const scopes = normalizeServiceTokenScopes(entry?.scopes || []);
+    const invalidScopes = listInvalidServiceTokenScopes(entry?.scopes || []);
+    if (invalidScopes.length > 0) {
+      throw new Error(
+        `WAVE_CONTROL_SERVICE_TOKENS_JSON[${index}].scopes contains unsupported values: ${invalidScopes.join(", ")}.`,
+      );
+    }
+    return {
+      label: normalizeText(entry?.label, `service-token-${index + 1}`),
+      token,
+      scopes,
+    };
+  });
+}
+
 export function loadWaveControlServiceConfig(env = process.env) {
   const authTokens = normalizeTokenList(
     env.WAVE_API_TOKENS ||
@@ -46,7 +90,11 @@ export function loadWaveControlServiceConfig(env = process.env) {
     logLevel: normalizeText(env.WAVE_CONTROL_LOG_LEVEL, "info"),
     auth: {
       tokens: authTokens,
+      serviceTokens: normalizeServiceTokensJson(env.WAVE_CONTROL_SERVICE_TOKENS_JSON),
       requireAuthForReads: normalizeBool(env.WAVE_CONTROL_REQUIRE_AUTH_FOR_READS, true),
+    },
+    secrets: {
+      encryptionKey: normalizeText(env.WAVE_CONTROL_SECRET_ENCRYPTION_KEY, ""),
     },
     postgres: {
       databaseUrl: normalizeText(env.DATABASE_URL, ""),
@@ -83,6 +131,7 @@ export function loadWaveControlServiceConfig(env = process.env) {
       secretServerKey: normalizeText(env.STACK_SECRET_SERVER_KEY, ""),
       internalTeamIds: normalizeTokenList(env.WAVE_CONTROL_STACK_INTERNAL_TEAM_IDS),
       adminTeamIds: normalizeTokenList(env.WAVE_CONTROL_STACK_ADMIN_TEAM_IDS),
+      bootstrapSuperuserEmails: normalizeTokenList(env.WAVE_CONTROL_BOOTSTRAP_SUPERUSER_EMAILS),
     },
     broker: {
       ownedDeployment: normalizeBool(env.WAVE_BROKER_OWNED_DEPLOYMENT, false),
@@ -90,6 +139,10 @@ export function loadWaveControlServiceConfig(env = process.env) {
       context7ApiKey: normalizeText(env.WAVE_BROKER_CONTEXT7_API_KEY, ""),
       corridorEnabled: normalizeBool(env.WAVE_BROKER_ENABLE_CORRIDOR, false),
       corridorApiToken: normalizeText(env.WAVE_BROKER_CORRIDOR_API_TOKEN, ""),
+      openaiEnabled: normalizeBool(env.WAVE_BROKER_ENABLE_OPENAI, false),
+      openaiApiKey: normalizeText(env.WAVE_BROKER_OPENAI_API_KEY, ""),
+      anthropicEnabled: normalizeBool(env.WAVE_BROKER_ENABLE_ANTHROPIC, false),
+      anthropicApiKey: normalizeText(env.WAVE_BROKER_ANTHROPIC_API_KEY, ""),
       requestTimeoutMs: normalizeInt(env.WAVE_BROKER_REQUEST_TIMEOUT_MS, 10000),
       maxRetries: normalizeInt(env.WAVE_BROKER_MAX_RETRIES, 1),
       maxPages: normalizeInt(env.WAVE_BROKER_MAX_PAGES, 10),

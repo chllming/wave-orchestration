@@ -5,7 +5,10 @@ Wave Control now supports:
 - telemetry ingest and analysis APIs
 - optional owned-deployment broker routes for Context7 and Corridor
 - Stack-authenticated internal app routes
-- Wave Control-issued personal access tokens for CLI and broker use
+- Wave-managed user approval, superusers, and per-user provider grants
+- Wave Control-issued personal access tokens for CLI, broker, and runtime credential leasing
+- dedicated service tokens for machine-admin workflows
+- encrypted per-user arbitrary credentials with write-only management and runtime leasing
 - a separate slowfast-style Vite/Lit frontend under `../wave-control-web`
 
 `services/wave-control` is the Railway-hosted control plane for Wave telemetry.
@@ -62,6 +65,8 @@ Other controls:
 - `WAVE_CONTROL_MAX_INLINE_ARTIFACT_BYTES`
 - `WAVE_CONTROL_UI_TITLE`
 - `WAVE_CONTROL_ALLOWED_ORIGINS`
+- `WAVE_CONTROL_SERVICE_TOKENS_JSON` (JSON array of dedicated machine tokens and `service:*` scopes)
+- `WAVE_CONTROL_SECRET_ENCRYPTION_KEY` (base64-encoded 32-byte AES-256-GCM key required for stored user credentials)
 
 Stack/browser auth:
 
@@ -69,8 +74,16 @@ Stack/browser auth:
 - `WAVE_CONTROL_STACK_PROJECT_ID`
 - `WAVE_CONTROL_STACK_PUBLISHABLE_CLIENT_KEY`
 - `STACK_SECRET_SERVER_KEY`
-- `WAVE_CONTROL_STACK_INTERNAL_TEAM_IDS` (required; app routes fail closed when it is unset, and internal/admin access is derived from confirmed Stack team memberships only)
-- `WAVE_CONTROL_STACK_ADMIN_TEAM_IDS`
+- `WAVE_CONTROL_STACK_INTERNAL_TEAM_IDS` (required; app routes fail closed when it is unset, and internal access is derived from confirmed Stack team memberships only)
+- `WAVE_CONTROL_BOOTSTRAP_SUPERUSER_EMAILS` (comma-separated emails that auto-provision as approved Wave Control superusers on first Stack sign-in)
+
+Wave Control now uses its own app-user state on top of Stack identity:
+
+- Stack remains the login system
+- only Stack-authenticated members of `WAVE_CONTROL_STACK_INTERNAL_TEAM_IDS` can reach the app surface
+- Wave Control then decides whether that internal user is `pending`, `approved`, `rejected`, or `revoked`
+- approved users have a Wave role of `member` or `superuser`
+- only Wave superusers can approve users, manage roles, and change provider grants
 
 ## API
 
@@ -95,6 +108,8 @@ Authenticated reads:
 
 Stack-authenticated internal app routes:
 
+- `GET /api/v1/app/session`
+- `POST /api/v1/app/access-request`
 - `GET /api/v1/app/me`
 - `GET /api/v1/app/overview`
 - `GET /api/v1/app/runs`
@@ -104,6 +119,28 @@ Stack-authenticated internal app routes:
 - `GET /api/v1/app/tokens`
 - `POST /api/v1/app/tokens`
 - `POST /api/v1/app/tokens/:id/revoke`
+- `GET /api/v1/app/admin/users`
+- `POST /api/v1/app/admin/users`
+- `POST /api/v1/app/admin/users/:id/state`
+- `POST /api/v1/app/admin/users/:id/role`
+- `POST /api/v1/app/admin/users/:id/providers`
+- `GET /api/v1/app/admin/users/:id/credentials`
+- `PUT /api/v1/app/admin/users/:id/credentials/:credentialId`
+- `DELETE /api/v1/app/admin/users/:id/credentials/:credentialId`
+
+Service-token machine routes:
+
+- `GET /api/v1/service/session`
+- `GET /api/v1/service/users`
+- `POST /api/v1/service/users`
+- `POST /api/v1/service/users/:id/state`
+- `POST /api/v1/service/users/:id/role`
+- `POST /api/v1/service/users/:id/providers`
+- `GET /api/v1/service/users/:id/credentials`
+- `PUT /api/v1/service/users/:id/credentials/:credentialId`
+- `DELETE /api/v1/service/users/:id/credentials/:credentialId`
+- `POST /api/v1/service/users/:id/tokens`
+- `POST /api/v1/service/tokens/:id/revoke`
 
 ## Storage Model
 
@@ -127,12 +164,18 @@ Use this only on a self-hosted or team-owned deployment.
 - `WAVE_BROKER_ENABLE_CORRIDOR=true`
 - `WAVE_BROKER_CORRIDOR_API_TOKEN=<token>`
 - `WAVE_BROKER_CORRIDOR_PROJECT_MAP=<json>`
+- `WAVE_BROKER_ENABLE_OPENAI=true`
+- `WAVE_BROKER_OPENAI_API_KEY=<key>`
+- `WAVE_BROKER_ENABLE_ANTHROPIC=true`
+- `WAVE_BROKER_ANTHROPIC_API_KEY=<key>`
 
 Broker routes:
 
 - `GET /api/v1/providers/context7/search`
 - `GET /api/v1/providers/context7/context`
 - `POST /api/v1/providers/corridor/context`
+- `POST /api/v1/runtime/provider-env`
+- `POST /api/v1/runtime/credential-env`
 
 `WAVE_BROKER_CORRIDOR_PROJECT_MAP` should map Wave project ids to Corridor ids, for example:
 
@@ -145,20 +188,59 @@ Broker routes:
 }
 ```
 
-These routes require the normal Wave bearer token and never return the upstream provider secrets.
+These routes require the normal Wave bearer token. Context7 and Corridor remain broker-only: the service never returns those upstream secrets.
+
+`POST /api/v1/runtime/provider-env` is the fixed-provider credential-leasing route. It accepts a provider list and returns only the enabled, granted environment variables for env-leased providers:
+
+- `openai` -> `OPENAI_API_KEY`
+- `anthropic` -> `ANTHROPIC_API_KEY`
+
+Runtime leasing requires:
+
+- a PAT or env token with `credential:read`
+- the caller to hold the matching provider grant
+- the provider to be enabled on the owned deployment
+
+`POST /api/v1/runtime/credential-env` is the arbitrary per-user credential-leasing route. It accepts an explicit list of `{ id, envVar }` mappings and returns only the caller's own stored secrets under those env var names. Service tokens cannot call this route.
+
+Stored user credentials are:
+
+- write-only through the admin and service management APIs
+- encrypted at rest with `WAVE_CONTROL_SECRET_ENCRYPTION_KEY`
+- returned only through lease responses, never through list or management reads
+
+`WAVE_CONTROL_SERVICE_TOKENS_JSON` configures the separate machine-admin surface. Example:
+
+```json
+[
+  {
+    "label": "ops-bot",
+    "token": "replace-me",
+    "scopes": ["service:read", "service:user:write", "service:credential:write", "service:token:write"]
+  }
+]
+```
 
 ## Personal Access Tokens
 
 Wave Control PATs are opaque `wave_pat_*` tokens. The service stores only a SHA-256 hash plus metadata and shows the plaintext value once at creation time.
 
-Default token scopes for the internal token-issuance UI:
+PATs are user-owned and are clamped to the owner's current approval state and provider grants.
 
-- `broker:read`
-- `ingest:write`
+Scope behavior:
 
-PAT scope requests outside that allowlist are rejected, including `*`.
+- approved-user PAT scopes: `broker:read`, `credential:read`, `ingest:write`
+- members may issue PATs for themselves
+- superusers may issue or revoke PATs for any approved user
+- PAT scope requests outside the allowlist are rejected, including `*`
+- PAT lease and broker requests still re-check the owner's current provider grants and approval state on every request
 
-Static env tokens still work and keep full service access. PATs are intended for repo runtimes and the brokered provider path.
+Broker routes also require a matching provider grant:
+
+- `context7` grant for Context7 broker reads
+- `corridor` grant for Corridor broker reads
+
+Static env tokens still work and keep full service access. PATs are intended for repo runtimes and the owned broker / credential-leasing path.
 
 ## Web Frontend
 
@@ -186,6 +268,12 @@ Frontend env vars:
 The frontend also accepts `NEXT_PUBLIC_STACK_PROJECT_ID` and `NEXT_PUBLIC_STACK_PUBLISHABLE_CLIENT_KEY` as compatibility fallbacks.
 
 The browser app persists the Stack session across reloads, completes OAuth and magic-link callbacks on the same app path, and only renders sign-in methods that are enabled in the Stack project configuration.
+
+After sign-in, the app loads `/api/v1/app/session` first:
+
+- approved users continue into the main control-plane UI
+- internal users who are not yet approved see the request-access flow
+- superusers get an additional Users tab for approvals, role changes, provider grants, and write-only user credential rotation
 
 The core dimensions are:
 

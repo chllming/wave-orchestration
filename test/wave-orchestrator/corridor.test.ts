@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   materializeWaveCorridorContext,
   readWaveCorridorContext,
+  renderCorridorPromptContext,
 } from "../../scripts/wave-orchestrator/corridor.mjs";
 import { readWaveSecurityGatePure } from "../../scripts/wave-orchestrator/gate-engine.mjs";
 
@@ -53,6 +54,8 @@ function makeLanePaths(dir: string) {
 afterEach(() => {
   delete process.env.CORRIDOR_API_TOKEN;
   delete process.env.CORRIDOR_API_KEY;
+  delete process.env.WAVE_API_TOKEN;
+  delete process.env.WAVE_CONTROL_AUTH_TOKEN;
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -151,5 +154,74 @@ describe("corridor provider integration", () => {
       ok: false,
       statusCode: "corridor-blocked",
     });
+  });
+
+  it("preserves successful broker payloads for prompts and persisted state", async () => {
+    const dir = makeTempDir();
+    const lanePaths = makeLanePaths(dir);
+    lanePaths.externalProviders.corridor.mode = "broker";
+    lanePaths.externalProviders.corridor.findingStates = [];
+    process.env.WAVE_API_TOKEN = "wave-broker-token";
+
+    const payload = await materializeWaveCorridorContext(
+      lanePaths,
+      {
+        wave: 2,
+        agents: [{ agentId: "A1", role: "implementation", ownedPaths: ["src/auth"] }],
+      },
+      {
+        fetchImpl: async (url: string, options?: RequestInit) => {
+          expect(String(url)).toBe("https://wave-control.internal/api/v1/providers/corridor/context");
+          expect(options?.method).toBe("POST");
+          expect((options?.headers as Record<string, string>)?.authorization).toBe("Bearer wave-broker-token");
+          expect(JSON.parse(String(options?.body || "{}")).findingStates).toEqual([]);
+          return new Response(
+            JSON.stringify({
+              ok: true,
+              error: null,
+              schemaVersion: 1,
+              source: "broker",
+              fetchedAt: "2026-03-29T00:00:00.000Z",
+              project: {
+                waveProjectId: "app",
+                corridorProjectId: "corridor-project",
+                teamId: "team-1",
+              },
+              relevantOwnedPaths: ["src/auth"],
+              severityThreshold: "critical",
+              guardrails: [],
+              matchedFindings: [
+                {
+                  id: "f1",
+                  title: "Hardcoded token",
+                  affectedFile: "src/auth/token.ts",
+                  severity: "critical",
+                  matchedOwnedPaths: ["src/auth"],
+                },
+              ],
+              blockingFindings: [
+                {
+                  id: "f1",
+                  title: "Hardcoded token",
+                  affectedFile: "src/auth/token.ts",
+                  severity: "critical",
+                  matchedOwnedPaths: ["src/auth"],
+                },
+              ],
+              blocking: true,
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        },
+      },
+    );
+
+    expect(payload?.ok).toBe(true);
+    expect(renderCorridorPromptContext(payload)).toContain("Corridor blocking: yes");
+    expect(renderCorridorPromptContext(payload)).toContain("Corridor matched findings: 1");
+
+    const persisted = readWaveCorridorContext(lanePaths, 2);
+    expect(persisted?.ok).toBe(true);
+    expect(persisted?.blockingFindings).toHaveLength(1);
   });
 });
