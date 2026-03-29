@@ -100,6 +100,59 @@ describe("release surface alignment", () => {
     expect(coordinationGuide).toContain("status scopes the top-level blocking edge to that active attempt");
   });
 
+  it("documents and ships the sandbox supervisor attach surface", () => {
+    const cliReference = fs.readFileSync(
+      path.join(repoRoot, "docs", "reference", "cli-reference.md"),
+      "utf8",
+    );
+    const architectureReadme = fs.readFileSync(
+      path.join(repoRoot, "docs", "architecture", "README.md"),
+      "utf8",
+    );
+    const help = spawnSync("node", [path.join(repoRoot, "scripts", "wave.mjs"), "attach", "--help"], {
+      cwd: repoRoot,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        WAVE_SKIP_UPDATE_CHECK: "1",
+      },
+    });
+
+    expect(help.status).toBe(0);
+    expect(help.stdout).toContain("wave attach --run-id <id> --project <id> --lane <lane>");
+    expect(cliReference).toContain("## wave attach");
+    expect(cliReference).toContain("`--agent <id>` attaches to a live session only when the runtime record explicitly exposes one");
+    expect(architectureReadme).toContain("agents/<agentId>.runtime.json");
+    expect(architectureReadme).toContain("wave attach");
+    expect(cliReference).toContain("`supervisor`");
+    expect(cliReference).toContain("`forwardedClosureGaps`");
+    expect(cliReference).toContain("`sessionBackend`");
+    expect(cliReference).toContain("`resumeAction`");
+  });
+
+  it("ships a sandbox setup guide from the main doc surfaces", () => {
+    const rootReadme = fs.readFileSync(path.join(repoRoot, "README.md"), "utf8");
+    const docsReadme = fs.readFileSync(path.join(repoRoot, "docs", "README.md"), "utf8");
+    const guide = fs.readFileSync(
+      path.join(repoRoot, "docs", "guides", "sandboxed-environments.md"),
+      "utf8",
+    );
+    const architectureReadme = fs.readFileSync(
+      path.join(repoRoot, "docs", "architecture", "README.md"),
+      "utf8",
+    );
+
+    expect(rootReadme).toContain("docs/guides/sandboxed-environments.md");
+    expect(docsReadme).toContain("guides/sandboxed-environments.md");
+    expect(guide).toContain("LEAPclaw");
+    expect(guide).toContain("OpenClaw");
+    expect(guide).toContain("Nemoshell");
+    expect(guide).toContain("Docker");
+    expect(guide).toContain("wave submit");
+    expect(guide).toContain("wave supervise");
+    expect(architectureReadme).toContain("guides/sandboxed-environments.md");
+  });
+
   it("documents the adopted-repo planner migration surface", () => {
     const plannerGuide = fs.readFileSync(path.join(repoRoot, "docs", "guides", "planner.md"), "utf8");
     const migrationGuide = fs.readFileSync(path.join(repoRoot, "docs", "plans", "migration.md"), "utf8");
@@ -171,6 +224,58 @@ describe("release surface alignment", () => {
     expect(rootReadme).toContain("build detailed waves, not vague stubs");
     expect(rootReadme).toContain("The intended interface is an agent using Wave");
     expect(rootReadme).toContain("## Manual Commands");
+  });
+
+  it("documents the package publishing flow and lifecycle scripts", () => {
+    const rootReadme = fs.readFileSync(path.join(repoRoot, "README.md"), "utf8");
+    const docsReadme = fs.readFileSync(path.join(repoRoot, "docs", "README.md"), "utf8");
+    const publishingGuide = fs.readFileSync(
+      path.join(repoRoot, "docs", "reference", "package-publishing-flow.md"),
+      "utf8",
+    );
+    const tokenPublishingGuide = fs.readFileSync(
+      path.join(repoRoot, "docs", "reference", "npmjs-token-publishing.md"),
+      "utf8",
+    );
+    const trustedPublishingStub = fs.readFileSync(
+      path.join(repoRoot, "docs", "reference", "npmjs-trusted-publishing.md"),
+      "utf8",
+    );
+
+    expect(rootReadme).toContain("docs/reference/package-publishing-flow.md");
+    expect(docsReadme).toContain("reference/package-publishing-flow.md");
+    expect(publishingGuide).toContain("scripts/wave.mjs");
+    expect(publishingGuide).toContain("scripts/wave-orchestrator/install.mjs");
+    expect(publishingGuide).toContain("npmjs-token-publishing.md");
+    expect(publishingGuide).toContain("wave doctor");
+    expect(publishingGuide).toContain("wave changelog");
+    expect(publishingGuide).toContain("wave upgrade");
+    expect(publishingGuide).toContain("wave self-update");
+    expect(publishingGuide).toContain("publish-npm.yml");
+    expect(publishingGuide).toContain("publish-package.yml");
+    expect(publishingGuide).toContain("pnpm publish --access public --no-git-checks");
+    expect(publishingGuide).toContain("pnpm publish --registry=https://npm.pkg.github.com --no-git-checks");
+    expect(publishingGuide).toContain("npm view @chllming/wave-orchestration version dist-tags --json");
+    expect(tokenPublishingGuide).toContain("NPM_TOKEN");
+    expect(trustedPublishingStub).toContain("does not currently use npm trusted publishing");
+  });
+
+  it("enforces tag and package version parity in publish workflows", () => {
+    const npmWorkflow = fs.readFileSync(
+      path.join(repoRoot, ".github", "workflows", "publish-npm.yml"),
+      "utf8",
+    );
+    const packageWorkflow = fs.readFileSync(
+      path.join(repoRoot, ".github", "workflows", "publish-package.yml"),
+      "utf8",
+    );
+
+    expect(npmWorkflow).toContain("Verify tag matches package version");
+    expect(npmWorkflow).toContain("GITHUB_REF_NAME");
+    expect(npmWorkflow).toContain("package.json");
+    expect(packageWorkflow).toContain("Verify tag matches package version");
+    expect(packageWorkflow).toContain("GITHUB_REF_NAME");
+    expect(packageWorkflow).toContain("package.json");
   });
 
   it("documents fresh-launch relaunch-plan reset behavior", () => {

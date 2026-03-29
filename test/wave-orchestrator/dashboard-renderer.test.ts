@@ -1,8 +1,26 @@
-import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   parseDashboardArgs,
   renderDashboard,
+  resolveDashboardAttachFallback,
 } from "../../scripts/wave-orchestrator/dashboard-renderer.mjs";
+
+const tempDirs = [];
+
+function makeTempDir() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wave-dashboard-renderer-"));
+  tempDirs.push(dir);
+  return dir;
+}
+
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 describe("dashboard renderer", () => {
   it("shows completed versus active versus pending counts in the global dashboard", () => {
@@ -98,6 +116,44 @@ describe("dashboard renderer", () => {
         attach: "global",
         dashboardFile: null,
       }),
+    });
+  });
+
+  it("falls back to the last written current-wave dashboard when no live session exists", () => {
+    const dir = makeTempDir();
+    const dashboardsDir = path.join(dir, "dashboards");
+    fs.mkdirSync(dashboardsDir, { recursive: true });
+    const globalDashboardPath = path.join(dashboardsDir, "global.json");
+    const currentWavePath = path.join(dashboardsDir, "wave-3.json");
+    const olderWavePath = path.join(dashboardsDir, "wave-2.json");
+    fs.writeFileSync(
+      globalDashboardPath,
+      JSON.stringify(
+        {
+          lane: "main",
+          waves: [
+            { wave: 2, status: "completed", updatedAt: "2026-03-28T00:00:00.000Z" },
+            { wave: 3, status: "running", updatedAt: "2026-03-28T01:00:00.000Z" },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    fs.writeFileSync(currentWavePath, JSON.stringify({ wave: 3 }, null, 2), "utf8");
+    fs.writeFileSync(olderWavePath, JSON.stringify({ wave: 2 }, null, 2), "utf8");
+
+    expect(
+      resolveDashboardAttachFallback(
+        {
+          dashboardsDir,
+          globalDashboardPath,
+        },
+        "current",
+      ),
+    ).toEqual({
+      dashboardFile: currentWavePath,
     });
   });
 });

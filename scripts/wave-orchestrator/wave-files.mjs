@@ -68,6 +68,8 @@ import {
   resolveDesignReportPath,
   isSecurityRolePromptPath,
   isSecurityReviewAgent,
+  resolveAgentClosureRoleKeys,
+  resolveWaveRoleBindings,
   resolveSecurityReviewReportPath,
 } from "./role-helpers.mjs";
 import {
@@ -107,6 +109,13 @@ const COMPONENT_MATURITY_ORDER = Object.fromEntries(
 );
 const PROOF_CENTRIC_COMPONENT_LEVEL = "pilot-live";
 const RETRY_POLICY_VALUES = new Set(["sticky", "fallback-allowed"]);
+const CLOSURE_ROLE_LABELS = {
+  "cont-eval": "cont-EVAL",
+  "security-review": "security review",
+  integration: "integration steward",
+  documentation: "documentation steward",
+  "cont-qa": "cont-QA",
+};
 
 function resolveLaneProfileForOptions(options = {}) {
   if (options.laneProfile) {
@@ -1209,7 +1218,11 @@ function isImplementationOwningWaveAgent(
   );
 }
 
-function resolveAgentSummaryReportPath(wave, agentId, { contQaAgentId, contEvalAgentId } = {}) {
+function resolveAgentSummaryReportPath(
+  wave,
+  agentId,
+  { contQaAgentId, contEvalAgentId, securityRolePromptPath } = {},
+) {
   if (agentId === contQaAgentId && wave.contQaReportPath) {
     return path.resolve(REPO_ROOT, wave.contQaReportPath);
   }
@@ -1223,7 +1236,7 @@ function resolveAgentSummaryReportPath(wave, agentId, { contQaAgentId, contEvalA
       return path.resolve(REPO_ROOT, designReportPath);
     }
   }
-  if (isSecurityReviewAgent(agent)) {
+  if (isSecurityReviewAgent(agent, { securityRolePromptPath })) {
     const securityReportPath = resolveSecurityReviewReportPath(agent);
     if (securityReportPath) {
       return path.resolve(REPO_ROOT, securityReportPath);
@@ -1240,6 +1253,7 @@ function materializeLiveExecutionSummaryIfMissing({
   logsDir,
   contQaAgentId,
   contEvalAgentId,
+  securityRolePromptPath = null,
 }) {
   const logPath = logsDir ? path.join(logsDir, `wave-${wave.wave}-${agent.slug}.log`) : null;
   const existing = readAgentExecutionSummary(statusPath, {
@@ -1250,6 +1264,7 @@ function materializeLiveExecutionSummaryIfMissing({
     reportPath: resolveAgentSummaryReportPath(wave, agent.agentId, {
       contQaAgentId,
       contEvalAgentId,
+      securityRolePromptPath,
     }),
   });
   if (existing) {
@@ -1265,6 +1280,7 @@ function materializeLiveExecutionSummaryIfMissing({
     reportPath: resolveAgentSummaryReportPath(wave, agent.agentId, {
       contQaAgentId,
       contEvalAgentId,
+      securityRolePromptPath,
     }),
   });
   writeAgentExecutionSummary(statusPath, summary);
@@ -1746,6 +1762,19 @@ export function validateWaveDefinition(wave, options = {}) {
       errors.push(`Design agent ${designAgent.agentId} must stay docs/spec-only unless it explicitly owns implementation files`);
     }
   }
+  const closureRoleBindings = resolveWaveRoleBindings(wave, laneProfile.roles, wave.agents);
+  for (const agent of wave.agents) {
+    const closureRoles = resolveAgentClosureRoleKeys(
+      agent,
+      closureRoleBindings,
+      laneProfile.roles,
+    );
+    if (closureRoles.length > 1) {
+      errors.push(
+        `Agent ${agent.agentId} must not overlap closure roles (${closureRoles.map((role) => CLOSURE_ROLE_LABELS[role] || role).join(", ")})`,
+      );
+    }
+  }
   if (integrationRuleActive) {
     const integrationStewards = wave.agents.filter((agent) =>
       agent.rolePromptPaths?.includes(laneProfile.roles.integrationRolePromptPath),
@@ -2006,7 +2035,9 @@ function inferAgentRuntimeRole(agent, laneProfile) {
   ) {
     return "design";
   }
-  if (isSecurityReviewAgent(agent)) {
+  if (isSecurityReviewAgent(agent, {
+    securityRolePromptPath: laneProfile?.roles?.securityRolePromptPath,
+  })) {
     return "security";
   }
   const capabilities = Array.isArray(agent?.capabilities)
@@ -2203,7 +2234,7 @@ export function resolveAgentExecutor(agent, options = {}) {
         profile?.codex?.sandbox ||
         (executorId === "codex"
           ? normalizeCodexSandboxMode(
-              options.codexSandboxMode || laneProfile.executors.codex.sandbox,
+              options.codexSandboxMode ?? laneProfile.executors.codex.sandbox ?? DEFAULT_CODEX_SANDBOX_MODE,
               "executor.codex.sandbox",
             )
           : laneProfile.executors.codex.sandbox || DEFAULT_CODEX_SANDBOX_MODE),
@@ -2924,6 +2955,7 @@ function analyzeWaveCompletionFromStatusFiles(wave, statusDir, options = {}) {
   const componentThreshold =
     options.requireComponentPromotionsFromWave ??
     laneProfile.validation.requireComponentPromotionsFromWave;
+  const securityRolePromptPath = resolveSecurityRolePromptPath(laneProfile);
 
   const reasons = [];
   const summariesByAgentId = {};
@@ -2980,6 +3012,7 @@ function analyzeWaveCompletionFromStatusFiles(wave, statusDir, options = {}) {
       logsDir,
       contQaAgentId,
       contEvalAgentId,
+      securityRolePromptPath,
     });
     summariesByAgentId[agent.agentId] = summary;
     if (agent.agentId === contQaAgentId) {
@@ -3021,7 +3054,7 @@ function analyzeWaveCompletionFromStatusFiles(wave, statusDir, options = {}) {
       }
       continue;
     }
-    if (isSecurityReviewAgent(agent)) {
+    if (isSecurityReviewAgent(agent, { securityRolePromptPath })) {
       const validation = validateSecuritySummary(agent, summary);
       if (!validation.ok) {
         pushWaveCompletionReason(

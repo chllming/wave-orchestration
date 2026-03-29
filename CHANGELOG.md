@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+## 0.9.1 - 2026-03-29
+
+### Added
+
+- A dedicated sandbox setup guide at `docs/guides/sandboxed-environments.md` covering LEAPclaw/OpenClaw-style short-lived exec sandboxes, Nemoshell, and Docker or containerized operator setups.
+- Starter-surface and install coverage for the renamed recommendations guide `docs/guides/recommendations-0.9.1.md`, plus seeded docs that now point fresh workspaces at the sandbox-safe submit or supervise path.
+
+### Changed
+
+- Live agent execution now defaults to detached process runners instead of per-agent tmux execution sessions. Tmux remains an optional dashboard and operator projection surface only, which reduces session churn and lowers memory pressure during wider fan-outs.
+- The sandbox-facing runtime path is now `wave submit`, `wave supervise`, `wave status`, `wave wait`, and `wave attach`, with read-side reconciliation and log-follow attach behavior designed for short-lived clients and long-running daemon ownership.
+- README, migration guidance, current-state notes, coordination docs, runtime-config docs, package publishing docs, install fixtures, and the versioned recommendations guide now all point at the `0.9.1` surface.
+
+### Fixed And Hardened
+
+- Supervisor recovery now relies on run-owned terminal artifacts and finalized progress instead of lane-global completion history, preventing false completion during reruns and improving read-side reconciliation after daemon loss.
+- Multi-wave recovery and terminal attribution now preserve the correct remaining wave range and final active wave, even when launcher progress metadata is partial or missing.
+- Ordinary runs, closure runs, and resident orchestrator runs now all preserve process-runtime metadata for timeout, cleanup, and degraded-run handling, and process-backed resident orchestrators are terminated correctly during final cleanup.
+- Rate-limit retry detection is now attempt-local, closure-role overlap is rejected earlier, custom security-review role paths classify consistently, and explicit terminal-surface choices no longer depend on argv ordering.
+- Agent and launcher execution paths now behave better in constrained sandboxes by avoiding tmux-backed agent execution, preserving configured Codex sandbox defaults, and demoting tmux loss from a liveness authority to projection-only telemetry.
+
+### Testing And Validation
+
+- `pnpm test`
+- `pnpm test -- test/wave-orchestrator/release-surface.test.ts test/wave-orchestrator/install.test.ts test/wave-orchestrator/supervisor-cli.test.ts`
+- `node scripts/wave.mjs doctor --json`
+- `node scripts/wave.mjs launch --lane main --dry-run --no-dashboard`
+
 ## 0.9.0 - 2026-03-28
 
 ### Added

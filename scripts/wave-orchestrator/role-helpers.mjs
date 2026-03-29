@@ -105,6 +105,12 @@ export function isSecurityReviewAgent(
   return capabilities.includes("security-review");
 }
 
+export function isSecurityReviewAgentForLane(agent, lanePaths = null) {
+  return isSecurityReviewAgent(agent, {
+    securityRolePromptPath: lanePaths?.securityRolePromptPath,
+  });
+}
+
 export function isDesignAgent(
   agent,
   { designRolePromptPath = DEFAULT_DESIGN_ROLE_PROMPT_PATH } = {},
@@ -200,6 +206,30 @@ export function resolveWaveRoleBindings(wave = {}, lanePaths = {}, agents = wave
     securityReviewerAgentIds,
     closureAgentIds,
   };
+}
+
+export function resolveAgentClosureRoleKeys(agent, roleBindings = {}, lanePaths = {}) {
+  const roles = [];
+  if (agent?.agentId === roleBindings?.contEvalAgentId) {
+    roles.push("cont-eval");
+  }
+  if (
+    isSecurityReviewAgent(agent, {
+      securityRolePromptPath: lanePaths?.securityRolePromptPath,
+    })
+  ) {
+    roles.push("security-review");
+  }
+  if (agent?.agentId === roleBindings?.integrationAgentId) {
+    roles.push("integration");
+  }
+  if (agent?.agentId === roleBindings?.documentationAgentId) {
+    roles.push("documentation");
+  }
+  if (agent?.agentId === roleBindings?.contQaAgentId) {
+    roles.push("cont-qa");
+  }
+  return roles;
 }
 
 export function isClosureRoleAgentId(agentId, roleBindings) {

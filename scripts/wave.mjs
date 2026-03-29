@@ -20,6 +20,11 @@ function printHelp() {
   wave draft [draft options]
   wave adhoc [adhoc options]
   wave launch [launcher options]
+  wave submit [launcher options]
+  wave supervise [supervisor options]
+  wave status --run-id <id> [--json]
+  wave wait --run-id <id> [--timeout-seconds <n>] [--json]
+  wave attach --run-id <id> (--agent <id> | --dashboard)
   wave autonomous [autonomous options]
   wave feedback [feedback options]
   wave dashboard [dashboard options]
@@ -69,6 +74,14 @@ if (["init", "upgrade", "self-update", "changelog", "doctor"].includes(subcomman
   try {
     const { runLauncherCli } = await import("./wave-orchestrator/launcher.mjs");
     await runLauncherCli(rest);
+  } catch (error) {
+    console.error(`[wave] ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(Number.isInteger(error?.exitCode) ? error.exitCode : 1);
+  }
+} else if (["submit", "supervise", "status", "wait", "attach"].includes(subcommand)) {
+  try {
+    const { runSupervisorCli } = await import("./wave-orchestrator/supervisor-cli.mjs");
+    await runSupervisorCli(subcommand, rest);
   } catch (error) {
     console.error(`[wave] ${error instanceof Error ? error.message : String(error)}`);
     process.exit(Number.isInteger(error?.exitCode) ? error.exitCode : 1);

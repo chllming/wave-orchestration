@@ -810,4 +810,119 @@ describe("wave control CLI", () => {
     expect(flushPayload.attempted).toBeGreaterThan(0);
     expect(flushPayload.pending).toBeGreaterThanOrEqual(0);
   });
+
+  it("surfaces degraded supervisor state and forwarded closure gaps in control status", () => {
+    const repoDir = makeTempDir();
+    writeJson(path.join(repoDir, "package.json"), { name: "fixture-repo", private: true });
+
+    expect(runWaveCli(["init"], repoDir).status).toBe(0);
+
+    writeJson(
+      path.join(
+        repoDir,
+        ".tmp",
+        "main-wave-launcher",
+        "control",
+        "supervisor",
+        "runs",
+        "run-1",
+        "state.json",
+      ),
+      {
+        runId: "run-1",
+        project: "fixture-repo",
+        lane: "main",
+        status: "running",
+        activeWave: 0,
+        launcherPid: 4242,
+        terminalDisposition: "launcher-lost-agents-running",
+        sessionBackend: "process",
+        recoveryState: "degraded",
+        resumeAction: "wait-for-live-agents",
+        updatedAt: "2026-03-28T00:00:00.000Z",
+        agentRuntimeSummary: [
+          {
+            agentId: "A7",
+            pid: 9001,
+            pgid: 9001,
+            lastHeartbeatAt: "2026-03-28T00:00:00.000Z",
+            exitCode: null,
+            terminalDisposition: "running",
+            sessionBackend: "process",
+            attachMode: "log-tail",
+          },
+        ],
+      },
+    );
+    writeJson(
+      path.join(repoDir, ".tmp", "main-wave-launcher", "status", "relaunch-plan-wave-0.json"),
+      {
+        schemaVersion: 1,
+        kind: "wave-relaunch-plan",
+        wave: 0,
+        attempt: 2,
+        phase: "closure",
+        selectedAgentIds: ["A7", "A8", "A9", "A0"],
+        resumeFromPhase: "security-review",
+        invalidatedAgentIds: ["A7", "A8", "A9", "A0"],
+        reusableAgentIds: [],
+        reusableProofBundleIds: [],
+        forwardedClosureGaps: [
+          {
+            stageKey: "security-review",
+            agentId: "A7",
+            attempt: 2,
+            detail: "proof gap persists",
+            targets: ["A7", "A8", "A9", "A0"],
+            resolved: false,
+          },
+        ],
+      },
+    );
+
+    const jsonResult = runWaveCli(
+      ["control", "status", "--lane", "main", "--wave", "0", "--json"],
+      repoDir,
+    );
+    expect(jsonResult.status).toBe(0);
+    expect(JSON.parse(jsonResult.stdout)).toMatchObject({
+      supervisor: {
+        runId: "run-1",
+        status: "running",
+        terminalDisposition: "launcher-lost-agents-running",
+        launcherPid: 4242,
+        sessionBackend: "process",
+        recoveryState: "degraded",
+        resumeAction: "wait-for-live-agents",
+        agentRuntimeSummary: [
+          expect.objectContaining({
+            agentId: "A7",
+            terminalDisposition: "running",
+            sessionBackend: "process",
+            attachMode: "log-tail",
+          }),
+        ],
+      },
+      forwardedClosureGaps: [
+        expect.objectContaining({
+          stageKey: "security-review",
+          agentId: "A7",
+          targets: ["A7", "A8", "A9", "A0"],
+        }),
+      ],
+      relaunchPlan: expect.objectContaining({
+        resumeFromPhase: "security-review",
+      }),
+    });
+
+    const textResult = runWaveCli(
+      ["control", "status", "--lane", "main", "--wave", "0"],
+      repoDir,
+    );
+    expect(textResult.status).toBe(0);
+    expect(textResult.stdout).toContain("supervisor=launcher-lost-agents-running run_id=run-1");
+    expect(textResult.stdout).toContain("supervisor-backend=process recovery=degraded resume=wait-for-live-agents");
+    expect(textResult.stdout).toContain("forwarded-closure-gaps:");
+    expect(textResult.stdout).toContain("security-review agent=A7");
+  });
 });

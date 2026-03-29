@@ -221,7 +221,7 @@ The system's source of truth is split across three canonical sources. Everything
 
 | Module | Size | Role |
 |--------|------|------|
-| `session-supervisor.mjs` | 28KB | Process lifecycle: launches agents via tmux, waits for completion, manages locks, records `agent_run.started` / `agent_run.completed` events |
+| `session-supervisor.mjs` | 28KB | Process lifecycle: launches detached agent runners, waits for completion, manages locks, records `agent_run.started` / `agent_run.completed` events |
 | `launcher-runtime.mjs` | 14KB | Builds agent launch specs: resolves skills, builds execution prompts, handles Context7 prefetch, manages rate-limit retries |
 | `projection-writer.mjs` | 10KB | Single persistence layer for all projections: dashboards, traces, summaries, inboxes, boards, ledgers, docs queues |
 | `traces.mjs` | 45KB | Builds hermetic trace bundles per attempt with quality metrics |
@@ -909,7 +909,7 @@ The standard `wave launch` model assumes the launcher process stays alive for th
 
 ### Solution: Async Submit/Observe
 
-The sandbox model separates the client (short-lived) from the daemon (long-running) through four commands:
+The sandbox model separates the client (short-lived) from the daemon (long-running) through five commands:
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -959,6 +959,16 @@ The sandbox model separates the client (short-lived) from the daemon (long-runni
 │  Returns when status ∈ {completed, failed} or deadline reached       │
 │  Non-cancelling: timeout does NOT kill the run                       │
 │  Sets process.exitCode from launcher exit code                       │
+└──────────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────────┐
+│ wave attach --run-id <id> --project <id> --lane <name> ...           │
+│                                                                      │
+│  Purpose: Projection-only attach surface                             │
+│  --agent <id> attaches to a live session when one exists, otherwise  │
+│  follows the recorded agent log                                      │
+│  --dashboard reuses the stable lane dashboard attach flow            │
+│  Missing projection is an operator error, not a run-health verdict   │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -1040,11 +1050,13 @@ If the supervisor daemon dies and restarts (or a new daemon starts):
 1. New daemon acquires the lock (old one is stale)
 2. Scans `supervisor/runs/*/state.json` for runs in "running" state
 3. For each running run:
-   - Check if the launcher PID is alive (`process.kill(pid, 0)`)
-   - If alive: the run is healthy, just supervise it
-   - If dead: check for `launcher-status.json`
+   - Check `launcher-status.json`
      - If present: reconcile to `completed` or `failed` based on exit code
-     - If absent: mark as `failed` with detail "launcher exited before writing status"
+   - Else check if the launcher PID is alive (`process.kill(pid, 0)`)
+     - If alive: the run is healthy, just supervise it
+   - Else inspect any `agents/*.runtime.json`
+     - If a runtime PID is alive or heartbeat is fresh: keep the run running with degraded terminal disposition
+     - If all runtime records are terminal and no launcher status exists: mark as `failed` with detail "launcher exited before writing status"
 
 This is conservative: the daemon only cleans up after confirming both that the PID is dead and the lease has expired.
 
@@ -1062,6 +1074,8 @@ supervisor/
         ├── events.jsonl            Append-only: supervisor observation history
         ├── launcher-status.json    Atomic: launcher exit record (written once)
         └── launcher.log            Text: launcher stdout/stderr stream
+        └── agents/
+            └── <agentId>.runtime.json  Runtime pid/heartbeat/disposition snapshot (`agents/<agentId>.runtime.json`)
 ```
 
 ### Canonical Authority in Sandboxed Runs
@@ -1079,10 +1093,12 @@ The supervisor state is authoritative for *what the daemon observed about proces
 
 ### Typical Sandbox Workflow
 
+For operator setup in LEAPclaw, OpenClaw, Nemoshell, Docker, and similar short-lived exec environments, read [../guides/sandboxed-environments.md](../guides/sandboxed-environments.md) first. The example below shows the runtime shape, not the full operator checklist.
+
 ```bash
 # Client: quick exit, daemon takes over
 runId=$(wave submit --project backend --lane main \
-  --executor codex --codex-sandbox danger-full-access --json | jq -r .runId)
+  --executor codex --no-dashboard --json | jq -r .runId)
 
 # Client: wait with timeout (non-cancelling)
 wave wait --run-id "$runId" --project backend --lane main --timeout-seconds 600
@@ -1095,10 +1111,10 @@ wave status --run-id "$runId" --project backend --lane main --json
 
 The sandbox supervisor model is functional but some design-doc features are still partial:
 
-- **Per-agent runtime records** (`agents/<agentId>.runtime.json` with PID, pgid, heartbeat) are designed but not fully implemented
-- **Bounded process launch concurrency** with jittered backoff for `EAGAIN`/`EMFILE` is designed but not stress-tested
-- **Full orphan adoption** across daemon restarts (preserving in-flight agent state, not just run-level state) is partial
-- **Removal of tmux from steady-state monitoring** is planned but tmux is still used for session management
+- **Per-agent runtime records** now exist and carry PID, PGID, heartbeat, runner metadata, and terminal disposition, and the supervisor can now recover completed runs from finalized progress journals or canonical run-state when the launcher exits late
+- **Full orphan adoption** across daemon restarts remains partial; the daemon can continue supervising degraded runs, resume the active wave, and recover finalized status from canonical state, but it still refuses to synthesize success from agent runtime files alone
+- **Tmux is now dashboard-only**. Agent execution uses detached process runners, `wave attach --agent` falls back to log following when no live interactive session exists, and dashboard attach falls back to the last written dashboard file when no live dashboard session is present
+- **Setup guidance is split by intent**. Use [../guides/sandboxed-environments.md](../guides/sandboxed-environments.md) for operator setup, deployment, and container advice, and keep [../plans/sandbox-end-state-architecture.md](../plans/sandbox-end-state-architecture.md) for the deeper design rationale and remaining gap analysis
 
 ---
 
@@ -1477,5 +1493,6 @@ Run state:             .tmp/<lane>-wave-launcher/run-state.json
 Supervisor state:      .tmp/<lane>-wave-launcher/supervisor/
 Supervisor daemon lock: .tmp/<lane>-wave-launcher/supervisor/daemon.lock
 Supervisor runs:       .tmp/<lane>-wave-launcher/supervisor/runs/<runId>/
+Sandbox setup guide:   docs/guides/sandboxed-environments.md
 Sandbox architecture:  docs/plans/sandbox-end-state-architecture.md
 ```

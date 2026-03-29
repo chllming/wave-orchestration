@@ -6,15 +6,16 @@ Wave has separate concepts for execution substrate and operator surface.
 
 The important detail is:
 
-- live runs use `tmux` sessions
-- terminal surfaces control how operators attach to those sessions
+- live agent runs use detached process runners
+- terminal surfaces control how operators follow logs and attach to dashboard projections
+- sandbox-safe submission and supervision are documented separately in [sandboxed-environments.md](./sandboxed-environments.md)
 
 ## The Three Terminal Surfaces
 
 - `vscode`
-  The launcher writes temporary entries to `.vscode/terminals.json` so VS Code can attach to the tmux sessions.
+  The launcher writes temporary entries to `.vscode/terminals.json` so VS Code can follow process-backed agent logs and attach to stable dashboard projections.
 - `tmux`
-  The launcher uses tmux only and never touches `.vscode/terminals.json`.
+  The launcher uses tmux only for dashboard and operator projection sessions and never touches `.vscode/terminals.json`.
 - `none`
   Dry-run only. No live terminal surface is allowed in this mode.
 
@@ -22,12 +23,12 @@ The important detail is:
 
 `vscode` is not a second process host. It is a convenience attachment surface.
 
-The actual live sessions still run in tmux. The VS Code terminal registry just exposes stable attach commands for those tmux sessions.
+The actual live agent work runs in detached processes. The VS Code terminal registry exposes stable log-follow commands for agents plus stable attach commands for dashboard projections.
 
 Use `vscode` when:
 
 - your main operator flow is inside VS Code
-- you want one-click attach behavior for agent sessions and dashboards
+- you want one-click attach behavior for agent logs and dashboards
 - touching `.vscode/terminals.json` is acceptable in the repo
 
 ## What `tmux` Really Means
@@ -47,7 +48,7 @@ By default the launcher can start per-wave dashboard sessions in tmux.
 
 Wave now maintains stable tmux attach targets for both the current-wave dashboard and the global dashboard on the lane socket.
 
-Wave-agent sessions and the resident orchestrator now also use stable per-wave tmux session names. A relaunch reuses the same session identity for that wave instead of creating a new run-tagged session name each time, which reduces stale session buildup after launcher crashes or interrupted retries.
+Wave agent execution no longer depends on tmux. `wave attach --agent` uses a live interactive session only when the runtime explicitly exposes one; otherwise it follows the recorded agent log or prints the terminal log tail.
 
 Use:
 
@@ -56,18 +57,18 @@ pnpm exec wave dashboard --lane main --attach current
 pnpm exec wave dashboard --lane main --attach global
 ```
 
-Those commands work for both `tmux` and `vscode` terminal surfaces because the live sessions still run on the lane tmux socket.
+Those commands work for both `tmux` and `vscode` terminal surfaces because the live dashboard projections still run on the lane tmux socket. If no live dashboard session exists, the attach command falls back to the last written dashboard JSON instead of failing immediately.
 
 When `--terminal-surface vscode` is active, Wave also maintains a stable current-wave dashboard terminal entry instead of creating a new wave-numbered dashboard attach target for every wave transition.
 
 Important flags:
 
 - `--no-dashboard`
-  Disable the per-wave tmux dashboard session.
+  Disable the per-wave dashboard projection session.
 - `--cleanup-sessions`
-  Kill lane tmux sessions after each wave. This is the default.
+  Kill lane tmux dashboard and projection sessions after each wave. This is the default.
 - `--keep-sessions`
-  Preserve tmux sessions after the wave for inspection.
+  Preserve tmux dashboard and projection sessions after the wave for inspection.
 - `--keep-terminals`
   Keep temporary VS Code terminal entries instead of cleaning them up.
 
@@ -76,7 +77,8 @@ Important flags:
 - Use `vscode` for local interactive operator work when the temporary terminal registry is useful.
 - Use `tmux` for remote, CI-like, or editor-independent operation.
 - Use `none` only with `--dry-run`.
-- Prefer `wave dashboard --attach current|global` over manual `tmux -L <socket> attach ...` lookups.
+- In constrained sandboxes or containers, treat dashboards as optional and prefer `--no-dashboard` unless `tmux` is installed and you actually want the extra projection process.
+- Prefer `wave dashboard --attach current|global` over manual `tmux -L <socket> attach ...` lookups; it will fall back to the last written dashboard file when no live session exists.
 - Pair `--keep-sessions` with incident review or deep debugging, not as a default steady-state mode.
 - Pair `--no-dashboard` with scripted dry-runs or when the board and summaries are sufficient.
 

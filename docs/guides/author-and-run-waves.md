@@ -74,7 +74,7 @@ Good fits:
 - multi-owner waves where downstream implementers need the same decisions and assumptions
 - ambiguous tasks where open questions should become explicit before code owners fan out
 
-The starter contract in `0.9.0` is:
+The starter contract in `0.9.1` is:
 
 - import `docs/agents/wave-design-role.md`
 - own one packet such as `docs/plans/waves/design/wave-<n>-<agentId>.md`
@@ -101,12 +101,12 @@ Human feedback is an escalation path, not the operating mode itself. The orchest
 
 ## 4. Choose The Operator Surface
 
-Live runs always execute in `tmux`. The terminal surface only decides how you attach:
+Live agent runs now execute in detached process runners. The terminal surface only decides how you follow logs and attach to dashboard projections:
 
 - `vscode`
-  VS Code gets temporary attach entries for the live tmux sessions.
+  VS Code gets temporary attach entries for process-backed agent logs and dashboard projections.
 - `tmux`
-  Terminal-native operation with no VS Code integration.
+  Terminal-native dashboard and operator projection surface with no VS Code integration.
 - `none`
   Dry-run only.
 
@@ -115,6 +115,16 @@ Recommended defaults:
 - local interactive work: `vscode`
 - remote shell or devbox: `tmux`
 - CI or validation-only work: `none` with `--dry-run`
+
+If the surrounding environment is the unstable part, not the repo itself, prefer the sandbox-safe path:
+
+- `wave submit`
+- `wave supervise`
+- `wave status`
+- `wave wait`
+- `wave attach`
+
+That is the right fit for LEAPclaw, OpenClaw, Nemoshell, Docker, and similar short-lived exec shells. Use direct `wave launch` when the client shell itself can stay alive for the entire wave. For the concrete setup patterns, read [sandboxed-environments.md](./sandboxed-environments.md).
 
 ## 5. Dry-Run Before Live Execution
 
