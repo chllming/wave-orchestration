@@ -4,10 +4,23 @@
 
 ## 0.9.2 - 2026-03-29
 
+### Added
+
+- A dedicated Corridor reference at `docs/reference/corridor.md` covering `direct`, `broker`, and `hybrid` provider modes, implementation-owned path matching, generated `wave-<n>-corridor.json` artifacts, and the way Corridor can fail closure before integration.
+- Full shipped-surface documentation for owned `wave-control` deployments, including Stack-backed browser access, Wave-managed approval states and provider grants, PATs, service tokens, encrypted per-user credential storage, runtime credential leasing, and the separate `services/wave-control-web` frontend.
+- Starter-surface coverage for the renamed operating guide `docs/guides/recommendations-0.9.2.md`, including install seeding and regression coverage so fresh adopted workspaces receive the current recommendations guide path.
+
 ### Changed
 
 - Promoted the current packaged surface to `0.9.2` so the documented Corridor, Wave Control auth and security model, release manifest, tracked install-state fixtures, and package publishing docs can be tagged and published cleanly without reusing the existing `0.9.1` npm release and git tag.
-- Renamed the versioned operating guide to `docs/guides/recommendations-0.9.2.md` and updated release-surface references, install seeding, and regression coverage to match the new package version exactly.
+- README, migration guidance, current-state notes, runtime-config docs, coordination docs, roadmap notes, package publishing docs, Wave Control docs, the new Corridor reference, and the tracked install-state fixtures now all point at the `0.9.2` surface and describe the same shipped security and control-plane model consistently.
+- `services/wave-control/README.md` and `docs/reference/wave-control.md` now document the current control-plane contract and the updated `wave-control-web` frontend surface instead of the older narrower auth description.
+
+### Fixed And Hardened
+
+- `scripts/wave-orchestrator/install.mjs` now seeds the current linked reference set, including `docs/reference/corridor.md`, `docs/reference/wave-control.md`, and `docs/reference/coordination-and-closure.md`, so fresh `wave init` workspaces do not miss the new release docs.
+- Release-surface fixtures now advance together to `0.9.2`, including `releases/manifest.json`, `.wave/install-state.json`, and the tracked `.wave/upgrade-history/` report for `0.9.1 -> 0.9.2`, which keeps repo-owned validation aligned with the packaged version.
+- The versioned recommendations guide rename now propagates through install coverage, package publishing docs, and release regression checks so future package cuts do not drift from the shipped file name.
 
 ### Testing And Validation
 
