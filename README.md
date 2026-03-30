@@ -107,19 +107,18 @@ Wave is built to mitigate those failures with a canonical authority set, generat
 
 Current release:
 
-- `@chllming/wave-orchestration@0.9.2`
-- Release tag: [`v0.9.2`](https://github.com/chllming/agent-wave-orchestrator/releases/tag/v0.9.2)
+- `@chllming/wave-orchestration@0.9.3`
+- Release tag: [`v0.9.3`](https://github.com/chllming/agent-wave-orchestrator/releases/tag/v0.9.3)
 - Public install path: npmjs
 - Authenticated fallback: GitHub Packages
 
-Highlights in `0.9.2`:
+Highlights in `0.9.3`:
 
-- Live agent execution now uses detached process runners by default, which reduces tmux churn and memory pressure during wider orchestration bursts. Tmux is now optional and dashboard-only.
-- The sandbox-safe runtime path is now `wave submit`, `wave supervise`, `wave status`, `wave wait`, and `wave attach`, which behaves better under short-lived exec clients such as LEAPclaw, OpenClaw, and Nemoshell.
-- Supervisor recovery, launcher progress journaling, and exact-context reads are now hardier for multi-wave runs, reruns, and daemon/client loss in containerized or sandboxed environments.
-- Owned Wave Control deployments now support Stack-authenticated browser access, Wave-managed approval states and provider grants, personal access tokens, dedicated service tokens, encrypted per-user credential leasing, and the separate `services/wave-control-web` operator frontend.
-- Corridor is now documented as a first-class security input: it can run direct or through an owned Wave Control broker, materialize per-wave security context on implementation-owned paths, and block closure before integration when fetches fail or matched findings cross the configured threshold.
-- Release docs, migration guidance, runtime-config and closure references, Wave Control docs, the new Corridor reference, the manifest, and the tracked install-state fixtures now all point at the `0.9.2` surface.
+- Wave-gate markers now accept `gap` alongside `pass`, `concerns`, and `blocked` for all five gate dimensions. Agents that report a documented gap (e.g. `live=gap` for an infrastructure topology constraint) no longer have their marker rejected entirely, and `cont-QA` treats gap values as a conditional pass instead of a hard blocker.
+- First-time `wave launch` now auto-triggers `wave project setup` when no project profile exists, matching existing `wave draft` behavior. The interactive setup flow now shows descriptive help text, explains all template and posture options inline, and adds whitespace between question groups for readability.
+- `PromptSession` gains a `describe(text)` method for writing contextual help to stderr during interactive setup flows.
+- `parseArgs` now passes the loaded config object through to `runLauncherCli`, avoiding a redundant `loadWaveConfig()` call.
+- Release docs, migration guidance, runtime-config and closure references, the manifest, and the tracked install-state fixtures now all point at the `0.9.3` surface.
 
 Requirements:
 

@@ -1,6 +1,6 @@
 # Migration
 
-This page is the practical repo-upgrade guide for the current `0.9.2` surface.
+This page is the practical repo-upgrade guide for the current `0.9.3` surface.
 
 Use it when you are:
 
@@ -11,6 +11,26 @@ Use it when you are:
 For the completed internal architecture cutover record, see [architecture-hardening-migration.md](./architecture-hardening-migration.md). That document is historical. This one is the operator-facing upgrade checklist.
 
 For the sandbox-specific long-running execution target, including async `submit/status/wait` semantics and daemon ownership goals, see [sandbox-end-state-architecture.md](./sandbox-end-state-architecture.md).
+
+## What `0.9.3` Changes
+
+The current `0.9.3` surface keeps everything from `0.9.2` and adds two focused improvements with no breaking changes.
+
+The practical changes are:
+
+- `WAVE_GATE_REGEX` now accepts `gap` alongside `pass|concerns|blocked` for all five gate dimensions (architecture, integration, durability, live, docs), so agents that report a documented gap no longer have their marker rejected entirely
+- `validateContQaSummary` treats `gap` dimension values as a conditional pass (`ok: true`, `statusCode: conditional-pass`) instead of a hard blocker
+- the cont-QA coordination prompt now documents `gap` as a valid dimension value
+- first-time `wave launch` now auto-triggers `wave project setup` when no project profile exists, matching existing `wave draft` behavior
+- `wave project setup` now shows descriptive help text before each prompt, explains all template and posture options inline, and adds whitespace between question groups for readability
+- `PromptSession` gains a `describe(text)` method for writing contextual help to stderr during interactive setup flows
+- `parseArgs` now passes the loaded config object through to `runLauncherCli`, avoiding a redundant `loadWaveConfig()` call
+
+There are no breaking changes. Just upgrade with `pnpm up @chllming/wave-orchestration` and run `pnpm exec wave upgrade`.
+
+If your repo uses wave-gate markers, you can now use `gap` for dimensions where the gap is documented and not an actionable blocker.
+
+For the practical `0.9.3` operating stance after the upgrade, read [../guides/recommendations-0.9.3.md](../guides/recommendations-0.9.3.md).
 
 ## What `0.9.2` Changes
 
@@ -150,10 +170,11 @@ pnpm exec wave coord inbox --lane main --wave 0 --agent A1 --dry-run
 
 Use `pnpm exec wave dashboard --lane <lane> --attach current` or `--attach global` when you need to reattach to a tmux-backed dashboard after the upgrade.
 
-## `0.9.2` Release Model
+## `0.9.3` Release Model
 
-The current `0.9.2` surface combines these strands:
+The current `0.9.3` surface combines these strands:
 
+- the gap-value wave-gate fix and first-time setup UX improvements released in `0.9.3`
 - the detached process-runner and sandbox supervisor hardening released in `0.9.2`
 - the shipped `0.9.0` monorepo project support and project-aware runtime isolation
 - the shipped `design` worker role and hybrid design-steward flow introduced in `0.8.5`
@@ -569,4 +590,4 @@ For repos that depend on replay parity, replay at least:
 
 ## Summary
 
-The current `0.9.2` surface keeps the same authority-set and phase-engine architecture, ships both the design-role starter surface and the signal-driven long-running-agent starter surface, keeps the `0.8.7` policy and routing hardening, and now also packages the practical operator recommendations guide inside the release line. For most repos already on `0.8.x`, the upgrade is package bump plus validation. For older adopted repos, the real work is syncing repo-owned prompts, skills, planner corpus, wrapper scripts, and runbooks so they describe the runtime the package now ships.
+The current `0.9.3` surface keeps the same authority-set and phase-engine architecture, ships both the design-role starter surface and the signal-driven long-running-agent starter surface, keeps the `0.8.7` policy and routing hardening, and now also packages the practical operator recommendations guide inside the release line. For most repos already on `0.8.x`, the upgrade is package bump plus validation. For older adopted repos, the real work is syncing repo-owned prompts, skills, planner corpus, wrapper scripts, and runbooks so they describe the runtime the package now ships.
