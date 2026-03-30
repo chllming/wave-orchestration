@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+## 0.9.3 - 2026-03-30
+
+### Fixed And Hardened
+
+- WAVE_GATE_REGEX now accepts gap alongside pass|concerns|blocked for all five gate dimensions (architecture, integration, durability, live, docs). Previously, agents that reported a documented gap (e.g. live=gap for an infrastructure topology constraint) had their marker rejected entirely, causing missing-wave-gate failures that prevented wave closure.
+- validateContQaSummary now treats gap dimension values as a conditional pass (ok: true, statusCode: conditional-pass) instead of a hard blocker, with detail text listing which dimensions have documented gaps.
+- The cont-QA coordination prompt now documents gap as a valid dimension value alongside pass|concerns|blocked.
+
+### Added
+
+- First-time wave launch now auto-triggers wave project setup when no project profile exists, matching existing wave draft behavior. (Contributed by @justanothernate in #54)
+- wave project setup now shows descriptive help text before each prompt, explains all template and posture options inline, and adds whitespace between question groups for readability. (Contributed by @justanothernate in #54)
+- PromptSession gains a describe(text) method for writing contextual help to stderr during interactive setup flows.
+- parseArgs now passes the loaded config object through to runLauncherCli, avoiding a redundant loadWaveConfig() call.
+
+### Testing And Validation
+
+- `pnpm exec vitest run --config vitest.config.ts`
+- `node scripts/wave.mjs doctor --json`
+- `node scripts/wave.mjs launch --lane main --dry-run --no-dashboard`
+- `pnpm test -- test/wave-orchestrator/release-surface.test.ts`
+
 ## 0.9.2 - 2026-03-29
 
 ### Added

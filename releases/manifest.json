@@ -3,6 +3,27 @@
   "packageName": "@chllming/wave-orchestration",
   "releases": [
     {
+      "version": "0.9.3",
+      "date": "2026-03-30",
+      "summary": "Gap-value wave-gate fix and first-time project setup UX improvements.",
+      "features": [
+        "WAVE_GATE_REGEX now accepts `gap` alongside `pass|concerns|blocked` for all five gate dimensions (architecture, integration, durability, live, docs), so agents reporting a documented gap no longer have their marker rejected entirely.",
+        "`validateContQaSummary` now treats `gap` dimension values as a conditional pass (`ok: true`, `statusCode: conditional-pass`) instead of a hard blocker, with detail text listing which dimensions have documented gaps.",
+        "The cont-QA coordination prompt now documents `gap` as a valid dimension value alongside `pass|concerns|blocked`.",
+        "First-time `wave launch` now auto-triggers `wave project setup` when no project profile exists, matching existing `wave draft` behavior. (Contributed by @justanothernate in #54)",
+        "`wave project setup` now shows descriptive help text before each prompt, explains all template and posture options inline, and adds whitespace between question groups for readability. (Contributed by @justanothernate in #54)",
+        "`PromptSession` gains a `describe(text)` method for writing contextual help to stderr during interactive setup flows.",
+        "`parseArgs` now passes the loaded config object through to `runLauncherCli`, avoiding a redundant `loadWaveConfig()` call.",
+        "Release docs, migration guidance, runtime-config and closure references, the manifest, and the tracked install-state fixtures now all point at the `0.9.3` surface."
+      ],
+      "manualSteps": [
+        "Run `pnpm exec wave doctor` and `pnpm exec wave launch --lane main --dry-run --no-dashboard` after upgrading so the repo validates against the `0.9.3` release surface.",
+        "Push the `v0.9.3` tag after the release commit so the GitHub publish workflow can publish the matching npm package version.",
+        "If your repo copied starter docs or runbooks, sync `README.md`, `docs/README.md`, `docs/plans/current-state.md`, `docs/plans/migration.md`, `docs/reference/coordination-and-closure.md`, `docs/reference/runtime-config/README.md`, and `docs/guides/recommendations-0.9.3.md` so local guidance matches the packaged release."
+      ],
+      "breaking": false
+    },
+    {
       "version": "0.9.2",
       "date": "2026-03-29",
       "summary": "0.9.2 release cut for the documented Corridor and Wave Control surface, plus aligned publish artifacts.",

@@ -428,9 +428,9 @@ The important distinction is:
 `cont-QA` must emit:
 
 - a final verdict
-- a final `[wave-gate]` marker
+- a final `[wave-gate]` marker with each of the five gate dimensions (architecture, integration, durability, live, docs) set to `pass`, `concerns`, `blocked`, or `gap`
 
-Final PASS requires all gate dimensions to pass in the final state.
+Final PASS requires all gate dimensions to be `pass` or `gap` in the final state. A `gap` value means the dimension has a documented gap that is not an actionable blocker; it is treated as a conditional pass (`ok: true`, `statusCode: conditional-pass`) with detail text listing which dimensions have documented gaps.
 
 ## Why The Closure Model Works
 
