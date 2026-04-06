@@ -1,52 +1,65 @@
 # Changelog
 
-## Unreleased
+## 0.9.8 - 2026-04-06
+
+### Added
+- `wave self-update` command for in-place package upgrades with release notes display.
+- Upgrade history tracking in `.wave/upgrade-history/` with per-upgrade reports including workspace impact analysis and follow-up actions.
+- Bootstrap advisory gates: in bootstrap mode (waves 0–3), doc-closure, cont-QA, integration, and component gates are advisory (non-blocking) while implementation gates remain required. Advisory failures are tracked in the gate snapshot for visibility.
+- `docs/guides/recommendations-0.9.8.md` recommendations guide.
+
+### Fixed
+- Integration barrier now short-circuits when no A8 steward is declared (`agentId: null`), fixing `missing-integration-summary` failures on waves without an integration agent.
+- Default `claude.permissionMode` to `bypassPermissions` (fixes Docker container environments where interactive permission prompts hang).
+- Removed `--search` flag from codex exec invocations (unsupported by `codex exec`).
+- Relaxed release-surface test version checks while keeping changelog checks strict (#64).
+- Updated executor test — `--search` not supported in codex exec (#63).
+
+### Changed
+- `wave upgrade` now records install-state transitions and generates upgrade reports.
 
 ## 0.9.7 - 2026-04-06
 
 ### Fixed
-- Closure engine now skips missing-closure-run failures in bootstrap gate mode.
-- `gateModeThresholds` is now exposed on the `lanePaths` object for downstream consumers.
+- Closure engine now skips missing-closure-run failures when the resolved gate mode is `bootstrap`, allowing waves to pass when agents complete but tmux status reconciliation fails.
+- `gateModeThresholds` is now exposed on the `lanePaths` object so downstream consumers (closure engine, derived state) can resolve the active gate mode.
 
 ## 0.9.6 - 2026-04-05
 
 ### Fixed
-- Closure engine now respects `requireIntegrationStewardFromWave` and `requireDocumentationStewardFromWave` thresholds instead of unconditionally requiring integration/documentation closure runs.
+- Closure engine now respects `requireIntegrationStewardFromWave` and `requireDocumentationStewardFromWave` thresholds instead of unconditionally requiring integration/documentation steward runs for waves that don't declare them. When set to `null`, the stage is only required if the wave declares the corresponding agent.
 
 ## 0.9.5 - 2026-04-05
 
 ### Fixed
-- Pass `lanePaths` to `reconcileFailuresAgainstSharedComponentState` to fix `ReferenceError` crash on repos without Integration Steward (A8).
+- Pass `lanePaths` to `reconcileFailuresAgainstSharedComponentState`, fixing `ReferenceError` crash on repos without Integration Steward (A8).
 
 ## 0.9.4 - 2026-04-05
 
-- Laddered gate modes: bootstrap/standard/strict per wave number
-- Bootstrap pass: exit 0 + deliverables exist = advance (no QA signals needed)
-- Fix: requireDocumentationStewardFromWave threshold strictly respected
-- New config: gateModeThresholds, bootstrapPassConditions, testCommand
-- evaluateBootstrapGate() and resolveGateMode() functions
+### Added
+- Laddered gate modes: `bootstrap` (waves 0–3), `standard` (waves 4–9), `strict` (waves 10+) per wave number via `gateModeThresholds` config.
+- Bootstrap pass conditions: `exit 0 + deliverables exist = advance` — no QA signals required in early waves.
+- New config fields: `gateModeThresholds`, `bootstrapPassConditions`, `testCommand`.
+- `evaluateBootstrapGate()` and `resolveGateMode()` functions for gate-mode resolution.
+- `docs/guides/recommendations-0.9.4.md` recommendations guide.
+
+### Fixed
+- `requireDocumentationStewardFromWave` threshold now strictly respected during validation. Was previously OR'd with `componentPromotionRuleActive`, ignoring the threshold.
 
 ## 0.9.3 - 2026-03-30
 
 ### Fixed And Hardened
-
-- WAVE_GATE_REGEX now accepts gap alongside pass|concerns|blocked for all five gate dimensions (architecture, integration, durability, live, docs). Previously, agents that reported a documented gap (e.g. live=gap for an infrastructure topology constraint) had their marker rejected entirely, causing missing-wave-gate failures that prevented wave closure.
-- validateContQaSummary now treats gap dimension values as a conditional pass (ok: true, statusCode: conditional-pass) instead of a hard blocker, with detail text listing which dimensions have documented gaps.
-- The cont-QA coordination prompt now documents gap as a valid dimension value alongside pass|concerns|blocked.
+- `WAVE_GATE_REGEX` now accepts `gap` alongside `pass|concerns|blocked` for all five gate dimensions (architecture, integration, durability, live, docs). Previously, agents that reported a documented gap (e.g. `live=gap` for an infrastructure topology constraint) had their marker rejected entirely, causing missing-wave-gate failures that prevented wave closure.
+- `validateContQaSummary` now treats gap dimension values as a conditional pass (`ok: true`, `statusCode: conditional-pass`) instead of a hard blocker, with detail text listing which dimensions have documented gaps.
+- The cont-QA coordination prompt now documents `gap` as a valid dimension value alongside `pass|concerns|blocked`.
+- Migration sections aligned and install seeding updated to target 0.9.3 correctly.
+- Planner-agentic note added to 0.9.3 manifest entry.
 
 ### Added
-
-- First-time wave launch now auto-triggers wave project setup when no project profile exists, matching existing wave draft behavior. (Contributed by @justanothernate in #54)
-- wave project setup now shows descriptive help text before each prompt, explains all template and posture options inline, and adds whitespace between question groups for readability. (Contributed by @justanothernate in #54)
-- PromptSession gains a describe(text) method for writing contextual help to stderr during interactive setup flows.
-- parseArgs now passes the loaded config object through to runLauncherCli, avoiding a redundant loadWaveConfig() call.
-
-### Testing And Validation
-
-- `pnpm exec vitest run --config vitest.config.ts`
-- `node scripts/wave.mjs doctor --json`
-- `node scripts/wave.mjs launch --lane main --dry-run --no-dashboard`
-- `pnpm test -- test/wave-orchestrator/release-surface.test.ts`
+- First-time wave launch now auto-triggers `wave project setup` when no project profile exists, matching existing `wave draft` behavior.
+- `wave project setup` now shows descriptive help text before each prompt, explains all template and posture options inline, and adds whitespace between question groups for readability.
+- `PromptSession` gains a `describe(text)` method for writing contextual help to stderr during interactive setup flows.
+- `parseArgs` now passes the loaded config object through to `runLauncherCli`, avoiding a redundant `loadWaveConfig()` call.
 
 ## 0.9.2 - 2026-03-29
 
