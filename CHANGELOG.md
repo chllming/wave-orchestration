@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.9.7 - 2026-04-06
+
+### Fixed
+- Closure engine now skips missing-closure-run failures in bootstrap gate mode.
+- `gateModeThresholds` is now exposed on the `lanePaths` object for downstream consumers.
+
 ## 0.9.6 - 2026-04-05
 
 ### Fixed

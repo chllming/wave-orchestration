@@ -276,6 +276,7 @@ export function buildLanePaths(laneInput = DEFAULT_WAVE_LANE, options = {}) {
     requireComponentPromotionsFromWave:
       laneProfile.validation.requireComponentPromotionsFromWave,
     requireAgentComponentsFromWave: laneProfile.validation.requireAgentComponentsFromWave,
+    gateModeThresholds: laneProfile.validation.gateModeThresholds,
     executors: laneProfile.executors,
     skills: laneProfile.skills,
     capabilityRouting: laneProfile.capabilityRouting,

@@ -14,6 +14,7 @@ import {
   readWaveDocumentationGate as readWaveDocumentationGateDefault,
   readWaveIntegrationBarrier as readWaveIntegrationBarrierDefault,
   readWaveSecurityGate as readWaveSecurityGateDefault,
+  resolveGateMode,
 } from "./gate-engine.mjs";
 import { applyLaunchResultToRun } from "./launcher-runtime.mjs";
 import { REPO_ROOT, toIsoTimestamp } from "./shared.mjs";
@@ -192,8 +193,13 @@ export async function runClosureSweepPhase({
   const forwardedFailures = [];
   const { contQaAgentId, contEvalAgentId, integrationAgentId, documentationAgentId } =
     resolveWaveRoleBindings(wave, lanePaths);
+  const _gateThresholds = lanePaths?.gateModeThresholds || lanePaths?.validation?.gateModeThresholds || options?.gateModeThresholds || null;
+  const _resolvedGateMode = resolveGateMode(wave.wave, _gateThresholds);
   for (const [stageIndex, stage] of stagedRuns.entries()) {
     if (stage.runs.length === 0) {
+      if (_resolvedGateMode === "bootstrap") {
+        continue;
+      }
       if (stageRequiresRun(stage, wave, lanePaths)) {
         const gate = missingClosureRunGate(stage);
         recordClosureGateFailure({

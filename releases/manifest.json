@@ -3,6 +3,18 @@
   "packageName": "@chllming/wave-orchestration",
   "releases": [
     {
+      "version": "0.9.7",
+      "date": "2026-04-06",
+      "summary": "Closure engine skips missing-run checks in bootstrap gate mode; gateModeThresholds now flows through lanePaths.",
+      "features": [
+        "Closure sweep skips missing-closure-run failures when the resolved gate mode is `bootstrap`, allowing waves to pass when agents complete but tmux status reconciliation fails.",
+        "The `gateModeThresholds` validation config is now exposed on the `lanePaths` object so downstream consumers (closure engine, derived state) can resolve the active gate mode.",
+        "planner-agentic bundle placeholder remains available for adopted repos."
+      ],
+      "manualSteps": [],
+      "breaking": false
+    },
+    {
       "version": "0.9.6",
       "date": "2026-04-05",
       "summary": "Fix closure engine unconditionally requiring integration/documentation steward runs for waves that don't declare them.",
