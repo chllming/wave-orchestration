@@ -51,6 +51,11 @@ import {
   readWaveCorridorContext,
   waveCorridorContextPath,
 } from "./corridor.mjs";
+import {
+  classifyClosureComplexity,
+  resolveClosureMode,
+  resolveClosurePolicyConfig,
+} from "./closure-policy.mjs";
 
 export function waveCoordinationLogPath(lanePaths, waveNumber) {
   return path.join(lanePaths.coordinationDir, `wave-${waveNumber}.jsonl`);
@@ -717,12 +722,13 @@ export function buildWaveDerivedState({
     componentPromotions: wave.componentPromotions,
     runtimeAssignments,
   });
+  const corridorSummary = readWaveCorridorContext(lanePaths, wave.wave);
   const securitySummary = buildWaveSecuritySummary({
     lanePaths,
     wave,
     attempt,
     summariesByAgentId,
-    corridorSummary: readWaveCorridorContext(lanePaths, wave.wave),
+    corridorSummary,
   });
   const integrationSummary = buildWaveIntegrationSummary({
     lanePaths,
@@ -736,6 +742,17 @@ export function buildWaveDerivedState({
     capabilityAssignments,
     dependencySnapshot,
     securitySummary,
+  });
+  const closurePolicy = resolveClosurePolicyConfig(lanePaths);
+  const closureMode = resolveClosureMode(wave.wave, closurePolicy.closureModeThresholds);
+  const closureComplexity = classifyClosureComplexity({
+    coordinationState,
+    docsQueue,
+    capabilityAssignments,
+    dependencySnapshot,
+    securitySummary,
+    corridorSummary,
+    integrationSummary,
   });
   const ledger = deriveWaveLedger({
     lane: lanePaths.lane,
@@ -802,12 +819,14 @@ export function buildWaveDerivedState({
     dependencySnapshotMarkdownPath: waveDependencySnapshotMarkdownPath(lanePaths, wave.wave),
     securitySummary,
     securitySummaryPath: waveSecurityPath(lanePaths, wave.wave),
-    corridorSummary: readWaveCorridorContext(lanePaths, wave.wave),
+    corridorSummary,
     corridorSummaryPath: waveCorridorContextPath(lanePaths, wave.wave),
     integrationSummary,
     integrationSummaryPath: waveIntegrationPath(lanePaths, wave.wave),
     integrationMarkdownPath: waveIntegrationMarkdownPath(lanePaths, wave.wave),
     securityMarkdownPath: waveSecurityMarkdownPath(lanePaths, wave.wave),
+    closureMode,
+    closureComplexity,
     ledger,
     ledgerPath: waveLedgerPath(lanePaths, wave.wave),
     responseMetrics,
