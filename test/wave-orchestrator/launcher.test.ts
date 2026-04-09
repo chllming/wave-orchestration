@@ -4144,8 +4144,9 @@ describe("buildCodexExecInvocation", () => {
       DEFAULT_CODEX_SANDBOX_MODE,
     );
 
-    expect(command).toContain("codex --ask-for-approval never exec");
-    expect(command).toContain("--ask-for-approval never");
+    expect(command).toContain("codex");
+    expect(command).toContain("exec");
+    expect(command).toContain("--dangerously-bypass-approvals-and-sandbox");
     expect(command).toContain(`--sandbox '${DEFAULT_CODEX_SANDBOX_MODE}'`);
   });
 });

@@ -12,6 +12,7 @@ import {
   parseWaveFiles,
   readRunState,
   reconcileRunStateFromStatusFiles,
+  resolveCompletedWavesForValidation,
   resolveAgentExecutor,
   requiredDocumentationStewardPathsForWave,
   SHARED_PLAN_DOC_PATHS,
@@ -2838,6 +2839,79 @@ describe("reconcileRunStateFromStatusFiles", () => {
       "utf8",
     );
   }
+
+  it("includes status-derived completions when run-state has not been reconciled yet", () => {
+    const tempRoot = registerTempPath(
+      path.join(REPO_ROOT, ".tmp", `wave-files-test-${Date.now()}-pre-validation-completed`),
+    );
+    const statusDir = path.join(tempRoot, "status");
+    const logsDir = path.join(tempRoot, "logs");
+    const coordinationDir = path.join(tempRoot, "coordination");
+    const runStatePath = path.join(tempRoot, "run-state.json");
+    fs.mkdirSync(statusDir, { recursive: true });
+    fs.mkdirSync(logsDir, { recursive: true });
+    fs.mkdirSync(coordinationDir, { recursive: true });
+
+    const wave = makeReconcileWave(tempRoot);
+    fs.writeFileSync(
+      path.join(runStatePath),
+      JSON.stringify({ completedWaves: [] }, null, 2),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(REPO_ROOT, wave.contQaReportPath),
+      "# cont-QA\n\nVerdict: PASS\n",
+      "utf8",
+    );
+    for (const agent of wave.agents) {
+      writeStatus(statusDir, agent, {
+        code: 0,
+        promptHash: hashAgentPromptFingerprint(agent),
+        completedAt: "2026-03-22T00:00:00.000Z",
+      });
+    }
+    writeSummary(statusDir, wave.agents[0], {
+      reportPath: wave.contQaReportPath,
+      verdict: { verdict: "pass", detail: "good" },
+      gate: {
+        architecture: "pass",
+        integration: "pass",
+        durability: "pass",
+        live: "pass",
+        docs: "pass",
+        detail: "all clear",
+      },
+    });
+    writeSummary(statusDir, wave.agents[1], {
+      proof: { completion: "contract", durability: "none", proof: "unit", state: "met" },
+      docDelta: { state: "owned", paths: [] },
+    });
+    writeSummary(statusDir, wave.agents[2], {
+      integration: { state: "ready-for-doc-closure", detail: "all lanes landed" },
+    });
+    writeSummary(statusDir, wave.agents[3], {
+      docClosure: { state: "closed", detail: "docs reconciled" },
+    });
+    fs.writeFileSync(path.join(coordinationDir, "wave-200.jsonl"), "", "utf8");
+
+    expect(
+      resolveCompletedWavesForValidation([wave], runStatePath, statusDir, {
+        logsDir,
+        coordinationDir,
+        requireIntegrationStewardFromWave: 0,
+        laneProfile: {
+          validation: {
+            requireComponentPromotionsFromWave: null,
+            requireIntegrationStewardFromWave: 0,
+            requiredPromptReferences: [],
+          },
+          paths: {
+            benchmarkCatalogPath: "docs/evals/benchmark-catalog.json",
+          },
+        },
+      }),
+    ).toEqual([200]);
+  });
 
   it("does not mark waves complete from legacy plain-int status files without metadata", () => {
     const tempRoot = registerTempPath(

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.9.13 - 2026-04-09
+
+### Added
+- Regression coverage for pre-validation completed-wave recovery and per-agent detached runner sticky-key environment handling.
+- `docs/guides/recommendations-0.9.13.md` as the current packaged operating guide.
+
+### Changed
+- Release docs, migration guidance, runtime-config references, package-publishing docs, the release manifest, and tracked install-state fixtures now align on the `0.9.13` surface.
+
+### Fixed
+- Structured `[wave-proof]` and `[wave-component]` markers now accept `state=complete` and normalize it to the existing `met` semantics downstream.
+- Launcher pre-validation now unions `run-state.json` with status-derived completed waves before stale promotion checks, which keeps restart and resumed launches from blocking on superseded historical promotions.
+- Detached process runners now derive a per-agent `LPM_AUTH_STICKY_KEY` by default and preserve explicit overrides so concurrent broker-backed agents on one node stop colliding on credential exports.
+
 ## 0.9.12 - 2026-04-08
 
 ### Added

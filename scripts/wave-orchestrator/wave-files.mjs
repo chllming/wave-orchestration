@@ -3298,6 +3298,13 @@ export function completedWavesFromStatusFiles(allWaves, statusDir, options = {})
   return normalizeCompletedWaves(completed);
 }
 
+export function resolveCompletedWavesForValidation(allWaves, runStatePath, statusDir, options = {}) {
+  return normalizeCompletedWaves([
+    ...readRunState(runStatePath).completedWaves,
+    ...completedWavesFromStatusFiles(allWaves, statusDir, options),
+  ]);
+}
+
 export function reconcileRunStateFromStatusFiles(allWaves, runStatePath, statusDir, options = {}) {
   const diagnostics = allWaves.map((wave) => ({
     wave: wave.wave,
