@@ -446,7 +446,9 @@ describe("buildExecutorLaunchSpec", () => {
 
     expect(spec.executorId).toBe("codex");
     const invocation = spec.invocationLines.join("\n");
-    expect(invocation).toContain("codex --ask-for-approval never exec");
+    expect(invocation).toContain("codex");
+    expect(invocation).toContain("exec");
+    expect(invocation).toContain("--dangerously-bypass-approvals-and-sandbox");
     expect(invocation).toContain("--model 'gpt-5-codex'");
     expect(invocation).toContain("--profile 'review'");
     expect(invocation).toContain("-c 'model_reasoning_effort=high'");

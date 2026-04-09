@@ -107,17 +107,17 @@ Wave is built to mitigate those failures with a canonical authority set, generat
 
 Current release:
 
-- `@chllming/wave-orchestration@0.9.12`
-- Release tag: [`v0.9.12`](https://github.com/chllming/agent-wave-orchestrator/releases/tag/v0.9.12)
+- `@chllming/wave-orchestration@0.9.13`
+- Release tag: [`v0.9.13`](https://github.com/chllming/agent-wave-orchestrator/releases/tag/v0.9.13)
 - Public install path: npmjs
 - Authenticated fallback: GitHub Packages
 
-Highlights in `0.9.12`:
+Highlights in `0.9.13`:
 
-- Closure bootstrap mode now has a real low-entropy fast path: missing `cont-QA` runs are skipped only when semantic closure did not already escalate into the deeper steward path, and the closure-mode thresholds now apply consistently across launcher, closure, and derived-state logic.
-- TMUX is now documented and surfaced consistently as an optional dashboard/projection layer. Live agents remain process-backed, and `tmux + --no-dashboard` now prints an explicit note instead of implying a mandatory tmux runtime.
-- Wave Control's browser surface now defaults to a dashboard-first information architecture with clearer `Dashboard`, `Operations`, `Access`, and `Account` navigation, plus richer run and benchmark analytics summaries for operators.
-- Release docs, migration guidance, runtime-config and closure references, the manifest, and the tracked install-state fixtures now all point at the `0.9.12` surface.
+- Structured proof and component markers now accept `state=complete` as a `met` alias, so agents that emit the more natural completion wording no longer fail proof parsing.
+- Pre-launch wave validation now treats status-recoverable completed waves as already completed, which prevents stale component-matrix promotion checks from blocking restart or resumed launches.
+- Detached process runners now derive a per-agent broker sticky key by default and preserve explicit overrides, so concurrent agents on the same node can lease provider credentials safely.
+- Release docs, migration guidance, runtime-config and closure references, the manifest, and the tracked install-state fixtures now all point at the `0.9.13` surface.
 
 Requirements:
 

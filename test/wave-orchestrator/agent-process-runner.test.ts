@@ -57,4 +57,57 @@ describe("spawnAgentProcessRunner", () => {
     });
     expect(fs.readFileSync(logPath, "utf8")).toContain("finished with code 0");
   });
+
+  it("derives a per-agent sticky key for detached launches", async () => {
+    const dir = makeTempDir();
+    const statusPath = path.join(dir, "status", "A1.status.json");
+    const logPath = path.join(dir, "logs", "A1.log");
+    const payloadPath = path.join(dir, "runner-payload.json");
+    const stickyPath = path.join(dir, "sticky.txt");
+
+    const result = spawnAgentProcessRunner({
+      payloadPath,
+      lane: "main",
+      waveNumber: 22,
+      attempt: 3,
+      agentId: "A1",
+      sessionName: "main-wave-22-3-A1",
+      statusPath,
+      logPath,
+      command: `printf '%s' "$LPM_AUTH_STICKY_KEY" > ${JSON.stringify(stickyPath)}; exit 0`,
+    });
+
+    expect(result.runnerPid).toBeGreaterThan(0);
+    expect(await waitForFile(statusPath)).toBe(true);
+    expect(await waitForFile(stickyPath)).toBe(true);
+    expect(fs.readFileSync(stickyPath, "utf8")).toBe("wave:main:22:3:A1");
+  });
+
+  it("preserves an explicit sticky key from the launch environment", async () => {
+    const dir = makeTempDir();
+    const statusPath = path.join(dir, "status", "A1.status.json");
+    const logPath = path.join(dir, "logs", "A1.log");
+    const payloadPath = path.join(dir, "runner-payload.json");
+    const stickyPath = path.join(dir, "sticky.txt");
+
+    const result = spawnAgentProcessRunner({
+      payloadPath,
+      lane: "main",
+      waveNumber: 22,
+      attempt: 1,
+      agentId: "A1",
+      sessionName: "main-wave-22-A1",
+      statusPath,
+      logPath,
+      env: {
+        LPM_AUTH_STICKY_KEY: "custom:sticky:key",
+      },
+      command: `printf '%s' "$LPM_AUTH_STICKY_KEY" > ${JSON.stringify(stickyPath)}; exit 0`,
+    });
+
+    expect(result.runnerPid).toBeGreaterThan(0);
+    expect(await waitForFile(statusPath)).toBe(true);
+    expect(await waitForFile(stickyPath)).toBe(true);
+    expect(fs.readFileSync(stickyPath, "utf8")).toBe("custom:sticky:key");
+  });
 });

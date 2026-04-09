@@ -97,6 +97,7 @@ import {
   markWaveCompleted,
   parseWaveFiles,
   reconcileRunStateFromStatusFiles,
+  resolveCompletedWavesForValidation,
   resolveAutoNextWaveStart,
   validateWaveRuntimeMixAssignments,
   validateWaveComponentMatrixCurrentLevels,
@@ -881,7 +882,7 @@ export async function runLauncherCli(argv) {
       terminalSurface: options.terminalSurface,
     });
     const context7BundleIndex = loadContext7BundleIndex(lanePaths.context7BundleIndexPath);
-    const allWaves = parseWaveFiles(lanePaths.wavesDir, { laneProfile: lanePaths.laneProfile })
+    const parsedWaves = parseWaveFiles(lanePaths.wavesDir, { laneProfile: lanePaths.laneProfile })
       .map((wave) =>
         applyExecutorSelectionsToWave(wave, {
           laneProfile: lanePaths.laneProfile,
@@ -901,8 +902,34 @@ export async function runLauncherCli(argv) {
             ...resolveWaveRoleBindings(waveWithContext7, lanePaths, waveWithContext7.agents),
           };
         },
-      )
-      .map((wave) => validateWaveDefinition(wave, { laneProfile: lanePaths.laneProfile }));
+      );
+    // Read completed waves before validation so we can skip stale-promotion
+    // checks for waves that already ran, including waves recoverable from
+    // status files when run-state lags behind after a restart.
+    const preValidationCompletedWaves = new Set(
+      resolveCompletedWavesForValidation(
+        parsedWaves,
+        options.runStatePath,
+        lanePaths.statusDir,
+        {
+          logsDir: lanePaths.logsDir,
+          coordinationDir: lanePaths.coordinationDir,
+          contQaAgentId: lanePaths.contQaAgentId,
+          contEvalAgentId: lanePaths.contEvalAgentId,
+          integrationAgentId: lanePaths.integrationAgentId,
+          documentationAgentId: lanePaths.documentationAgentId,
+          requireExitContractsFromWave: lanePaths.requireExitContractsFromWave,
+          requireIntegrationStewardFromWave: lanePaths.requireIntegrationStewardFromWave,
+          requireComponentPromotionsFromWave: lanePaths.requireComponentPromotionsFromWave,
+          laneProfile: lanePaths.laneProfile,
+        },
+      ),
+    );
+    const allWaves = parsedWaves
+      .map((wave) => validateWaveDefinition(wave, {
+        laneProfile: lanePaths.laneProfile,
+        completedWaves: preValidationCompletedWaves,
+      }));
     const reconciliation = reconcileRunStateFromStatusFiles(
       allWaves,
       options.runStatePath,

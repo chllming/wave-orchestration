@@ -23,7 +23,7 @@ That packaged endpoint is for the default metadata-reporting surface. The owned-
 
 ### Packaged Default Endpoint
 
-This is the release default in `@chllming/wave-orchestration@0.9.12`.
+This is the release default in `@chllming/wave-orchestration@0.9.13`.
 
 - receives local-first telemetry uploads
 - supports normal run and benchmark query surfaces

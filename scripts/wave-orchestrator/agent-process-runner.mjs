@@ -88,6 +88,29 @@ function terminalDispositionForOutcome(code, signal) {
   return Number(code) === 0 ? "completed" : "failed";
 }
 
+function sanitizeStickyKeySegment(value, fallback) {
+  const trimmed = String(value ?? "").trim();
+  if (!trimmed) {
+    return fallback;
+  }
+  return trimmed.replace(/[^a-zA-Z0-9:_-]/g, "-");
+}
+
+function resolveAgentStickyKey(payload) {
+  const explicitKey = String(payload?.env?.LPM_AUTH_STICKY_KEY || "").trim();
+  if (explicitKey) {
+    return explicitKey;
+  }
+  const lane = sanitizeStickyKeySegment(payload?.lane, "lane");
+  const wave = sanitizeStickyKeySegment(payload?.waveNumber, "wave");
+  const attempt = sanitizeStickyKeySegment(payload?.attempt, "attempt");
+  const agentId = sanitizeStickyKeySegment(
+    payload?.agentId || payload?.sessionName || payload?.runId,
+    "agent",
+  );
+  return `wave:${lane}:${wave}:${attempt}:${agentId}`;
+}
+
 export async function terminateAgentProcessRuntime(runtimeRecord, { graceMs = 1000 } = {}) {
   const pgid = parsePositiveInt(runtimeRecord?.pgid, null);
   const candidatePid = parsePositiveInt(
@@ -235,6 +258,7 @@ async function runAgentProcessRunner(payloadFile) {
       ...(payload.env && typeof payload.env === "object" ? payload.env : {}),
       WAVE_ORCHESTRATOR_ID: String(payload.orchestratorId || ""),
       WAVE_EXECUTOR_MODE: String(payload.executorId || ""),
+      LPM_AUTH_STICKY_KEY: resolveAgentStickyKey(payload),
     },
   });
   const executorPid = parsePositiveInt(child.pid, null);
