@@ -430,6 +430,9 @@ function buildIntegrationEvidence({
     ) {
       const validation = validateImplementationSummary(agent, summary);
       if (!validation.ok) {
+        if (validation.failureClass === "transport-failure" && validation.eligibleForAdjudication) {
+          continue;
+        }
         const entry = summarizeGap(agent.agentId, validation.detail, "Implementation validation failed.");
         if (["missing-doc-delta", "doc-impact-gap", "invalid-doc-delta-format"].includes(validation.statusCode)) {
           docGapEntries.push(entry);

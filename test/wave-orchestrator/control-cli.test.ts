@@ -886,6 +886,9 @@ describe("wave control CLI", () => {
     );
     expect(jsonResult.status).toBe(0);
     expect(JSON.parse(jsonResult.stdout)).toMatchObject({
+      executionState: "active",
+      closureState: "blocked",
+      controllerState: "active",
       supervisor: {
         runId: "run-1",
         status: "running",
@@ -922,7 +925,66 @@ describe("wave control CLI", () => {
     expect(textResult.status).toBe(0);
     expect(textResult.stdout).toContain("supervisor=launcher-lost-agents-running run_id=run-1");
     expect(textResult.stdout).toContain("supervisor-backend=process recovery=degraded resume=wait-for-live-agents");
+    expect(textResult.stdout).toContain("execution=active closure=blocked controller=active");
     expect(textResult.stdout).toContain("forwarded-closure-gaps:");
     expect(textResult.stdout).toContain("security-review agent=A7");
+  });
+
+  it("reads persisted closure adjudication artifacts through control adjudication get", () => {
+    const repoDir = makeTempDir();
+    writeJson(path.join(repoDir, "package.json"), { name: "fixture-repo", private: true });
+
+    expect(runWaveCli(["init"], repoDir).status).toBe(0);
+
+    writeJson(
+      path.join(
+        repoDir,
+        ".tmp",
+        "main-wave-launcher",
+        "closure",
+        "wave-0",
+        "attempt-2",
+        "A1.json",
+      ),
+      {
+        schemaVersion: 1,
+        kind: "wave-closure-adjudication",
+        lane: "main",
+        wave: 0,
+        attempt: 2,
+        agentId: "A1",
+        status: "ambiguous",
+        failureClass: "transport-failure",
+        reason: "blocking-coordination",
+        detail: "Blocking follow-up remains open.",
+        evidence: [{ kind: "exit-code", value: 0 }],
+        synthesizedSignals: [
+          "[wave-proof] completion=integrated durability=durable proof=integration state=met",
+        ],
+        createdAt: "2026-04-10T00:00:00.000Z",
+      },
+    );
+
+    const result = runWaveCli(
+      ["control", "adjudication", "get", "--lane", "main", "--wave", "0", "--json"],
+      repoDir,
+    );
+
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      lane: "main",
+      wave: 0,
+      adjudications: [
+        expect.objectContaining({
+          lane: "main",
+          wave: 0,
+          attempt: 2,
+          agentId: "A1",
+          status: "ambiguous",
+          failureClass: "transport-failure",
+          reason: "blocking-coordination",
+        }),
+      ],
+    });
   });
 });

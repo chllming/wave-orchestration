@@ -66,6 +66,8 @@ The runtime writes several different artifacts, but they do different jobs:
   `.tmp/<lane>-wave-launcher/security/wave-<n>-corridor.json`
 - wave dashboard:
   `.tmp/<lane>-wave-launcher/dashboards/wave-<n>.json`
+- closure adjudication artifacts:
+  `.tmp/<lane>-wave-launcher/closure/wave-<n>/attempt-<a>/<agent>.json`
 - run-state:
   `.tmp/<lane>-wave-launcher/run-state.json`
 
@@ -74,6 +76,17 @@ The important rule is that decisions come from the canonical authority set: wave
 That control-plane log also carries observed `wave_run`, `attempt`, and `agent_run` lifecycle facts from `session-supervisor.mjs`. When human feedback or escalation remains open, the reducer materializes the wave as `clarifying` with blocked `waveState` instead of flattening it into generic progress.
 
 Live waves now keep refreshing that derived state while agents are still running. Shared summaries, inboxes, dashboard coordination metrics, and clarification routing are not only recomputed at attempt boundaries; they are also refreshed during active wave execution so stale clarification and acknowledgement timing is machine-visible before the attempt ends.
+
+Wave projections also separate three different operator questions:
+
+- `executionState`
+  Is anything still actively running for this wave or agent?
+- `closureState`
+  Is closure still evaluating, blocked, awaiting adjudication, passed, or failed?
+- `controllerState`
+  Is the controller active, idle, stale, or only carrying a persisted relaunch plan?
+
+That triplet is additive. Legacy top-level `status`, `phase`, and per-agent `state` remain available for compatibility.
 
 ## What Agents Should Use
 
@@ -159,6 +172,8 @@ For implementation agents with an exit contract, closure validates:
 - declared `### Proof artifacts`
 
 Deliverables and proof artifacts are local ownership proof. They do not replace cross-agent follow-up.
+
+When implementation closure fails only because a transport-level marker is missing or malformed, Wave can now hold that failure in deterministic adjudication instead of immediately turning it into a relaunch. Adjudication is only eligible for transport-only proof failures with exit `0`, landed deliverables, required proof artifacts, a valid result envelope, and no explicit negative semantic gap. The persisted adjudication artifact records the evidence used for that decision so operators can inspect it later through `wave control adjudication get`.
 
 That distinction matters:
 

@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  readClosureAdjudication,
   normalizeGlobalDashboardState,
   normalizeManifest,
   normalizeWaveDashboardState,
@@ -13,6 +14,7 @@ import {
   readRetryOverride,
   readWaveControlDeliveryState,
   writeAssignmentSnapshot,
+  writeClosureAdjudication,
   writeDependencySnapshot,
   writeProofRegistry,
   writeRelaunchPlan,
@@ -52,13 +54,13 @@ describe("artifact schemas", () => {
       source: "docs/**/*",
     });
     expect(normalizeGlobalDashboardState({ lane: "main", status: "running" })).toMatchObject({
-      schemaVersion: 1,
+      schemaVersion: 2,
       kind: "global-dashboard",
       lane: "main",
       status: "running",
     });
     expect(normalizeWaveDashboardState({ wave: 3, status: "completed" })).toMatchObject({
-      schemaVersion: 1,
+      schemaVersion: 2,
       kind: "wave-dashboard",
       wave: 3,
       status: "completed",
@@ -73,7 +75,7 @@ describe("artifact schemas", () => {
         lane: "main",
       }),
     ).toMatchObject({
-      schemaVersion: 1,
+      schemaVersion: 2,
       kind: "global-dashboard",
       lane: "main",
     });
@@ -84,7 +86,7 @@ describe("artifact schemas", () => {
         wave: 8,
       }),
     ).toMatchObject({
-      schemaVersion: 1,
+      schemaVersion: 2,
       kind: "wave-dashboard",
       wave: 8,
     });
@@ -189,6 +191,48 @@ describe("artifact schemas", () => {
       wave: 9,
       attempt: 2,
       selectedAgentIds: ["A1"],
+    });
+  });
+
+  it("writes and reads closure adjudication artifacts", () => {
+    const dir = makeTempDir();
+    const filePath = path.join(dir, "closure-adjudication.json");
+    writeClosureAdjudication(
+      filePath,
+      {
+        lane: "main",
+        wave: 2,
+        attempt: 3,
+        agentId: "A1",
+        status: "ambiguous",
+        failureClass: "transport-failure",
+        reason: "blocking-coordination",
+        detail: "Blocking coordination still needs deterministic follow-up.",
+        evidence: [{ kind: "exit-code", value: 0 }],
+        synthesizedSignals: ["[wave-proof] completion=integrated durability=durable proof=integration state=met"],
+      },
+      { lane: "main", wave: 2, attempt: 3, agentId: "A1" },
+    );
+
+    expect(readJson(filePath)).toMatchObject({
+      schemaVersion: 1,
+      kind: "wave-closure-adjudication",
+      lane: "main",
+      wave: 2,
+      attempt: 3,
+      agentId: "A1",
+      status: "ambiguous",
+      failureClass: "transport-failure",
+      reason: "blocking-coordination",
+      evidence: [{ kind: "exit-code", value: 0 }],
+    });
+    expect(readClosureAdjudication(filePath, { lane: "main", wave: 2 })).toMatchObject({
+      lane: "main",
+      wave: 2,
+      attempt: 3,
+      agentId: "A1",
+      status: "ambiguous",
+      failureClass: "transport-failure",
     });
   });
 

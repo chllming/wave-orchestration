@@ -168,6 +168,8 @@ wave control status --project <id> --lane <lane> --wave <n> [--agent <id>] [--ru
 
 The JSON payload now includes:
 
+- `executionState`, `closureState`, `controllerState`
+  Additive top-level status triplet that separates live execution, closure health, and controller intent.
 - `signals.wave`
   Versioned wave-level signal state for wrappers and external operators.
 - `signals.agents`
@@ -176,6 +178,8 @@ The JSON payload now includes:
   The most relevant lane-scoped supervisor run for this wave, including degraded states such as `launcher-lost-agents-running`, recovery fields such as `sessionBackend`, `recoveryState`, and `resumeAction`, plus any recorded per-agent runtime summary.
 - `forwardedClosureGaps`
   Earliest-first forwarded `wave-proof-gap` records from the relaunch plan, including the stage key, originating agent, attempt, detail, and downstream closure targets.
+
+Each entry in `logicalAgents[]` also carries additive `executionState` and `closureState` fields. The existing `state` field remains for compatibility.
 
 Starter repos also include `scripts/wave-status.sh` and `scripts/wave-watch.sh` as thin readers over this JSON payload. They use exit `0` for completed, `20` for input-required, `40` for failed, and `30` from `wave-watch.sh --until-change` when the signal changed but the wave stayed active. For the full wrapper contract, read [../guides/signal-wrappers.md](../guides/signal-wrappers.md).
 
@@ -187,6 +191,16 @@ Inspect and deliver the local Wave Control event queue.
 wave control telemetry status --project <id> --lane <lane> [--run <id>] [--json]
 wave control telemetry flush  --project <id> --lane <lane> [--run <id>] [--json]
 ```
+
+### wave control adjudication
+
+Read persisted closure adjudication artifacts for transport-only implementation failures that were held out of immediate relaunch.
+
+```
+wave control adjudication get --project <id> --lane <lane> --wave <n> [--agent <id>] [--json]
+```
+
+The JSON payload returns `adjudications[]`, including adjudication `status`, `failureClass`, `reason`, captured evidence, and any synthesized canonical signals.
 
 ### wave control task
 
@@ -326,6 +340,24 @@ wave control proof revoke \
   --project <id> --lane <lane> --wave <n> --id <bundle-id> \
   [--operator <name>] [--detail "<text>"] [--json]
 ```
+
+## wave signal
+
+Emit canonical machine-readable closure markers without hand-typing them.
+
+```
+wave signal proof --completion <level> --durability <level> --proof <level> --state <met|complete|gap> [--detail <text>] [--json] [--append-file <path>]
+wave signal doc-delta --state <none|owned|shared-plan> [--path <file> ...] [--detail <text>] [--json] [--append-file <path>]
+wave signal component --id <component> --level <level> --state <met|complete|gap> [--detail <text>] [--json] [--append-file <path>]
+wave signal integration --state <ready-for-doc-closure|needs-more-work> --claims <n> --conflicts <n> --blockers <n> [--detail <text>] [--json] [--append-file <path>]
+wave signal doc-closure --state <closed|no-change|delta> [--path <file> ...] [--detail <text>] [--json] [--append-file <path>]
+```
+
+Notes:
+
+- `complete` is accepted for proof and component state and is normalized to `met`.
+- `--append-file` appends the canonical emitted marker line to an existing file, which is useful for wrappers and local agent logs.
+- `--json` returns the emitted line plus the append target for wrapper-friendly automation.
 
 ## wave coord
 

@@ -57,6 +57,11 @@ import {
   evaluateDocumentationAutoClosure,
   evaluateInferredIntegrationClosure,
 } from "./closure-policy.mjs";
+import {
+  evaluateClosureAdjudication,
+  persistClosureAdjudication,
+  closureAdjudicationPath,
+} from "./closure-adjudicator.mjs";
 
 function contradictionList(value) {
   if (value instanceof Map) {
@@ -139,6 +144,34 @@ function validateEnvelopeForRun(runInfo, envelope, options = {}) {
     errors: validation.errors || [],
     detail: validation.valid ? null : validation.errors.join(" "),
     envelope: validation.valid ? envelope : null,
+  };
+}
+
+function adjudicatedGateResult(validation, runInfo, summary, adjudication, adjudicationPathValue = null) {
+  if (adjudication.status === "pass") {
+    return {
+      ok: true,
+      agentId: runInfo.agent.agentId,
+      statusCode: validation.statusCode,
+      detail: adjudication.detail,
+      logPath: summary?.logPath || path.relative(REPO_ROOT, runInfo.logPath),
+      adjudicated: true,
+      adjudicationStatus: adjudication.status,
+      adjudicationArtifactPath: adjudicationPathValue ? path.relative(REPO_ROOT, adjudicationPathValue) : null,
+      failureClass: validation.failureClass || null,
+    };
+  }
+  return {
+    ok: false,
+    agentId: runInfo.agent.agentId,
+    statusCode: adjudication.status === "ambiguous" ? "awaiting-adjudication" : validation.statusCode,
+    detail: adjudication.detail || validation.detail,
+    logPath: summary?.logPath || path.relative(REPO_ROOT, runInfo.logPath),
+    adjudicated: true,
+    adjudicationStatus: adjudication.status,
+    adjudicationArtifactPath: adjudicationPathValue ? path.relative(REPO_ROOT, adjudicationPathValue) : null,
+    failureClass: validation.failureClass || null,
+    eligibleForAdjudication: validation.eligibleForAdjudication === true,
   };
 }
 
@@ -612,13 +645,14 @@ export function readWaveImplementationGate(wave, agentRuns, options = {}) {
         logPath: path.relative(REPO_ROOT, runInfo.logPath),
       };
     }
+    const statusRecord = runInfo?.statusPath ? readStatusRecordIfPresent(runInfo.statusPath) : null;
     const summary = envelopeResult.valid
       ? projectLegacySummaryFromEnvelope(
           envelopeResult.envelope,
           buildEnvelopeReadOptions(
             runInfo,
             wave,
-            runInfo?.statusPath ? readStatusRecordIfPresent(runInfo.statusPath) : null,
+            statusRecord,
             resolveRunReportPath(wave, runInfo, options),
           ),
         )
@@ -628,12 +662,45 @@ export function readWaveImplementationGate(wave, agentRuns, options = {}) {
       });
     const validation = validateImplementationSummary(runInfo.agent, summary);
     if (!validation.ok) {
+      if (validation.eligibleForAdjudication) {
+        const adjudication = evaluateClosureAdjudication({
+          wave,
+          lanePaths: options.lanePaths || null,
+          gate: validation,
+          summary,
+          derivedState: options.derivedState || null,
+          agentRun: runInfo,
+          envelope: envelopeResult.valid ? envelopeResult.envelope : null,
+        });
+        let adjudicationArtifactPath = null;
+        if (options.lanePaths?.statusDir) {
+          const persisted = persistClosureAdjudication({
+            lanePaths: options.lanePaths,
+            waveNumber: wave.wave,
+            attempt: statusRecord?.attempt || envelopeResult.envelope?.attempt || 1,
+            agentId: runInfo.agent.agentId,
+            payload: {
+              status: adjudication.status,
+              failureClass: validation.failureClass,
+              reason: adjudication.reason,
+              detail: adjudication.detail,
+              evidence: adjudication.evidence,
+              synthesizedSignals: adjudication.synthesizedSignals,
+            },
+          });
+          adjudicationArtifactPath = persisted.filePath;
+        }
+        return adjudicatedGateResult(validation, runInfo, summary, adjudication, adjudicationArtifactPath);
+      }
       return {
         ok: false,
         agentId: runInfo.agent.agentId,
         statusCode: validation.statusCode,
         detail: validation.detail,
         logPath: summary?.logPath || path.relative(REPO_ROOT, runInfo.logPath),
+        failureClass: validation.failureClass || null,
+        eligibleForAdjudication: validation.eligibleForAdjudication === true,
+        adjudicationHint: validation.adjudicationHint || null,
       };
     }
   }
@@ -1333,12 +1400,37 @@ export function readWaveImplementationGatePure(wave, agentResults, options = {})
     const summary = agentResults?.[agent.agentId] || null;
     const validation = validateImplementationSummary(agent, summary);
     if (!validation.ok) {
+      if (validation.eligibleForAdjudication) {
+        const adjudication = evaluateClosureAdjudication({
+          wave,
+          lanePaths: options.lanePaths || null,
+          gate: validation,
+          summary,
+          derivedState: options.derivedState || null,
+          agentRun: { agent, logPath: summary?.logPath ? path.resolve(REPO_ROOT, summary.logPath) : null },
+          envelope: null,
+        });
+        return {
+          ok: adjudication.status === "pass",
+          agentId: agent.agentId,
+          statusCode: adjudication.status === "ambiguous" ? "awaiting-adjudication" : validation.statusCode,
+          detail: adjudication.detail || validation.detail,
+          logPath: summary?.logPath || null,
+          adjudicated: true,
+          adjudicationStatus: adjudication.status,
+          failureClass: validation.failureClass || null,
+          eligibleForAdjudication: true,
+        };
+      }
       return {
         ok: false,
         agentId: agent.agentId,
         statusCode: validation.statusCode,
         detail: validation.detail,
         logPath: summary?.logPath || null,
+        failureClass: validation.failureClass || null,
+        eligibleForAdjudication: validation.eligibleForAdjudication === true,
+        adjudicationHint: validation.adjudicationHint || null,
       };
     }
   }

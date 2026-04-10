@@ -39,9 +39,11 @@ import {
   registerWaveProofBundle,
   waveProofRegistryPath,
 } from "./proof-registry.mjs";
+import { closureAdjudicationPath } from "./closure-adjudicator.mjs";
 import { readWaveRelaunchPlanSnapshot, readWaveRetryOverride, resolveRetryOverrideAgentIds, writeWaveRetryOverride, clearWaveRetryOverride } from "./retry-control.mjs";
 import { flushWaveControlQueue, readWaveControlQueueState } from "./wave-control-client.mjs";
 import { readAgentExecutionSummary, validateImplementationSummary } from "./agent-state.mjs";
+import { readClosureAdjudication } from "./artifact-schemas.mjs";
 import { isContEvalReportOnlyAgent, isSecurityReviewAgentForLane } from "./role-helpers.mjs";
 import {
   buildSignalStatusLine,
@@ -68,6 +70,8 @@ function printUsage() {
   wave control proof get --project <id> --lane <lane> --wave <n> [--agent <id>] [--id <bundle-id>] [--json]
   wave control proof supersede --project <id> --lane <lane> --wave <n> --id <bundle-id> --agent <id> --artifact <path> [--artifact <path> ...] [options]
   wave control proof revoke --project <id> --lane <lane> --wave <n> --id <bundle-id> [--operator <name>] [--detail <text>] [--json]
+
+  wave control adjudication get --project <id> --lane <lane> --wave <n> [--agent <id>] [--json]
 `);
 }
 
@@ -135,7 +139,7 @@ function parseArgs(argv) {
       ? 1
       : surface === "telemetry"
         ? 2
-        : surface === "task" || surface === "rerun" || surface === "proof"
+        : surface === "task" || surface === "rerun" || surface === "proof" || surface === "adjudication"
           ? operation === "act"
             ? 3
             : 2
@@ -254,6 +258,42 @@ function coordinationLogPath(lanePaths, waveNumber) {
 
 function ledgerPath(lanePaths, waveNumber) {
   return path.join(lanePaths.ledgerDir, `wave-${waveNumber}.json`);
+}
+
+function readWaveClosureAdjudications(lanePaths, waveNumber, agentId = "") {
+  const samplePath = closureAdjudicationPath(lanePaths, waveNumber, 1, agentId || "sample");
+  const attemptsRoot = path.dirname(path.dirname(samplePath));
+  if (!fs.existsSync(attemptsRoot)) {
+    return [];
+  }
+  const adjudications = [];
+  for (const attemptEntry of fs.readdirSync(attemptsRoot, { withFileTypes: true })) {
+    if (!attemptEntry.isDirectory()) {
+      continue;
+    }
+    const attemptDir = path.join(attemptsRoot, attemptEntry.name);
+    for (const fileEntry of fs.readdirSync(attemptDir, { withFileTypes: true })) {
+      if (!fileEntry.isFile() || !fileEntry.name.endsWith(".json")) {
+        continue;
+      }
+      const filePath = path.join(attemptDir, fileEntry.name);
+      const payload = readClosureAdjudication(filePath, {
+        lane: lanePaths.lane,
+        wave: waveNumber,
+      });
+      if (!payload) {
+        continue;
+      }
+      if (agentId && payload.agentId !== agentId) {
+        continue;
+      }
+      adjudications.push({
+        ...payload,
+        filePath: path.relative(process.cwd(), filePath),
+      });
+    }
+  }
+  return adjudications.sort((left, right) => String(left.createdAt || "").localeCompare(String(right.createdAt || "")));
 }
 
 function targetAgentId(target) {
@@ -389,17 +429,26 @@ function buildLogicalAgents({
       (proofValidation.ok ||
         isSecurityReviewAgentForLane(agent, lanePaths) ||
         isContEvalReportOnlyAgent(agent, { contEvalAgentId: lanePaths.contEvalAgentId }));
+    const executionState =
+      selection?.source === "active-attempt" && selectedAgentIds.has(agent.agentId)
+        ? "active"
+        : Number.isInteger(statusRecord?.code)
+          ? "settled"
+          : "pending";
     let state = "planned";
     let reason = "";
+    let closureState = "pending";
     if (selection?.source === "active-attempt" && selectedAgentIds.has(agent.agentId)) {
       state = "working";
       reason = selection?.detail || "Selected by the active launcher attempt.";
+      closureState = "evaluating";
     } else if (selectedAgentIds.has(agent.agentId)) {
       state = "needs-rerun";
       reason =
         selection?.source === "relaunch-plan"
           ? "Selected by the persisted relaunch plan."
           : "Selected by active rerun request.";
+      closureState = "failed";
     } else if (completedPhase && satisfiedByStatus) {
       state = [
         lanePaths.contEvalAgentId || "E0",
@@ -410,9 +459,11 @@ function buildLogicalAgents({
         ? "closed"
         : "satisfied";
       reason = "Completed wave preserves the latest satisfied agent state.";
+      closureState = "passed";
     } else if (targetedBlockingTasks.some((task) => task.state === "working")) {
       state = "working";
       reason = targetedBlockingTasks.find((task) => task.state === "working")?.title || "";
+      closureState = "evaluating";
     } else if (targetedBlockingTasks.length > 0 || helperAssignment || dependency) {
       state = "blocked";
       reason =
@@ -421,6 +472,7 @@ function buildLogicalAgents({
         helperAssignment?.summary ||
         dependency?.summary ||
         "";
+      closureState = "blocked";
     } else if (satisfiedByStatus) {
       state = [
         lanePaths.contEvalAgentId || "E0",
@@ -431,14 +483,22 @@ function buildLogicalAgents({
         ? "closed"
         : "satisfied";
       reason = "Latest attempt satisfied current control-plane state.";
+      closureState = "passed";
+    } else if (proofValidation.eligibleForAdjudication && !proofValidation.ok) {
+      state = "awaiting-adjudication";
+      reason = proofValidation.detail || "Closure transport is awaiting deterministic adjudication.";
+      closureState = "awaiting-adjudication";
     } else if (Number.isInteger(statusRecord?.code) && statusRecord.code !== 0) {
       state = "needs-rerun";
       reason = `Latest attempt exited with code ${statusRecord.code}.`;
+      closureState = "failed";
     }
     return {
       agentId: agent.agentId,
       state,
       reason: reason || null,
+      executionState,
+      closureState,
       taskIds: targetedTasks.map((task) => task.taskId),
       selectedForRerun: selectedAgentIds.has(agent.agentId) && selection?.source !== "active-attempt",
       selectedForActiveAttempt: selection?.source === "active-attempt" && selectedAgentIds.has(agent.agentId),
@@ -451,6 +511,53 @@ function buildLogicalAgents({
         .map((entry) => entry.id),
     };
   });
+}
+
+function hasLiveSupervisorRuntime(supervisor) {
+  const runtimeSummary = Array.isArray(supervisor?.agentRuntimeSummary) ? supervisor.agentRuntimeSummary : [];
+  return runtimeSummary.some((runtime) => !["completed", "failed", "terminated"].includes(String(runtime?.terminalDisposition || "").trim().toLowerCase()));
+}
+
+function deriveExecutionState({ phase, activeAttempt, supervisor, logicalAgents }) {
+  if (activeAttempt || hasLiveSupervisorRuntime(supervisor)) {
+    return "active";
+  }
+  if (
+    isCompletedPhase(phase) ||
+    (Array.isArray(logicalAgents) && logicalAgents.some((agent) => agent.executionState === "settled" || agent.closureState === "passed"))
+  ) {
+    return "settled";
+  }
+  return "pending";
+}
+
+function deriveControllerState({ executionState, relaunchPlan, supervisor }) {
+  if (executionState === "active") {
+    return "active";
+  }
+  if (relaunchPlan?.selectedAgentIds?.length > 0) {
+    return "relaunch-planned";
+  }
+  if (["degraded", "failed"].includes(String(supervisor?.recoveryState || "").trim().toLowerCase())) {
+    return "stale";
+  }
+  return "idle";
+}
+
+function deriveClosureState({ executionState, blockingEdge, logicalAgents, relaunchPlan, phase }) {
+  if ((logicalAgents || []).some((agent) => agent.closureState === "awaiting-adjudication")) {
+    return "awaiting-adjudication";
+  }
+  if ((logicalAgents || []).some((agent) => agent.closureState === "failed") || blockingEdge || relaunchPlan?.selectedAgentIds?.length > 0) {
+    return "blocked";
+  }
+  if (isCompletedPhase(phase) || (logicalAgents || []).every((agent) => agent.closureState === "passed")) {
+    return "passed";
+  }
+  if (executionState === "active" || (logicalAgents || []).some((agent) => agent.closureState === "evaluating")) {
+    return "evaluating";
+  }
+  return "pending";
 }
 
 function selectionTargetsAgent(agentId, selectionSet) {
@@ -682,11 +789,29 @@ export function buildControlStatusPayload({ lanePaths, wave, agentId = "" }) {
     rerunRequest,
     relaunchPlan,
   });
-  return {
-    lane: lanePaths.lane,
-    wave: wave.wave,
+  const logicalAgents = buildLogicalAgents({
+    lanePaths,
+    wave,
+    tasks,
+    dependencySnapshot,
+    capabilityAssignments,
+    selection,
+    proofRegistry,
     phase,
-    agentId: agentId || null,
+  }).filter((agent) => !agentId || agent.agentId === agentId);
+  const executionState = deriveExecutionState({
+    phase,
+    activeAttempt: controlState.activeAttempt,
+    supervisor,
+    logicalAgents,
+  });
+  const controllerState = deriveControllerState({
+    executionState,
+    relaunchPlan,
+    supervisor,
+  });
+  const closureState = deriveClosureState({
+    executionState,
     blockingEdge: buildBlockingEdge({
       tasks,
       capabilityAssignments,
@@ -697,16 +822,30 @@ export function buildControlStatusPayload({ lanePaths, wave, agentId = "" }) {
       agentId,
       phase,
     }),
-    logicalAgents: buildLogicalAgents({
-      lanePaths,
-      wave,
-      tasks,
-      dependencySnapshot,
-      capabilityAssignments,
-      selection,
-      proofRegistry,
-      phase,
-    }).filter((agent) => !agentId || agent.agentId === agentId),
+    logicalAgents,
+    relaunchPlan,
+    phase,
+  });
+  const blockingEdge = buildBlockingEdge({
+    tasks,
+    capabilityAssignments,
+    dependencySnapshot,
+    activeAttempt: controlState.activeAttempt,
+    rerunRequest,
+    relaunchPlan,
+    agentId,
+    phase,
+  });
+  return {
+    lane: lanePaths.lane,
+    wave: wave.wave,
+    phase,
+    agentId: agentId || null,
+    executionState,
+    closureState,
+    controllerState,
+    blockingEdge,
+    logicalAgents,
     tasks,
     helperAssignments: (capabilityAssignments || []).filter(
       (assignment) => assignment.blocking && assignmentRelevantToAgent(assignment, agentId),
@@ -764,6 +903,9 @@ function printStatus(payload) {
     ? `${payload.blockingEdge.kind} ${payload.blockingEdge.id}: ${payload.blockingEdge.detail}`
     : "none";
   console.log(`lane=${payload.lane} wave=${payload.wave} phase=${payload.phase}`);
+  console.log(
+    `execution=${payload.executionState || "unknown"} closure=${payload.closureState || "unknown"} controller=${payload.controllerState || "unknown"}`,
+  );
   if (payload.signals?.wave) {
     console.log(buildSignalStatusLine(payload.signals.wave, payload));
   }
@@ -801,7 +943,9 @@ function printStatus(payload) {
   if (payload.logicalAgents.length > 0) {
     console.log("logical-agents:");
     for (const agent of payload.logicalAgents) {
-      console.log(`- ${agent.agentId} ${agent.state}${agent.reason ? `: ${agent.reason}` : ""}`);
+      console.log(
+        `- ${agent.agentId} ${agent.state} execution=${agent.executionState || "unknown"} closure=${agent.closureState || "unknown"}${agent.reason ? `: ${agent.reason}` : ""}`,
+      );
     }
   }
 }
@@ -991,8 +1135,8 @@ export async function runControlCli(argv) {
     printUsage();
     return;
   }
-  if (surface !== "status" && !["telemetry", "task", "rerun", "proof"].includes(surface)) {
-    throw new Error("Expected control surface: status | telemetry | task | rerun | proof");
+  if (surface !== "status" && !["telemetry", "task", "rerun", "adjudication", "proof"].includes(surface)) {
+    throw new Error("Expected control surface: status | telemetry | task | rerun | adjudication | proof");
   }
   if (options.runId) {
     const context = resolveRunContext(options.runId, options.project, options.lane);
@@ -1289,6 +1433,19 @@ export async function runControlCli(argv) {
       return;
     }
     throw new Error("Expected rerun operation: request | get | clear");
+  }
+
+  if (surface === "adjudication") {
+    if (operation !== "get") {
+      throw new Error("Expected adjudication operation: get");
+    }
+    const adjudications = readWaveClosureAdjudications(lanePaths, wave.wave, options.agent || "");
+    console.log(JSON.stringify({
+      lane: lanePaths.lane,
+      wave: wave.wave,
+      adjudications,
+    }, null, 2));
+    return;
   }
 
   if (surface === "proof") {

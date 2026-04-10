@@ -681,6 +681,8 @@ describe("validateImplementationSummary", () => {
     ).toMatchObject({
       ok: false,
       statusCode: "completion-gap",
+      failureClass: "semantic-failure",
+      eligibleForAdjudication: false,
     });
   });
 
@@ -748,6 +750,8 @@ describe("validateImplementationSummary", () => {
     ).toMatchObject({
       ok: false,
       statusCode: "missing-wave-component",
+      failureClass: "transport-failure",
+      eligibleForAdjudication: false,
     });
   });
 
@@ -781,6 +785,8 @@ describe("validateImplementationSummary", () => {
     ).toMatchObject({
       ok: false,
       statusCode: "missing-deliverable",
+      failureClass: "artifact-failure",
+      eligibleForAdjudication: false,
     });
   });
 

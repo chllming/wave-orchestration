@@ -28,6 +28,7 @@ function printHelp() {
   wave autonomous [autonomous options]
   wave feedback [feedback options]
   wave dashboard [dashboard options]
+  wave signal [signal helper options]
   wave local [local executor options]
   wave control [control-plane options]
   wave coord [coordination options]
@@ -106,6 +107,14 @@ if (["init", "upgrade", "self-update", "changelog", "doctor"].includes(subcomman
   try {
     const { runDashboardCli } = await import("./wave-orchestrator/dashboard-renderer.mjs");
     await runDashboardCli(rest);
+  } catch (error) {
+    console.error(`[wave] ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  }
+} else if (subcommand === "signal") {
+  try {
+    const { runSignalCli } = await import("./wave-orchestrator/signal-cli.mjs");
+    await runSignalCli(rest);
   } catch (error) {
     console.error(`[wave] ${error instanceof Error ? error.message : String(error)}`);
     process.exit(1);

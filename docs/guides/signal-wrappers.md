@@ -19,6 +19,14 @@ The resident orchestrator uses the same pattern with `resident-orchestrator` as 
 
 Signal snapshots are derived projections, not canonical decision state. They are machine-friendly wake surfaces built from `wave control status --json`.
 
+The underlying control payload now also separates:
+
+- `executionState`
+- `closureState`
+- `controllerState`
+
+Use the signal files for wake loops and thin shell automation. Use the status triplet when you need to distinguish active runtime work from closure-only blocking or stale persisted controller intent.
+
 ## Signal Kinds
 
 The shipped signal vocabulary is:
@@ -163,3 +171,5 @@ done
 ```
 
 Use `wave control status --json` directly when you need the full structured payload. Use the wrapper scripts when you want stable exit codes and a single machine-readable line.
+
+If an agent or wrapper needs to emit canonical closure markers itself, prefer `wave signal ...` over hand-typing marker syntax. That helper prints the canonical line, supports `--append-file`, and normalizes compatible aliases such as `state=complete` to the existing `met` semantics.
