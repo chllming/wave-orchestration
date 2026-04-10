@@ -2,9 +2,9 @@
 
 This roadmap is intentionally short and current. The older planner-foundation and ad-hoc-run phase list has been removed because that work no longer describes the actual shipping direction for this package.
 
-## Current Release: 0.9.13
+## Current Release: 0.9.15
 
-`0.9.13` is the current packaged surface.
+`0.9.15` is the current packaged surface.
 
 It includes:
 
@@ -13,6 +13,8 @@ It includes:
 - better behavior in constrained sandboxes such as LEAPclaw, OpenClaw, Nemoshell, and Docker-based operator environments
 - a safer `submit -> supervise -> status/wait -> attach` control path for long-running agentic orchestration
 - tighter supervisor recovery, progress journaling, and closure/retry correctness
+- deterministic adjudication for transport-only implementation closure failures
+- canonical `wave signal ...` helpers plus additive `executionState` / `closureState` / `controllerState` control projections
 - the current protected Wave Control model: Stack-authenticated browser access, Wave-managed approval states and provider grants, PATs, service tokens, encrypted per-user credentials, and runtime env leasing
 - owned Context7 and Corridor broker routes plus the Corridor-backed security context that can gate closure before integration
 
@@ -56,6 +58,6 @@ That line is expected to carry:
 
 For this repository, the practical sequence is:
 
-1. Ship `0.9.13` with the proof-alias, restart-safe validation, detached-runner credential-broker, and release-doc alignment fixes.
+1. Ship `0.9.15` with closure adjudication hardening, canonical signal helpers, richer control-state projections, and aligned release docs.
 2. Maintain this Node package for bug fixes, compatibility, operational hardening, and release-surface sync rather than a broad new feature wave.
 3. Move long-term execution investment to the LEAPclaw + Go + Temporal architecture and the Rust standalone runtime.

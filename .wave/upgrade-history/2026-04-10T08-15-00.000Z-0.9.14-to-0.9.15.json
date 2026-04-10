@@ -1,0 +1,49 @@
+{
+  "packageName": "@chllming/wave-orchestration",
+  "previousVersion": "0.9.14",
+  "currentVersion": "0.9.15",
+  "generatedAt": "2026-04-10T08:15:00.000Z",
+  "initMode": "adopt-existing",
+  "releases": [
+    {
+      "version": "0.9.15",
+      "date": "2026-04-10",
+      "summary": "Closure adjudication hardening, canonical signal helpers, and clearer execution-versus-closure control projections.",
+      "features": [
+        "Implementation closure now normalizes structured marker extraction behind one parser, preserving compatibility with wrapped, fenced, list-prefixed, and JSON-embedded marker output while surfacing richer diagnostics.",
+        "Transport-only implementation failures can now resolve through deterministic closure adjudication instead of always becoming generic rerun work, with persisted artifacts under `.tmp/<lane>-wave-launcher/closure/wave-<n>/attempt-<a>/<agent>.json`.",
+        "Operators can inspect those artifacts with `wave control adjudication get`, including adjudication `status`, `failureClass`, evidence, and synthesized canonical signals.",
+        "The new `wave signal` helper family emits canonical `proof`, `doc-delta`, `component`, `integration`, and `doc-closure` markers, supports `--append-file`, and keeps wrapper-driven marker output aligned with the shipped parser.",
+        "`wave control status` and dashboard payloads now expose additive `executionState`, `closureState`, and `controllerState` fields, plus per-agent `executionState` and `closureState`, so live runtime work is no longer conflated with blocked closure or stale controller intent.",
+        "The shipped versioned operating guide is now `docs/guides/recommendations-0.9.15.md`, and release docs, migration guidance, runtime-config docs, package-publishing docs, tracked install-state fixtures, and the release manifest now all point at the same `0.9.15` surface.",
+        "Planner migration guidance and the `planner-agentic` bundle placeholder remain part of the shipped current-surface docs so adopted repos still have one aligned upgrade target."
+      ],
+      "manualSteps": [
+        "Run `pnpm exec wave doctor --json` and `pnpm exec wave launch --lane main --dry-run --no-dashboard` after upgrading so the repo validates against the `0.9.15` release surface.",
+        "If your repo copied starter docs or runbooks, sync `README.md`, `docs/README.md`, `docs/plans/current-state.md`, `docs/plans/migration.md`, `docs/reference/coordination-and-closure.md`, `docs/reference/runtime-config/README.md`, `docs/reference/wave-control.md`, `docs/reference/package-publishing-flow.md`, and `docs/guides/recommendations-0.9.15.md` so local guidance matches the packaged release.",
+        "Update any repo-owned orchestrator prompts, shell wrappers, or custom marker emitters to prefer `wave signal ...` and to treat `awaiting-adjudication` as distinct from both pass and rerun-needed.",
+        "Teach any external operator dashboards or automation that consume `wave control status --json` to read `executionState`, `closureState`, and `controllerState` instead of flattening everything into the legacy top-level `status` field."
+      ],
+      "breaking": false
+    },
+    {
+      "version": "0.9.14",
+      "date": "2026-04-09",
+      "summary": "Registry carry-forward release of the 0.9.13 surface.",
+      "features": [
+        "Published `0.9.14` to npmjs after `0.9.13`, advancing the public package version while keeping the effective runtime and docs surface aligned with the previously shipped `0.9.13` content.",
+        "No intentional runtime-behavior delta beyond the package-version publication itself."
+      ],
+      "manualSteps": [],
+      "breaking": false
+    }
+  ],
+  "doctor": {
+    "ok": true,
+    "workspaceRoot": "/home/coder/wave-orchestration",
+    "packageName": "@chllming/wave-orchestration",
+    "packageVersion": "0.9.15",
+    "errors": [],
+    "warnings": []
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "packageName": "@chllming/wave-orchestration",
+  "previousVersion": "0.9.13",
+  "currentVersion": "0.9.14",
+  "generatedAt": "2026-04-09T14:50:02.486Z",
+  "initMode": "adopt-existing",
+  "releases": [
+    {
+      "version": "0.9.14",
+      "date": "2026-04-09",
+      "summary": "Registry carry-forward release of the 0.9.13 surface.",
+      "features": [
+        "Published `0.9.14` to npmjs after `0.9.13`, advancing the public package version while keeping the effective runtime and docs surface aligned with the previously shipped `0.9.13` content.",
+        "No intentional runtime-behavior delta beyond the package-version publication itself.",
+        "Planner migration guidance and the `planner-agentic` bundle placeholder remain part of the shipped current-surface docs so adopted repos still have one aligned upgrade target."
+      ],
+      "manualSteps": [
+        "If you upgraded to the published npmjs `0.9.14`, treat it operationally as the `0.9.13` surface and continue to validate with `pnpm exec wave doctor --json` plus `pnpm exec wave launch --lane main --dry-run --no-dashboard`."
+      ],
+      "breaking": false
+    },
+    {
+      "version": "0.9.13",
+      "date": "2026-04-09",
+      "summary": "Proof-marker alias compatibility, restart-safe completed-wave validation, and per-agent broker sticky keys for detached runners.",
+      "features": [
+        "Structured `[wave-proof]` and `[wave-component]` markers now accept `state=complete` and normalize it to the existing `met` semantics downstream, which keeps naturally phrased agent output from being rejected by proof parsing.",
+        "Launcher pre-validation now unions `run-state.json` with status-derived completed waves before stale component-promotion checks, so restart and resumed launches do not block on superseded historical promotions.",
+        "Detached process runners now derive a per-agent `LPM_AUTH_STICKY_KEY` by default and preserve explicit overrides, which prevents same-node broker-backed agents from colliding on one credential export."
+      ],
+      "manualSteps": [],
+      "breaking": false
+    }
+  ],
+  "doctor": {
+    "ok": true,
+    "workspaceRoot": "/home/coder/wave-orchestration",
+    "packageName": "@chllming/wave-orchestration",
+    "packageVersion": "0.9.14",
+    "errors": [],
+    "warnings": []
+  }
+}

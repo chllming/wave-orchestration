@@ -107,17 +107,17 @@ Wave is built to mitigate those failures with a canonical authority set, generat
 
 Current release:
 
-- `@chllming/wave-orchestration@0.9.13`
-- Release tag: [`v0.9.13`](https://github.com/chllming/agent-wave-orchestrator/releases/tag/v0.9.13)
+- `@chllming/wave-orchestration@0.9.15`
+- Release tag: [`v0.9.15`](https://github.com/chllming/agent-wave-orchestrator/releases/tag/v0.9.15)
 - Public install path: npmjs
 - Authenticated fallback: GitHub Packages
 
-Highlights in `0.9.13`:
+Highlights in `0.9.15`:
 
-- Structured proof and component markers now accept `state=complete` as a `met` alias, so agents that emit the more natural completion wording no longer fail proof parsing.
-- Pre-launch wave validation now treats status-recoverable completed waves as already completed, which prevents stale component-matrix promotion checks from blocking restart or resumed launches.
-- Detached process runners now derive a per-agent broker sticky key by default and preserve explicit overrides, so concurrent agents on the same node can lease provider credentials safely.
-- Release docs, migration guidance, runtime-config and closure references, the manifest, and the tracked install-state fixtures now all point at the `0.9.13` surface.
+- `wave signal ...` now emits canonical proof and closure markers for orchestrators, wrappers, and custom prompt scaffolds.
+- Transport-only implementation closure failures can now pause in deterministic adjudication instead of always being turned into a rerun.
+- `wave control status` now separates `executionState`, `closureState`, and `controllerState`, which makes active execution, blocked closure, and stale controller intent visible as different situations.
+- `wave control adjudication get` exposes persisted adjudication artifacts so operators can inspect evidence before choosing rerun or follow-up work.
 
 Requirements:
 

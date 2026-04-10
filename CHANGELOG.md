@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.9.15 - 2026-04-10
+
+### Added
+- Deterministic implementation-closure adjudication for transport-only failures, with persisted artifacts under `.tmp/<lane>-wave-launcher/closure/wave-<n>/attempt-<a>/<agent>.json`.
+- `wave control adjudication get` for operator inspection of adjudication status, evidence, and synthesized canonical signals.
+- `wave signal proof|doc-delta|component|integration|doc-closure` helper commands so orchestrators and wrappers can emit canonical markers without hand-typing syntax.
+- Additive `executionState`, `closureState`, and `controllerState` projections in control and dashboard payloads, plus per-agent `executionState` and `closureState`.
+- A new packaged operating guide at `docs/guides/recommendations-0.9.15.md`.
+
+### Changed
+- Structured signal ingestion is now normalized behind one parser, preserving compatibility with wrapped, fenced, list-prefixed, and JSON-embedded marker output while surfacing richer diagnostics.
+- Implementation validation still preserves legacy `statusCode` values, but now also classifies failures as `transport-failure`, `semantic-failure`, `artifact-failure`, or `state-failure`.
+- Transport-only implementation failures with coherent exit state now pause in `awaiting-adjudication` instead of automatically becoming relaunch work.
+- `wave control status` now separates live execution, closure, and controller intent, so stale relaunch plans or degraded supervisor state no longer look identical to active runtime work.
+- README, current-state, migration, runtime-config, coordination, CLI, signal-wrapper, package-publishing, manifest, and tracked install-state docs now align on the `0.9.15` surface.
+
+### Fixed
+- Proof, doc-delta, and component marker parsing now tolerates more real-world agent output shapes without weakening the required closure contract.
+- Live and replayable implementation gates now share the same adjudication rules instead of diverging between runtime and pure projection paths.
+- Retry handling no longer treats every missing or malformed closure marker as proof that the agent must rerun; true semantic or artifact failures still relaunch, but transport-only ambiguity stays inspectable first.
+
+## 0.9.14 - 2026-04-09
+
+### Changed
+- Published a `0.9.14` package cut to npmjs after `0.9.13` so the public registry advanced, while keeping the effective shipped runtime and docs surface aligned with `0.9.13`.
+- No intentional behavior change beyond the package-version publication itself; treat `0.9.14` as the registry-visible carry-forward of the `0.9.13` surface.
+
 ## 0.9.13 - 2026-04-09
 
 ### Added
