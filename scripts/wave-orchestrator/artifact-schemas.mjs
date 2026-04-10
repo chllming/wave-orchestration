@@ -5,9 +5,10 @@ import {
 } from "./wave-control-schema.mjs";
 
 export const MANIFEST_SCHEMA_VERSION = 1;
-export const GLOBAL_DASHBOARD_SCHEMA_VERSION = 1;
-export const WAVE_DASHBOARD_SCHEMA_VERSION = 1;
+export const GLOBAL_DASHBOARD_SCHEMA_VERSION = 2;
+export const WAVE_DASHBOARD_SCHEMA_VERSION = 2;
 export const RELAUNCH_PLAN_SCHEMA_VERSION = 1;
+export const CLOSURE_ADJUDICATION_SCHEMA_VERSION = 1;
 export const RETRY_OVERRIDE_SCHEMA_VERSION = 1;
 export const ASSIGNMENT_SNAPSHOT_SCHEMA_VERSION = 1;
 export const DEPENDENCY_SNAPSHOT_SCHEMA_VERSION = 1;
@@ -19,6 +20,7 @@ export const MANIFEST_KIND = "wave-manifest";
 export const GLOBAL_DASHBOARD_KIND = "global-dashboard";
 export const WAVE_DASHBOARD_KIND = "wave-dashboard";
 export const RELAUNCH_PLAN_KIND = "wave-relaunch-plan";
+export const CLOSURE_ADJUDICATION_KIND = "wave-closure-adjudication";
 export const RETRY_OVERRIDE_KIND = "wave-retry-override";
 export const ASSIGNMENT_SNAPSHOT_KIND = "wave-assignment-snapshot";
 export const DEPENDENCY_SNAPSHOT_KIND = "wave-dependency-snapshot";
@@ -125,6 +127,39 @@ export function readRelaunchPlan(filePath, defaults = {}) {
 
 export function writeRelaunchPlan(filePath, payload, defaults = {}) {
   const normalized = normalizeRelaunchPlan(payload, defaults);
+  writeJsonAtomic(filePath, normalized);
+  return normalized;
+}
+
+export function normalizeClosureAdjudication(payload, defaults = {}) {
+  const source = isPlainObject(payload) ? payload : {};
+  return {
+    schemaVersion: CLOSURE_ADJUDICATION_SCHEMA_VERSION,
+    kind: CLOSURE_ADJUDICATION_KIND,
+    lane: normalizeText(source.lane, normalizeText(defaults.lane, null)),
+    wave: normalizeInteger(source.wave, normalizeInteger(defaults.wave, null)),
+    attempt: normalizeInteger(source.attempt, normalizeInteger(defaults.attempt, null)),
+    agentId: normalizeText(source.agentId, normalizeText(defaults.agentId, null)),
+    status: normalizeText(source.status, normalizeText(defaults.status, null)),
+    failureClass: normalizeText(source.failureClass, normalizeText(defaults.failureClass, null)),
+    reason: normalizeText(source.reason, normalizeText(defaults.reason, null)),
+    detail: normalizeText(source.detail, normalizeText(defaults.detail, null)),
+    evidence: Array.isArray(source.evidence) ? cloneJson(source.evidence) : [],
+    synthesizedSignals: Array.isArray(source.synthesizedSignals) ? cloneJson(source.synthesizedSignals) : [],
+    createdAt: normalizeText(source.createdAt, normalizeText(defaults.createdAt, toIsoTimestamp())),
+  };
+}
+
+export function readClosureAdjudication(filePath, defaults = {}) {
+  const payload = readJsonOrNull(filePath);
+  if (!payload) {
+    return null;
+  }
+  return normalizeClosureAdjudication(payload, defaults);
+}
+
+export function writeClosureAdjudication(filePath, payload, defaults = {}) {
+  const normalized = normalizeClosureAdjudication(payload, defaults);
   writeJsonAtomic(filePath, normalized);
   return normalized;
 }

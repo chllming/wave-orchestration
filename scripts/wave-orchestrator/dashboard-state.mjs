@@ -124,6 +124,24 @@ export function normalizePhaseState(value) {
     : null;
 }
 
+function deriveWaveProjectionTriplet(status) {
+  const normalized = String(status || "").trim().toLowerCase();
+  if (["running", "retrying"].includes(normalized)) {
+    return { executionState: "active", closureState: "evaluating", controllerState: "active" };
+  }
+  if (normalized === "completed") {
+    return { executionState: "settled", closureState: "passed", controllerState: "idle" };
+  }
+  if (["blocked", "failed", "timed_out"].includes(normalized)) {
+    return {
+      executionState: "settled",
+      closureState: "blocked",
+      controllerState: normalized === "blocked" ? "relaunch-planned" : "stale",
+    };
+  }
+  return { executionState: "pending", closureState: "pending", controllerState: "idle" };
+}
+
 export function buildWaveDashboardState({
   lane,
   wave,
@@ -134,12 +152,16 @@ export function buildWaveDashboardState({
   agentRuns,
 }) {
   const now = toIsoTimestamp();
+  const projectionStates = deriveWaveProjectionTriplet("running");
   return normalizeWaveDashboardState({
     lane,
     wave,
     waveFile,
     runTag,
     status: "running",
+    executionState: projectionStates.executionState,
+    closureState: projectionStates.closureState,
+    controllerState: projectionStates.controllerState,
     attempt: 0,
     maxAttempts,
     startedAt: now,
@@ -192,10 +214,14 @@ export function buildGlobalDashboardState({
   feedbackRequestsDir,
 }) {
   const now = toIsoTimestamp();
+  const projectionStates = deriveWaveProjectionTriplet("running");
   return normalizeGlobalDashboardState({
     lane,
     runId: Math.random().toString(16).slice(2, 14),
     status: "running",
+    executionState: projectionStates.executionState,
+    closureState: projectionStates.closureState,
+    controllerState: projectionStates.controllerState,
     startedAt: now,
     updatedAt: now,
     options: {
@@ -223,6 +249,9 @@ export function buildGlobalDashboardState({
       wave: wave.wave,
       waveFile: wave.file,
       status: "pending",
+      executionState: "pending",
+      closureState: "pending",
+      controllerState: "idle",
       attempt: 0,
       maxAttempts: options.maxRetriesPerWave + 1,
       dashboardPath: path.relative(
@@ -260,8 +289,12 @@ export function buildGlobalDashboardState({
 
 export function writeWaveDashboard(dashboardPath, state) {
   ensureDirectory(path.dirname(dashboardPath));
+  const projectionStates = deriveWaveProjectionTriplet(state?.status);
   const normalized = normalizeWaveDashboardState({
     ...state,
+    executionState: state?.executionState || projectionStates.executionState,
+    closureState: state?.closureState || projectionStates.closureState,
+    controllerState: state?.controllerState || projectionStates.controllerState,
     updatedAt: toIsoTimestamp(),
   });
   Object.assign(state, normalized);
@@ -270,8 +303,12 @@ export function writeWaveDashboard(dashboardPath, state) {
 
 export function writeGlobalDashboard(globalDashboardPath, state) {
   ensureDirectory(path.dirname(globalDashboardPath));
+  const projectionStates = deriveWaveProjectionTriplet(state?.status);
   const normalized = normalizeGlobalDashboardState({
     ...state,
+    executionState: state?.executionState || projectionStates.executionState,
+    closureState: state?.closureState || projectionStates.closureState,
+    controllerState: state?.controllerState || projectionStates.controllerState,
     updatedAt: toIsoTimestamp(),
   });
   Object.assign(state, normalized);
@@ -316,6 +353,9 @@ export function syncGlobalWaveFromWaveDashboard(globalState, waveDashboard) {
     return;
   }
   entry.status = waveDashboard.status;
+  entry.executionState = waveDashboard.executionState || null;
+  entry.closureState = waveDashboard.closureState || null;
+  entry.controllerState = waveDashboard.controllerState || null;
   entry.attempt = waveDashboard.attempt;
   entry.startedAt = waveDashboard.startedAt;
   if (WAVE_TERMINAL_STATES.has(waveDashboard.status)) {

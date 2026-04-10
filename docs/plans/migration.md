@@ -1,6 +1,6 @@
 # Migration
 
-This page is the practical repo-upgrade guide for the current `0.9.13` surface.
+This page is the practical repo-upgrade guide for the current `0.9.15` surface.
 
 Use it when you are:
 
@@ -13,21 +13,51 @@ For the completed internal architecture cutover record, see [architecture-harden
 For the sandbox-specific long-running execution target, including async `submit/status/wait` semantics and daemon ownership goals, see [sandbox-end-state-architecture.md](./sandbox-end-state-architecture.md).
 
 
-## What `0.9.13` Changes
+## What `0.9.15` Changes
 
-The `0.9.13` surface keeps the existing proof-first runtime and adds three focused operational hardening fixes with no breaking changes.
+The `0.9.15` surface keeps the existing proof-first runtime and adds closure-hardening and operator-surface upgrades with no breaking CLI removals.
 
-- **Proof marker aliasing**: implementation and closure markers now accept `state=complete` as a compatibility alias for `state=met`, which keeps naturally phrased agent output from being rejected by the proof parser.
-- **Restart-safe validation**: launcher pre-validation now treats waves reconstructed as complete from status files the same way it treats run-state-complete waves, so resumed launches stop tripping stale component-promotion checks from older completed waves.
-- **Concurrent credential brokering**: detached process runners now derive a per-agent `LPM_AUTH_STICKY_KEY` and preserve explicit overrides, which prevents same-node agents from contending on one broker export by default.
+- **Normalized structured-signal parsing**: implementation closure now accepts wrapped, fenced, list-prefixed, and JSON-embedded marker output through one canonical parser, while still preserving strict marker requirements.
+- **Deterministic closure adjudication**: transport-only implementation failures can now resolve as `pass`, `rework-required`, or `awaiting-adjudication` instead of automatically becoming generic rerun work.
+- **Operator inspection path**: `wave control adjudication get` exposes the persisted adjudication artifact, including the captured evidence and any synthesized canonical signals.
+- **Canonical signal helpers**: `wave signal ...` prints valid closure markers for wrappers, orchestrators, and agent prompts, which reduces syntax drift in proof-heavy repos.
+- **Separated runtime projections**: `wave control status` and dashboard payloads now expose additive `executionState`, `closureState`, and `controllerState` fields so active execution, blocked closure, and stale controller intent are no longer conflated.
+- **Earlier hardening still included**: `state=complete` still normalizes to `met`, restart-safe validation still honors status-recoverable completed waves before stale promotion checks, and detached runners still derive per-agent broker sticky keys by default.
 
 There are no breaking changes. Existing repos can upgrade in place with `pnpm up @chllming/wave-orchestration` and `pnpm exec wave upgrade`.
 
-For the practical `0.9.13` operating stance after the upgrade, read [../guides/recommendations-0.9.13.md](../guides/recommendations-0.9.13.md).
+For the practical `0.9.15` operating stance after the upgrade, read [../guides/recommendations-0.9.15.md](../guides/recommendations-0.9.15.md).
+
+## What `0.9.14` Was
+
+`0.9.14` exists on npmjs and is the latest published registry version before this local `0.9.15` work, but the published tarball is effectively a carry-forward of the `0.9.13` runtime and docs surface.
+
+Practical meaning:
+
+- if your repo already upgraded to npmjs `0.9.14`, you did not miss a hidden runtime feature wave between `0.9.13` and this local `0.9.15` branch
+- treat `0.9.14` as the public registry bridge version
+- the real next operator-visible change after that bridge release is the `0.9.15` closure-hardening surface described above
+
+## Orchestrator Workflow Changes In `0.9.15`
+
+If you run Wave through a coding agent or resident orchestrator, these are the behavior changes that matter in day-to-day operation:
+
+- **Do not hand-type final markers when you can avoid it.**
+  Prefer `wave signal proof`, `wave signal doc-delta`, `wave signal component`, `wave signal integration`, and `wave signal doc-closure`. They emit canonical marker syntax, support `--append-file`, and keep wrappers aligned with the shipped parser.
+- **Read status as a triplet, not one coarse state.**
+  `executionState` answers whether anything is still live, `closureState` answers whether closure is pending/evaluating/awaiting-adjudication/blocked/passed/failed, and `controllerState` answers whether the controller is active, idle, stale, or only carrying a relaunch plan.
+- **Treat `awaiting-adjudication` as its own operational state.**
+  It means the slice may be closure-complete in substance, but the machine transport of one or more markers was insufficient. It is not the same thing as proof pass, and it is not automatic evidence that the slice needs a rerun.
+- **Inspect adjudication before triggering targeted recovery.**
+  Use `wave control adjudication get --lane <lane> --wave <n> [--agent <id>] --json` first. If the artifact shows a transport-only ambiguity with coherent evidence, prefer a narrow follow-up or marker repair over a broad rerun.
+- **Keep targeted recovery for real regressions.**
+  Semantic proof gaps, missing deliverables, missing proof artifacts, and runtime-state failures still belong in rerun or relaunch workflows. `0.9.15` narrows rerun intent; it does not weaken the proof contract.
+- **Update custom orchestrator prompts and wrappers.**
+  Any repo-owned orchestration prompt that tells agents to hand-compose `[wave-*]` markers should now prefer the `wave signal ...` helpers, and any wrapper that only reads `status` should be updated to consider the additive status triplet when it needs finer control decisions.
 
 ## What `0.9.4` Changes
 
-The current `0.9.13` surface keeps everything from `0.9.2` and adds the earlier gate-value and setup improvements with no breaking changes.
+The current `0.9.15` surface keeps everything from `0.9.2` and adds the earlier gate-value and setup improvements with no breaking changes.
 
 The practical changes are:
 
@@ -43,7 +73,7 @@ There are no breaking changes. Just upgrade with `pnpm up @chllming/wave-orchest
 
 If your repo uses wave-gate markers, you can now use `gap` for dimensions where the gap is documented and not an actionable blocker.
 
-For the practical `0.9.13` operating stance after the upgrade, read [../guides/recommendations-0.9.13.md](../guides/recommendations-0.9.13.md).
+For the practical `0.9.15` operating stance after the upgrade, read [../guides/recommendations-0.9.15.md](../guides/recommendations-0.9.15.md).
 
 ## What `0.9.2` Changes
 
@@ -62,7 +92,7 @@ The practical changes are:
 
 If your repo copied starter docs, shell automation, runbooks, or `wave.config.json` defaults, these are the areas most likely to need a sync before the current package cut.
 
-For a practical `0.9.13` operating stance after the upgrade, read [../guides/recommendations-0.9.13.md](../guides/recommendations-0.9.13.md).
+For a practical `0.9.15` operating stance after the upgrade, read [../guides/recommendations-0.9.15.md](../guides/recommendations-0.9.15.md).
 For the concrete operator setup in Nemoshell, Docker, and other sandboxed shells, also read [../guides/sandboxed-environments.md](../guides/sandboxed-environments.md).
 
 ## What `0.8.6` Changes
@@ -183,10 +213,12 @@ pnpm exec wave coord inbox --lane main --wave 0 --agent A1 --dry-run
 
 Use `pnpm exec wave dashboard --lane <lane> --attach current` or `--attach global` when you need to reattach to a tmux-backed dashboard after the upgrade.
 
-## `0.9.13` Release Model
+## `0.9.15` Release Model
 
-The current `0.9.13` surface combines these strands:
+The current `0.9.15` surface combines these strands:
 
+- the closure adjudication, canonical signal-helper, and control-projection split introduced in `0.9.15`
+- the proof-alias, restart-safe completed-wave validation, and detached-runner sticky-key hardening from `0.9.13`
 - the gap-value wave-gate fix and first-time setup UX improvements released in `0.9.4`
 - the detached process-runner and sandbox supervisor hardening released in `0.9.2`
 - the shipped `0.9.0` monorepo project support and project-aware runtime isolation
@@ -196,6 +228,29 @@ The current `0.9.13` surface combines these strands:
 - the current owned-deployment Wave Control surface: Stack-authenticated app access, provider grants, PATs, service tokens, encrypted per-user credentials, and runtime credential leasing
 - the Corridor-backed security surface: direct or brokered provider fetches, normalized per-wave artifacts, and closure gating before integration
 - the packaged recommendations guide, sandbox setup guide, and release-surface alignment follow-up that make the current docs describe that combined surface consistently
+
+### Closure adjudication and orchestrator-visible status splitting
+
+This is the main new operational layer in `0.9.15`.
+
+The runtime now:
+
+- classifies implementation failures as transport, semantic, artifact, or state failures without breaking the legacy `statusCode` surface
+- holds eligible transport-only failures in deterministic adjudication instead of forcing a rerun immediately
+- persists adjudication artifacts that operators can inspect with `wave control adjudication get`
+- exposes `executionState`, `closureState`, and `controllerState` so live runtime work is no longer confused with blocked closure or stale control intent
+- gives orchestrators and wrappers a canonical `wave signal ...` helper path for emitting final markers
+
+If your repo copied orchestrator prompts, shell wrappers, or control-surface consumers, this is the main sync set to apply from `0.9.15`:
+
+- `README.md`
+- `docs/README.md`
+- `docs/plans/current-state.md`
+- `docs/plans/migration.md`
+- `docs/guides/recommendations-0.9.15.md`
+- `docs/guides/signal-wrappers.md`
+- `docs/reference/cli-reference.md`
+- `docs/reference/coordination-and-closure.md`
 
 ### Sandbox-safe execution and lower-overhead live runs
 
@@ -295,7 +350,7 @@ The interactive `wave draft` flow supports `design` as a worker role and scaffol
 
 ## Version-Specific Upgrade Guidance
 
-## Upgrading From `0.8.5` To `0.9.13`
+## Upgrading From `0.8.5` To `0.9.15`
 
 This is the smallest upgrade, but it changes the live wait-loop contract for external automation and intentionally long-running agents.
 
@@ -332,7 +387,7 @@ If the repo copied starter surface, sync:
 - if the repo uses long-running watchers, confirm they can write the ack file where the prompt tells them to
 - reroute one targeted feedback or coordination request and confirm the resident signal version changes even when the signal kind stays the same
 
-## Upgrading From `0.8.4` To `0.9.13`
+## Upgrading From `0.8.4` To `0.9.15`
 
 ### What changed
 
@@ -370,7 +425,7 @@ If your repo copied starter config defaults, also sync the `designRolePromptPath
 - hybrid design stewards rejoin implementation when they explicitly own code
 - long-running prompts receive signal-state and ack paths when the repo uses the new waiting model
 
-## Upgrading From `0.9.9` To `0.9.13`
+## Upgrading From `0.9.9` To `0.9.15`
 
 Run-state history is now capped at 200 entries (20 per wave). Existing bloated run-state files will be automatically pruned on the next write. No config changes needed.
 
@@ -378,9 +433,9 @@ Run-state history is now capped at 200 entries (20 per wave). Existing bloated r
 
 Helper assignment barriers are now advisory in bootstrap gate mode. No config changes needed.
 
-## Upgrading From `0.8.3` To `0.9.13`
+## Upgrading From `0.8.3` To `0.9.15`
 
-Treat this as one move to the current `0.9.13` surface.
+Treat this as one move to the current `0.9.15` surface.
 
 ### What changed across that range
 
@@ -413,7 +468,7 @@ If your repo copied starter docs or skills, sync:
 - dry-run one design-steward wave if the repo wants the new authored surface
 - if the repo uses long-running watcher agents or shell automation, validate `scripts/wave-status.sh` and `scripts/wave-watch.sh` against a live or staged lane
 
-## Upgrading From `0.6.x` Or `0.7.x` To `0.9.13`
+## Upgrading From `0.6.x` Or `0.7.x` To `0.9.15`
 
 This is the main migration path for older adopted repos.
 
@@ -454,7 +509,7 @@ pnpm exec wave control proof get --lane main --wave 0 --json
 
 If the repo carries proof-first waves, verify that required proof artifacts still exist locally and not only in historical summaries.
 
-## Upgrading From `0.5.x` Or Earlier To `0.9.13`
+## Upgrading From `0.5.x` Or Earlier To `0.9.15`
 
 Do not treat this as a tiny patch bump.
 
@@ -564,4 +619,4 @@ For repos that depend on replay parity, replay at least:
 
 ## Summary
 
-The current `0.9.13` surface keeps the same authority-set and phase-engine architecture, ships both the design-role starter surface and the signal-driven long-running-agent starter surface, keeps the `0.8.7` policy and routing hardening, adds the recent proof-alias, restart-safe validation, and credential-broker concurrency fixes, and still packages the practical operator recommendations guide inside the release line. For most repos already on `0.8.x`, the upgrade is package bump plus validation. For older adopted repos, the real work is syncing repo-owned prompts, skills, planner corpus, wrapper scripts, and runbooks so they describe the runtime the package now ships.
+The current `0.9.15` surface keeps the same authority-set and phase-engine architecture, ships both the design-role starter surface and the signal-driven long-running-agent starter surface, keeps the `0.8.7` policy and routing hardening, adds the recent proof-alias, restart-safe validation, and credential-broker concurrency fixes, and still packages the practical operator recommendations guide inside the release line. For most repos already on `0.8.x`, the upgrade is package bump plus validation. For older adopted repos, the real work is syncing repo-owned prompts, skills, planner corpus, wrapper scripts, and runbooks so they describe the runtime the package now ships.

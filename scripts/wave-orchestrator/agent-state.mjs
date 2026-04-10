@@ -10,6 +10,7 @@ import {
   writeJsonAtomic,
 } from "./shared.mjs";
 import { resolveEvalTargetsAgainstCatalog } from "./evals.mjs";
+import { extractStructuredSignalPayload } from "./structured-signal-parser.mjs";
 
 export const EXIT_CONTRACT_COMPLETION_VALUES = ["contract", "integrated", "authoritative", "live"];
 export const EXIT_CONTRACT_DURABILITY_VALUES = ["none", "ephemeral", "durable"];
@@ -55,221 +56,6 @@ const WAVE_GAP_REGEX =
   /^\[wave-gap\]\s*kind=(architecture|integration|durability|ops|docs)\s*(?:detail=(.*))?$/gim;
 const WAVE_COMPONENT_REGEX =
   /^\[wave-component\]\s*component=([a-z0-9._-]+)\s+level=([a-z0-9._-]+)\s+state=(met|complete|gap)\s*(?:detail=(.*))?$/gim;
-const STRUCTURED_SIGNAL_LINE_REGEX = /^\[wave-[a-z0-9-]+(?:\]|\s|=|$).*$/i;
-const WRAPPED_STRUCTURED_SIGNAL_LINE_REGEX = /^`\[wave-[^`]+`$/;
-const STRUCTURED_SIGNAL_LIST_PREFIX_REGEX = /^(?:[-*+]|\d+\.)\s+/;
-
-const STRUCTURED_SIGNAL_KIND_BY_TAG = {
-  proof: "proof",
-  "doc-delta": "docDelta",
-  "doc-closure": "docClosure",
-  integration: "integration",
-  eval: "eval",
-  security: "security",
-  design: "design",
-  gate: "gate",
-  gap: "gap",
-  component: "component",
-};
-
-const STRUCTURED_SIGNAL_LINE_REGEX_BY_KIND = {
-  proof: new RegExp(WAVE_PROOF_REGEX.source, "i"),
-  docDelta: new RegExp(WAVE_DOC_DELTA_REGEX.source, "i"),
-  docClosure: new RegExp(WAVE_DOC_CLOSURE_REGEX.source, "i"),
-  integration: new RegExp(WAVE_INTEGRATION_REGEX.source, "i"),
-  eval: new RegExp(WAVE_EVAL_REGEX.source, "i"),
-  security: new RegExp(WAVE_SECURITY_REGEX.source, "i"),
-  design: new RegExp(WAVE_DESIGN_REGEX.source, "i"),
-  gate: new RegExp(WAVE_GATE_REGEX.source, "i"),
-  gap: new RegExp(WAVE_GAP_REGEX.source, "i"),
-  component: new RegExp(WAVE_COMPONENT_REGEX.source, "i"),
-};
-
-function buildEmptyStructuredSignalDiagnostics() {
-  return {
-    proof: { rawCount: 0, acceptedCount: 0, rejectedSamples: [] },
-    docDelta: { rawCount: 0, acceptedCount: 0, rejectedSamples: [] },
-    docClosure: { rawCount: 0, acceptedCount: 0, rejectedSamples: [] },
-    integration: { rawCount: 0, acceptedCount: 0, rejectedSamples: [] },
-    eval: { rawCount: 0, acceptedCount: 0, rejectedSamples: [] },
-    security: { rawCount: 0, acceptedCount: 0, rejectedSamples: [] },
-    design: { rawCount: 0, acceptedCount: 0, rejectedSamples: [] },
-    gate: { rawCount: 0, acceptedCount: 0, rejectedSamples: [] },
-    gap: { rawCount: 0, acceptedCount: 0, rejectedSamples: [] },
-    component: { rawCount: 0, acceptedCount: 0, rejectedSamples: [], seenComponentIds: [] },
-  };
-}
-
-function pushRejectedStructuredSignalSample(bucket, sample) {
-  if (!bucket || !sample || bucket.rejectedSamples.length >= 3) {
-    return;
-  }
-  bucket.rejectedSamples.push(sample);
-}
-
-function normalizeStructuredSignalLine(line) {
-  const trimmed = String(line || "").trim();
-  if (!trimmed) {
-    return null;
-  }
-  const withoutListPrefix = trimmed.replace(STRUCTURED_SIGNAL_LIST_PREFIX_REGEX, "").trim();
-  if (STRUCTURED_SIGNAL_LINE_REGEX.test(withoutListPrefix)) {
-    return withoutListPrefix;
-  }
-  if (WRAPPED_STRUCTURED_SIGNAL_LINE_REGEX.test(withoutListPrefix)) {
-    return withoutListPrefix.slice(1, -1).trim();
-  }
-  return null;
-}
-
-function parseStructuredSignalCandidate(line) {
-  const rawLine = String(line || "").trim();
-  if (!rawLine) {
-    return null;
-  }
-  const canonicalLine = normalizeStructuredSignalLine(rawLine);
-  if (!canonicalLine) {
-    return null;
-  }
-  const tagMatch = canonicalLine.match(/^\[wave-([a-z0-9-]+)(?:\]|\s|=|$)/i);
-  if (!tagMatch) {
-    return null;
-  }
-  const kind = STRUCTURED_SIGNAL_KIND_BY_TAG[String(tagMatch[1] || "").toLowerCase()] || null;
-  const componentIdMatch = canonicalLine.match(/\bcomponent=([a-z0-9._-]+)/i);
-  return {
-    rawLine,
-    canonicalLine,
-    kind,
-    componentId: componentIdMatch ? String(componentIdMatch[1] || "").trim() : null,
-  };
-}
-
-function appendParsedStructuredSignalCandidates(lines, candidates, { requireAll = false } = {}) {
-  const parsedCandidates = [];
-  for (const line of lines || []) {
-    const candidate = parseStructuredSignalCandidate(line);
-    if (candidate) {
-      parsedCandidates.push(candidate);
-      continue;
-    }
-    if (requireAll) {
-      return;
-    }
-  }
-  candidates.push(...parsedCandidates);
-}
-
-function collectEmbeddedStructuredSignalTexts(value, texts) {
-  if (!value || typeof value !== "object") {
-    return;
-  }
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      collectEmbeddedStructuredSignalTexts(item, texts);
-    }
-    return;
-  }
-  if (typeof value.text === "string") {
-    texts.push(value.text);
-  }
-  if (typeof value.aggregated_output === "string") {
-    texts.push(value.aggregated_output);
-  }
-  for (const nestedValue of Object.values(value)) {
-    if (nestedValue && typeof nestedValue === "object") {
-      collectEmbeddedStructuredSignalTexts(nestedValue, texts);
-    }
-  }
-}
-
-function extractEmbeddedStructuredSignalTextsFromJsonLine(line) {
-  const trimmed = String(line || "").trim();
-  if (!trimmed || !/^[{\[]/.test(trimmed)) {
-    return [];
-  }
-  try {
-    const payload = JSON.parse(trimmed);
-    const texts = [];
-    collectEmbeddedStructuredSignalTexts(payload, texts);
-    return texts.filter(Boolean);
-  } catch {
-    return [];
-  }
-}
-
-function collectStructuredSignalCandidates(text) {
-  if (!text) {
-    return [];
-  }
-  const candidates = [];
-  let fenceLines = null;
-  for (const rawLine of String(text || "").split(/\r?\n/)) {
-    const embeddedTexts = extractEmbeddedStructuredSignalTextsFromJsonLine(rawLine);
-    for (const embeddedText of embeddedTexts) {
-      candidates.push(...collectStructuredSignalCandidates(embeddedText));
-    }
-    const trimmed = rawLine.trim();
-    if (/^```/.test(trimmed)) {
-      if (fenceLines === null) {
-        fenceLines = [];
-        continue;
-      }
-      appendParsedStructuredSignalCandidates(fenceLines, candidates, { requireAll: true });
-      fenceLines = null;
-      continue;
-    }
-    if (fenceLines !== null) {
-      if (!trimmed) {
-        continue;
-      }
-      fenceLines.push(rawLine);
-      continue;
-    }
-    const candidate = parseStructuredSignalCandidate(rawLine);
-    if (candidate) {
-      candidates.push(candidate);
-    }
-  }
-  if (fenceLines !== null) {
-    appendParsedStructuredSignalCandidates(fenceLines, candidates);
-  }
-  return candidates;
-}
-
-function buildStructuredSignalDiagnostics(candidates) {
-  const diagnostics = buildEmptyStructuredSignalDiagnostics();
-  for (const candidate of candidates || []) {
-    if (!candidate?.kind || !diagnostics[candidate.kind]) {
-      continue;
-    }
-    const bucket = diagnostics[candidate.kind];
-    bucket.rawCount += 1;
-    if (candidate.kind === "component" && candidate.componentId) {
-      bucket.seenComponentIds.push(candidate.componentId);
-    }
-    const strictRegex = STRUCTURED_SIGNAL_LINE_REGEX_BY_KIND[candidate.kind];
-    if (strictRegex.test(candidate.canonicalLine)) {
-      bucket.acceptedCount += 1;
-      continue;
-    }
-    pushRejectedStructuredSignalSample(bucket, {
-      line: candidate.rawLine,
-      ...(candidate.kind === "component" && candidate.componentId ? { componentId: candidate.componentId } : {}),
-    });
-  }
-  diagnostics.component.seenComponentIds = Array.from(new Set(diagnostics.component.seenComponentIds)).sort();
-  return diagnostics;
-}
-
-function extractStructuredSignalPayload(text) {
-  const candidates = collectStructuredSignalCandidates(text);
-  return {
-    signalText: candidates.map((candidate) => candidate.canonicalLine).join("\n"),
-    diagnostics: buildStructuredSignalDiagnostics(candidates),
-  };
-}
-
 function cleanText(value) {
   return String(value || "").trim();
 }
@@ -712,6 +498,12 @@ function rejectedStructuredSignalLine(summary, key, predicate = null) {
   return cleanText(match?.line || "");
 }
 
+function rejectedStructuredSignalSample(summary, key, predicate = null) {
+  const bucket = structuredSignalBucket(summary, key);
+  const rejected = Array.isArray(bucket?.rejectedSamples) ? bucket.rejectedSamples : [];
+  return (typeof predicate === "function" ? rejected.find(predicate) : rejected[0]) || null;
+}
+
 function hasRejectedStructuredSignal(summary, key) {
   const bucket = structuredSignalBucket(summary, key);
   return Number(bucket?.rawCount || 0) > 0 && Number(bucket?.acceptedCount || 0) === 0;
@@ -731,80 +523,157 @@ function invalidStructuredSignalDetail(agentId, markerName, summary, key, extraD
   return appendTerminationHint(detailParts.join(" "), summary);
 }
 
+function buildValidationResult(ok, statusCode, detail, extras = {}) {
+  return {
+    ok,
+    statusCode,
+    detail,
+    failureClass: ok ? null : extras.failureClass || null,
+    eligibleForAdjudication: ok ? false : extras.eligibleForAdjudication === true,
+    adjudicationHint: ok ? null : extras.adjudicationHint || null,
+    ...extras,
+  };
+}
+
+function implementationTransportEligibility(agent, summary) {
+  const deliverables = Array.isArray(agent?.deliverables) ? agent.deliverables : [];
+  const deliverableState = new Map(
+    Array.isArray(summary?.deliverables)
+      ? summary.deliverables.map((deliverable) => [deliverable.path, deliverable])
+      : [],
+  );
+  const deliverablesPresent = deliverables.every((deliverablePath) => deliverableState.get(deliverablePath)?.exists === true);
+  const proofArtifacts = Array.isArray(agent?.proofArtifacts) ? agent.proofArtifacts : [];
+  const artifactState = new Map(
+    Array.isArray(summary?.proofArtifacts)
+      ? summary.proofArtifacts.map((artifact) => [artifact.path, artifact])
+      : [],
+  );
+  const proofArtifactsPresent = proofArtifacts
+    .filter((proofArtifact) => proofArtifactRequiredForAgent(agent, proofArtifact))
+    .every((proofArtifact) => artifactState.get(proofArtifact.path)?.exists === true);
+  const exitCodeZero = Number(summary?.exitCode) === 0;
+  return {
+    deliverablesPresent,
+    proofArtifactsPresent,
+    exitCodeZero,
+    eligibleForAdjudication: exitCodeZero && deliverablesPresent && proofArtifactsPresent,
+  };
+}
+
+function implementationInvalidMarkerEligibility(agent, summary, key, predicate = null) {
+  const transportEligibility = implementationTransportEligibility(agent, summary);
+  const sample = rejectedStructuredSignalSample(summary, key, predicate);
+  return {
+    ...transportEligibility,
+    rejectedSample: sample,
+    eligibleForAdjudication: transportEligibility.eligibleForAdjudication && Boolean(sample),
+  };
+}
+
 export function validateImplementationSummary(agent, summary) {
   const contract = normalizeExitContract(agent?.exitContract);
   if (!contract) {
-    return { ok: true, statusCode: "pass", detail: "No exit contract declared." };
+    return buildValidationResult(true, "pass", "No exit contract declared.");
   }
   if (!summary) {
-    return {
-      ok: false,
-      statusCode: "missing-summary",
-      detail: `Missing execution summary for ${agent.agentId}.`,
-    };
+    return buildValidationResult(false, "missing-summary", `Missing execution summary for ${agent.agentId}.`, {
+      failureClass: "state-failure",
+    });
   }
   if (!summary.proof) {
     if (hasRejectedStructuredSignal(summary, "proof")) {
-      return {
-        ok: false,
-        statusCode: "invalid-wave-proof-format",
-        detail: invalidStructuredSignalDetail(agent.agentId, "[wave-proof]", summary, "proof"),
-      };
+      const transportEligibility = implementationInvalidMarkerEligibility(agent, summary, "proof");
+      return buildValidationResult(
+        false,
+        "invalid-wave-proof-format",
+        invalidStructuredSignalDetail(agent.agentId, "[wave-proof]", summary, "proof"),
+        {
+          failureClass: "transport-failure",
+          eligibleForAdjudication: transportEligibility.eligibleForAdjudication,
+          adjudicationHint: transportEligibility.eligibleForAdjudication
+            ? "Malformed proof marker with exit 0 and landed artifacts is eligible for deterministic adjudication."
+            : null,
+        },
+      );
     }
-    return {
-      ok: false,
-      statusCode: "missing-wave-proof",
-      detail: appendTerminationHint(`Missing [wave-proof] marker for ${agent.agentId}.`, summary),
-    };
+    return buildValidationResult(
+      false,
+      "missing-wave-proof",
+      appendTerminationHint(`Missing [wave-proof] marker for ${agent.agentId}.`, summary),
+      {
+        failureClass: "transport-failure",
+        eligibleForAdjudication: false,
+        adjudicationHint: null,
+      },
+    );
   }
   if (summary.proof.state !== "met") {
-    return {
-      ok: false,
-      statusCode: "wave-proof-gap",
-      detail: `Agent ${agent.agentId} reported a proof gap${summary.proof.detail ? `: ${summary.proof.detail}` : "."}`,
-    };
+    return buildValidationResult(
+      false,
+      "wave-proof-gap",
+      `Agent ${agent.agentId} reported a proof gap${summary.proof.detail ? `: ${summary.proof.detail}` : "."}`,
+      { failureClass: "semantic-failure" },
+    );
   }
   if (!meetsOrExceeds(summary.proof.completion, contract.completion, COMPLETION_ORDER)) {
-    return {
-      ok: false,
-      statusCode: "completion-gap",
-      detail: `Agent ${agent.agentId} only proved ${summary.proof.completion}; exit contract requires ${contract.completion}.`,
-    };
+    return buildValidationResult(
+      false,
+      "completion-gap",
+      `Agent ${agent.agentId} only proved ${summary.proof.completion}; exit contract requires ${contract.completion}.`,
+      { failureClass: "semantic-failure" },
+    );
   }
   if (!meetsOrExceeds(summary.proof.durability, contract.durability, DURABILITY_ORDER)) {
-    return {
-      ok: false,
-      statusCode: "durability-gap",
-      detail: `Agent ${agent.agentId} only proved ${summary.proof.durability} durability; exit contract requires ${contract.durability}.`,
-    };
+    return buildValidationResult(
+      false,
+      "durability-gap",
+      `Agent ${agent.agentId} only proved ${summary.proof.durability} durability; exit contract requires ${contract.durability}.`,
+      { failureClass: "semantic-failure" },
+    );
   }
   if (!meetsOrExceeds(summary.proof.proof, contract.proof, PROOF_ORDER)) {
-    return {
-      ok: false,
-      statusCode: "proof-level-gap",
-      detail: `Agent ${agent.agentId} only proved ${summary.proof.proof}; exit contract requires ${contract.proof}.`,
-    };
+    return buildValidationResult(
+      false,
+      "proof-level-gap",
+      `Agent ${agent.agentId} only proved ${summary.proof.proof}; exit contract requires ${contract.proof}.`,
+      { failureClass: "semantic-failure" },
+    );
   }
   if (!summary.docDelta) {
     if (hasRejectedStructuredSignal(summary, "docDelta")) {
-      return {
-        ok: false,
-        statusCode: "invalid-doc-delta-format",
-        detail: invalidStructuredSignalDetail(agent.agentId, "[wave-doc-delta]", summary, "docDelta"),
-      };
+      const transportEligibility = implementationInvalidMarkerEligibility(agent, summary, "docDelta");
+      return buildValidationResult(
+        false,
+        "invalid-doc-delta-format",
+        invalidStructuredSignalDetail(agent.agentId, "[wave-doc-delta]", summary, "docDelta"),
+        {
+          failureClass: "transport-failure",
+          eligibleForAdjudication: transportEligibility.eligibleForAdjudication,
+          adjudicationHint: transportEligibility.eligibleForAdjudication
+            ? "Malformed doc-delta marker with exit 0 and landed artifacts is eligible for deterministic adjudication."
+            : null,
+        },
+      );
     }
-    return {
-      ok: false,
-      statusCode: "missing-doc-delta",
-      detail: appendTerminationHint(`Missing [wave-doc-delta] marker for ${agent.agentId}.`, summary),
-    };
+    return buildValidationResult(
+      false,
+      "missing-doc-delta",
+      appendTerminationHint(`Missing [wave-doc-delta] marker for ${agent.agentId}.`, summary),
+      {
+        failureClass: "transport-failure",
+        eligibleForAdjudication: false,
+        adjudicationHint: null,
+      },
+    );
   }
   if (!meetsOrExceeds(summary.docDelta.state, contract.docImpact, DOC_IMPACT_ORDER)) {
-    return {
-      ok: false,
-      statusCode: "doc-impact-gap",
-      detail: `Agent ${agent.agentId} only reported ${summary.docDelta.state} doc impact; exit contract requires ${contract.docImpact}.`,
-    };
+    return buildValidationResult(
+      false,
+      "doc-impact-gap",
+      `Agent ${agent.agentId} only reported ${summary.docDelta.state} doc impact; exit contract requires ${contract.docImpact}.`,
+      { failureClass: "semantic-failure" },
+    );
   }
   const ownedComponents = Array.isArray(agent?.components) ? agent.components : [];
   if (ownedComponents.length > 0) {
@@ -824,10 +693,16 @@ export function validateImplementationSummary(agent, summary) {
           Number(componentDiagnostics?.rawCount || 0) > 0 &&
           (seenComponentIds.has(componentId) || Number(componentDiagnostics?.acceptedCount || 0) === 0)
         ) {
-          return {
-            ok: false,
-            statusCode: "invalid-wave-component-format",
-            detail: invalidStructuredSignalDetail(
+          const transportEligibility = implementationInvalidMarkerEligibility(
+            agent,
+            summary,
+            "component",
+            (sample) => cleanText(sample?.componentId) === componentId,
+          );
+          return buildValidationResult(
+            false,
+            "invalid-wave-component-format",
+            invalidStructuredSignalDetail(
               agent.agentId,
               "[wave-component]",
               summary,
@@ -835,30 +710,43 @@ export function validateImplementationSummary(agent, summary) {
               `Expected a valid component marker for ${componentId}.`,
               (sample) => cleanText(sample?.componentId) === componentId,
             ),
-          };
+            {
+              failureClass: "transport-failure",
+              eligibleForAdjudication: transportEligibility.eligibleForAdjudication,
+              adjudicationHint: transportEligibility.eligibleForAdjudication
+                ? "Malformed component marker with exit 0 and landed artifacts is eligible for deterministic adjudication."
+                : null,
+            },
+          );
         }
-        return {
-          ok: false,
-          statusCode: "missing-wave-component",
-          detail: `Missing [wave-component] marker for ${agent.agentId} component ${componentId}.`,
-        };
+        return buildValidationResult(
+          false,
+          "missing-wave-component",
+          `Missing [wave-component] marker for ${agent.agentId} component ${componentId}.`,
+          {
+            failureClass: "transport-failure",
+            eligibleForAdjudication: false,
+            adjudicationHint: null,
+          },
+        );
       }
       const expectedLevel = agent?.componentTargets?.[componentId] || null;
       if (expectedLevel && marker.level !== expectedLevel) {
-        return {
-          ok: false,
-          statusCode: "component-level-mismatch",
-          detail: `Agent ${agent.agentId} reported ${componentId} at ${marker.level}; wave requires ${expectedLevel}.`,
-        };
+        return buildValidationResult(
+          false,
+          "component-level-mismatch",
+          `Agent ${agent.agentId} reported ${componentId} at ${marker.level}; wave requires ${expectedLevel}.`,
+          { failureClass: "semantic-failure" },
+        );
       }
       if (marker.state !== "met") {
-        return {
-          ok: false,
-          statusCode: "component-gap",
-          detail:
-            marker.detail ||
+        return buildValidationResult(
+          false,
+          "component-gap",
+          marker.detail ||
             `Agent ${agent.agentId} reported a component gap for ${componentId}.`,
-        };
+          { failureClass: "semantic-failure" },
+        );
       }
     }
   }
@@ -872,18 +760,20 @@ export function validateImplementationSummary(agent, summary) {
     for (const deliverablePath of deliverables) {
       const deliverable = deliverableState.get(deliverablePath);
       if (!deliverable) {
-        return {
-          ok: false,
-          statusCode: "missing-deliverable-summary",
-          detail: `Missing deliverable presence record for ${agent.agentId} path ${deliverablePath}.`,
-        };
+        return buildValidationResult(
+          false,
+          "missing-deliverable-summary",
+          `Missing deliverable presence record for ${agent.agentId} path ${deliverablePath}.`,
+          { failureClass: "artifact-failure" },
+        );
       }
       if (deliverable.exists !== true) {
-        return {
-          ok: false,
-          statusCode: "missing-deliverable",
-          detail: `Agent ${agent.agentId} did not land required deliverable ${deliverablePath}.`,
-        };
+        return buildValidationResult(
+          false,
+          "missing-deliverable",
+          `Agent ${agent.agentId} did not land required deliverable ${deliverablePath}.`,
+          { failureClass: "artifact-failure" },
+        );
       }
     }
   }
@@ -900,26 +790,24 @@ export function validateImplementationSummary(agent, summary) {
       }
       const artifact = artifactState.get(proofArtifact.path);
       if (!artifact) {
-        return {
-          ok: false,
-          statusCode: "missing-proof-artifact-summary",
-          detail: `Missing proof artifact presence record for ${agent.agentId} path ${proofArtifact.path}.`,
-        };
+        return buildValidationResult(
+          false,
+          "missing-proof-artifact-summary",
+          `Missing proof artifact presence record for ${agent.agentId} path ${proofArtifact.path}.`,
+          { failureClass: "artifact-failure" },
+        );
       }
       if (artifact.exists !== true) {
-        return {
-          ok: false,
-          statusCode: "missing-proof-artifact",
-          detail: `Agent ${agent.agentId} did not land required proof artifact ${proofArtifact.path}.`,
-        };
+        return buildValidationResult(
+          false,
+          "missing-proof-artifact",
+          `Agent ${agent.agentId} did not land required proof artifact ${proofArtifact.path}.`,
+          { failureClass: "artifact-failure" },
+        );
       }
     }
   }
-  return {
-    ok: true,
-    statusCode: "pass",
-    detail: `Exit contract satisfied for ${agent.agentId}.`,
-  };
+  return buildValidationResult(true, "pass", `Exit contract satisfied for ${agent.agentId}.`);
 }
 
 export function validateDocumentationClosureSummary(agent, summary, options = {}) {

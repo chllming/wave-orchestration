@@ -715,6 +715,12 @@ function failuresAreRecoverable(failures) {
   return Array.isArray(failures) && failures.length > 0 && failures.every((failure) => failure?.recoverable);
 }
 
+function failuresAwaitAdjudication(failures) {
+  return Array.isArray(failures) && failures.length > 0 && failures.every(
+    (failure) => String(failure?.statusCode || "").trim().toLowerCase() === "awaiting-adjudication",
+  );
+}
+
 function appendRepairCoordinationRequests({
   coordinationLogPath,
   lanePaths,
@@ -771,16 +777,23 @@ export async function runLauncherCli(argv) {
   const projectId = options.project || config.defaultProject;
   if (!readProjectProfile({ config, project: projectId })) {
     const { stderr: stderrStream } = await import("node:process");
-    stderrStream.write(
-      "\n  No project profile found — running first-time setup.\n" +
-        "  You can re-run this later with: wave project setup\n\n",
-    );
-    const { runPlannerCli } = await import("./planner.mjs");
-    await runPlannerCli(["project", "setup", ...(projectId ? ["--project", projectId] : [])]);
-    // Re-read the terminal surface from the newly created profile.
-    const freshProfile = readProjectProfile({ config, project: projectId });
-    if (freshProfile) {
-      options.terminalSurface = resolveDefaultTerminalSurface(freshProfile);
+    if (options.dryRun) {
+      stderrStream.write(
+        "\n  No project profile found — continuing dry-run with config defaults.\n" +
+          "  Live launches will still prompt for first-time setup, or you can run: wave project setup\n\n",
+      );
+    } else {
+      stderrStream.write(
+        "\n  No project profile found — running first-time setup.\n" +
+          "  You can re-run this later with: wave project setup\n\n",
+      );
+      const { runPlannerCli } = await import("./planner.mjs");
+      await runPlannerCli(["project", "setup", ...(projectId ? ["--project", projectId] : [])]);
+      // Re-read the terminal surface from the newly created profile.
+      const freshProfile = readProjectProfile({ config, project: projectId });
+      if (freshProfile) {
+        options.terminalSurface = resolveDefaultTerminalSurface(freshProfile);
+      }
     }
   }
 
@@ -1907,6 +1920,8 @@ export async function runLauncherCli(argv) {
             if (failures.length === 0) {
               const implementationGate = readWaveImplementationGate(wave, agentRuns, {
                 securityRolePromptPath: lanePaths.securityRolePromptPath,
+                lanePaths,
+                derivedState,
               });
               if (!implementationGate.ok) {
                 failures = [
@@ -2446,6 +2461,30 @@ export async function runLauncherCli(argv) {
             ) {
               error.exitCode = 42;
             }
+            throw error;
+          }
+
+          if (failuresAwaitAdjudication(failures)) {
+            clearWaveRelaunchPlan(lanePaths, wave.wave);
+            dashboardState.status = "blocked";
+            for (const failure of failures) {
+              setWaveDashboardAgent(dashboardState, failure.agentId, {
+                state: "failed",
+                detail: failure.detail || "Closure is awaiting deterministic adjudication.",
+              });
+            }
+            flushDashboards();
+            appendCoordination({
+              event: "wave_adjudication_pending",
+              waves: [wave.wave],
+              status: "blocked",
+              details: failures.map((failure) => `${failure.agentId || "wave"}:${failure.statusCode}`).join(", "),
+              actionRequested: `Lane ${lanePaths.lane} owners should inspect the persisted closure adjudication artifact before any rerun decision.`,
+            });
+            const error = new Error(
+              `Wave ${wave.wave} is waiting on deterministic closure adjudication; no retry was queued.`,
+            );
+            error.exitCode = 43;
             throw error;
           }
 

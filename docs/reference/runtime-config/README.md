@@ -191,7 +191,7 @@ Practical guidance:
 - prefer `budget.minutes` for normal synthesis, integration, and closure work
 - use generic `budget.turns` as a planning hint, not a hard failure trigger
 - only set `claude.maxTurns` or `opencode.steps` when you deliberately want a hard ceiling for that runtime
-- see [../../guides/recommendations-0.9.13.md](../../guides/recommendations-0.9.13.md) for the recommended `0.9.13` operating stance that combines advisory turn budgets with softer non-proof coordination states, targeted recovery, restart-safe validation, and optional TMUX operator surfaces
+- see [../../guides/recommendations-0.9.15.md](../../guides/recommendations-0.9.15.md) for the recommended `0.9.15` operating stance that combines advisory turn budgets with softer non-proof coordination states, targeted recovery, restart-safe validation, and optional TMUX operator surfaces
 
 ## Runtime Pages
 
@@ -203,7 +203,7 @@ Practical guidance:
 
 `wave.config.json` may also declare a `waveControl` block for local-first telemetry delivery.
 
-Packaged defaults in `@chllming/wave-orchestration@0.9.13`:
+Packaged defaults in `@chllming/wave-orchestration@0.9.15`:
 
 - `endpoint`: `https://wave-control.up.railway.app/api/v1`
 - `reportMode`: `metadata-only`
