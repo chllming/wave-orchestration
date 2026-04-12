@@ -12,3 +12,14 @@ docs/research/papers/
 docs/research/articles/
 docs/issues/
 *.log
+SOUL.md
+IDENTITY.md
+USER.md
+AGENTS.md
+HEARTBEAT.md
+TOOLS.md
+DREAMS.md
+BOOTSTRAP.md
+.claude/
+.openclaw/
+MEMORY.md
